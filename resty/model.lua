@@ -15,7 +15,7 @@ local ngx_localtime = ngx.localtime
 local match = ngx.re.match
 
 -- local NULL = setmetatable({},{__tostring=function(t) return 'NULL'end})
-local version = '1.0'
+local version = '1.1'
 
 local function get_foreign_object(attrs, prefix)
     -- when in : attrs = {id=1, buyer__name='tom', buyer__id=2}, prefix = 'buyer__'
