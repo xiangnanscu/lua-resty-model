@@ -268,7 +268,7 @@ function Model.validate_for_create(self)
             if value == nil and field.default then
                 value = field:get_default()
             end
-            -- ** 只传入非nil的值给lua_to_db, 待观察实际情况
+            -- ** pass non-nil to lua_to_db
             if value ~= nil then
                 value, err, row, col = field.lua_to_db(value, self)
                 if err ~= nil then
@@ -303,12 +303,8 @@ function Model.validate_for_update(self)
             value = ngx_localtime()
             attrs[name] = value
         elseif rawget(self, name) ~= nil  then 
-            -- 由于foreignkey_db_to_lua_validator的设计逻辑
-            -- 假设profile是User的外键, info是Profile的外键, u = User:ger{id=1}, p = u.profile, p:save(), 
-            -- 调用save时,将调用validate_for_update方法, 继而需要判断self的外键info的值是否为空.
-            -- 如果直接self[name], 由于info不在self中, 将会触发__index方法, 继而发起数据库查询,更新self
-            -- 继而将用一个表{id=...}表来代表self中的info值, 该值将无法通过foreignkey的client_to_lua检测(因为它要求外键是一个整数)
-            -- foreignkey的设计也要求定义validator(value, model)的时候, 如果需要访问model的值,使用rawget(model,key)的形式
+            -- Why `rawget` here? if use `self[name]`, this case:
+            -- u = User:get{id=1}; p = u.profile; p:save(), will raise error
             value, err, row, col = field.client_to_lua(self[name], self)
             if err ~= nil then
                 make_error(errors, name, err, row, col)
@@ -319,7 +315,9 @@ function Model.validate_for_update(self)
                 else             
                     attrs[name] = value
                 end
-            else -- value经client_to_lua处理后又变回了nil, 说明是非必填的空字符
+            else 
+                -- value is nil again after `client_to_lua`,
+                -- its a non-required field whose value is empty string.
                 value = field:get_empty_value_to_update()
                 attrs[name] = value
             end 
@@ -333,6 +331,4 @@ function Model.validate_for_update(self)
     return attrs
 end
     
-
-
 return Model
