@@ -14,8 +14,7 @@ local ngx_ERR = ngx.ERR
 local ngx_localtime = ngx.localtime
 local match = ngx.re.match
 
--- local NULL = setmetatable({},{__tostring=function(t) return 'NULL'end})
-local version = '1.1'
+local version = '1.2'
 
 local function get_foreign_object(attrs, prefix)
     -- when in : attrs = {id=1, buyer__name='tom', buyer__id=2}, prefix = 'buyer__'
@@ -30,65 +29,181 @@ local function get_foreign_object(attrs, prefix)
     end
     return fk_instance
 end
-local function compact(self)
-    self._compact = true
-    return self
+local function compact(sqlself)
+    sqlself._compact = true
+    return sqlself
 end
-local function exec(self, raw)
-    local records, err = self.query(self:statement(), self._compact)
-    if not records then
-        return nil, err
-    end
-    if type(records) == 'table' then
-        setmetatable(records, empty_array_mt)
-    end
-    if raw then
-        return records
-    end
-    if self._is_select and not (self._group or self._group_string or self._having or self._having_string) then
-        if self._select_join then
-            for i, attrs in ipairs(records) do
-                for i, field in ipairs(self.model.fields) do
-                    local name = field.name
-                    local value = attrs[name]
-                    if value ~= nil then
-                        local fk_model = self._select_join[name]
-                        if not fk_model then
-                            attrs[name], err = field.db_to_lua(value, attrs)
-                        else
-            -- 通过sql:join指定读取foreignkey的全部属性,因此field.db_to_lua使用的
-            -- foreignkey_db_to_lua_validator按需读取属性的模式在此处不再适用
-                            attrs[name], err = fk_model:db_to_lua(get_foreign_object(attrs, name..'__'))
-                        end
-                        if err then
-                            return nil, err
-                        end
-                    end
-                end
-                records[i] = setmetatable(attrs, self.model)
-            end
-        else
-            for i, attrs in ipairs(records) do
-                records[i], err = self.model:db_to_lua(attrs)
-                if err then
-                    return nil, err
-                end
-            end
-        end    
-    end
-    return records
-end
-
+    
 
 local Model = {}
 Model.__index = Model
 function Model.new(cls, self)
     return setmetatable(self, cls)
 end
-function Model.bind_sql(cls, sql)
+function Model.bind(cls, t)
+    local query = t.query or error('you must provide a query function')
+    local sql = t.sql or error('you must provide a sql class')
+    local function exec(sqlself, raw)
+        local records, err = query(sqlself:statement(), sqlself._compact)
+        if not records then
+            return nil, err
+        end
+        if type(records) == 'table' then
+            setmetatable(records, empty_array_mt)
+        end
+        if raw then
+            return records
+        end
+        if sqlself._is_select and not (
+                sqlself._group or sqlself._group_string 
+                or sqlself._having or sqlself._having_string) then
+            if sqlself._select_join then
+                for i, attrs in ipairs(records) do
+                    for i, field in ipairs(sqlself.model.fields) do
+                        local name = field.name
+                        local value = attrs[name]
+                        if value ~= nil then
+                            local fk_model = sqlself._select_join[name]
+                            if not fk_model then
+                                attrs[name], err = field.db_to_lua(value, attrs)
+                            else
+                                -- `_select_join` means reading all attributes of a foreignkey, 
+                                -- so the on-demand reading mode of `foreignkey_db_to_lua_validator` 
+                                -- is not proper here
+                                attrs[name], err = fk_model.db_to_lua(get_foreign_object(attrs, name..'__'))
+                            end
+                            if err then
+                                return nil, err
+                            end
+                        end
+                    end
+                    records[i] = setmetatable(attrs, sqlself.model)
+                end
+            else
+                for i, attrs in ipairs(records) do
+                    records[i], err = sqlself.model.db_to_lua(attrs)
+                    if err then
+                        return nil, err
+                    end
+                end
+            end    
+        end
+        return records
+    end
+    -- bind these two methods to sql
     sql.compact = compact
     sql.exec = exec
-    cls.sql = sql
+    
+    -- now define model class methods, use them like: cls.all(), cls.get()
+    function cls.all()
+        local res, err = query('SELECT * FROM '..cls._quoted_table_name)
+        if not res then
+            return nil, err
+        end
+        for i=1, #res do
+            res[i] = cls.db_to_lua(res[i])
+        end
+        return res
+    end
+    -- methods proxy to sql builder, use them like:
+    -- cls.where{}:select{}:exec() or cls.select{}:where{}:exec() 
+    function cls.select(params)
+        return sql:new{}:select(params)
+    end
+    function cls.where(params)
+        return sql:new{}:where(params)
+    end
+    function cls.update(params)
+        return sql:new{}:update(params)
+    end
+    function cls.create(params)
+        return sql:new{}:create(params)
+    end
+    function cls.compact(params)
+        return sql:new{}:compact(params)
+    end
+    function cls.group(params)
+        return sql:new{}:group(params)
+    end
+    function cls.order(params)
+        return sql:new{}:order(params)
+    end
+    function cls.having(params)
+        return sql:new{}:having(params)
+    end
+    function cls.limit(params)
+        return sql:new{}:limit(params)
+    end
+    function cls.offset(params)
+        return sql:new{}:offset(params)
+    end
+    function cls.join(params)
+        return sql:new{}:join(params)
+    end
+    function cls.db_to_lua(attrs)
+        local err
+        for i, field in ipairs(cls.fields) do
+            local name = field.name
+            local value = attrs[name]
+            if value ~= nil then
+                attrs[name], err = field.db_to_lua(value, attrs)
+                if err then
+                    return nil, err
+                end
+            end
+        end
+        return setmetatable(attrs, cls)
+    end
+    function cls.get(params)
+        local res, err = cls.where(params):exec(true)
+        if not res then
+            return nil, err
+        elseif #res ~= 1 then
+            return nil, 'expect 1 record, but get '..#res
+        end
+        return cls.db_to_lua(res[1])
+    end    
+    -- instance methods, call them like: ins:delete() or ins:save()
+    function cls.delete(self)
+        if self.id then
+            return query('DELETE FROM '..self._quoted_table_name..' WHERE id = '..self.id)       
+        else
+            return nil, 'id must be provided when deleting a record'
+        end
+    end
+    function cls.save(self)
+        -- ** is `affected_rows` and `insert_id` coupled with pgmoon?
+        if self.id then
+            local attrs, errors = self:validate_for_update() 
+            if errors then
+                return nil ,errors
+            end
+            local res, err = sql:new{}:update(attrs):where('id = '..self.id):exec(true) 
+            if res then
+                if res.affected_rows == 1 then
+                    return res
+                elseif res.affected_rows == 0 then
+                    return nil, {__all='this record doesnot exist'}
+                else
+                    return nil, {__all='multiple records are updated'}
+                end
+            else
+                return nil, {__all=err}
+            end
+        else
+            local attrs, errors = validate_for_create(self)   
+            if errors then
+                return nil ,errors
+            end
+            local res, err = sql:new{}:create(attrs):exec(true)
+            if res then
+                self.id = res.insert_id
+                return res
+            else
+                return nil, {__all=err}
+            end
+        end
+    end
 end
 function Model._check_id_field(cls)
     local id_field
@@ -108,8 +223,8 @@ function Model.class(cls, subclass)
         subclass.fields,
         "you must provide a model class with table_name and fields"
     )
-    subclass.__index = subclass
     setmetatable(subclass, cls)
+    subclass.__index = subclass
     subclass:_check_id_field() 
     subclass.fields_dict = {}
     subclass._referenced_models = {}
@@ -126,81 +241,7 @@ function Model.class(cls, subclass)
     end
     return subclass
 end
-function Model.db_to_lua(cls, attrs)
-    local err
-    for i, field in ipairs(cls.fields) do
-        local name = field.name
-        local value = attrs[name]
-        if value ~= nil then
-            attrs[name], err = field.db_to_lua(value, attrs)
-            if err then
-                return nil, err
-            end
-        end
-    end
-    return setmetatable(attrs, cls)
-end
--- methods proxy to sql builder, `delete` is excluded
-function Model.select(cls, params)
-    return cls.sql:new{}:select(params)
-end
-function Model.where(cls, params)
-    return cls.sql:new{}:where(params)
-end
-function Model.update(cls, params)
-    return cls.sql:new{}:update(params)
-end
-function Model.create(cls, params)
-    return cls.sql:new{}:create(params)
-end
-function Model.compact(cls, params)
-    return cls.sql:new{}:compact(params)
-end
-function Model.group(cls, params)
-    return cls.sql:new{}:group(params)
-end
-function Model.order(cls, params)
-    return cls.sql:new{}:order(params)
-end
-function Model.having(cls, params)
-    return cls.sql:new{}:having(params)
-end
-function Model.limit(cls, params)
-    return cls.sql:new{}:limit(params)
-end
-function Model.offset(cls, params)
-    return cls.sql:new{}:offset(params)
-end
-function Model.join(cls, params)
-    return cls.sql:new{}:join(params)
-end
--- shortcuts
-function Model.get(cls, params)
-    local res, err = cls:where(params):exec(true)
-    if not res then
-        return nil, err
-    elseif #res ~= 1 then
-        return nil, 'should return 1 record, but get '..#res
-    end
-    return cls:db_to_lua(res[1])
-end
-function Model.all(cls)
-    local res, err = cls.sql.query('SELECT * FROM '..cls._quoted_table_name)
-    if not res then
-        return nil, err
-    end
-    for i=1, #res do
-        res[i] = cls:db_to_lua(res[i])
-    end
-    return res
-end
-function Model.delete(self)
-    if self.id then
-        return self.sql.query('DELETE FROM '..self._quoted_table_name..' WHERE id = '..self.id)       
-    else
-        return nil, 'id must be provided when deleting a record'
-    end
-end
+
 -- {
 --   "affected_rows": 1,
 --   "insert_id": 204195,
@@ -291,38 +332,7 @@ function Model.validate_for_update(self)
     end
     return attrs
 end
-function Model.save(self)
-    if self.id then
-        local attrs, errors = self:validate_for_update() 
-        if errors then
-            return nil ,errors
-        end
-        local res, err = self.sql:new{}:update(attrs):where('id = '..self.id):exec(true) 
-        if res then
-            if res.affected_rows == 1 then
-                return res
-            elseif res.affected_rows == 0 then
-                return nil, {__all='更新记录不存在'}
-            else
-                return nil, {__all='多条记录被更新'}
-            end
-        else
-            return nil, {__all=err}
-        end
-    else
-        local attrs, errors = validate_for_create(self)   
-        if errors then
-            return nil ,errors
-        end
-        local res, err = self.sql:new{}:create(attrs):exec(true)
-        if res then
-            self.id = res.insert_id
-            return res
-        else
-            return nil, {__all=err}
-        end
-    end
-end
+    
 
 
 return Model
