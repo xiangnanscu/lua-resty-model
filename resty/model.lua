@@ -30,6 +30,7 @@ local function get_foreign_object(attrs, prefix)
     return fk_instance
 end
 local function compact(sqlself)
+    -- currently this only used in lua-resty-mysql
     sqlself._compact = true
     return sqlself
 end
@@ -43,6 +44,7 @@ end
 function Model.bind(cls, t)
     local query = t.query or error('you must provide a query function')
     local sql = t.sql or error('you must provide a sql class')
+    -- step 1: define `exec` and `compact` to sql class
     local function exec(sqlself, raw)
         local records, err = query(sqlself:statement(), sqlself._compact)
         if not records then
@@ -90,13 +92,17 @@ function Model.bind(cls, t)
         end
         return records
     end
-    -- bind these two methods to sql
     sql.compact = compact
     sql.exec = exec
     
-    -- now define model class methods, use them like: cls.all(), cls.get()
+    -- step 2: define model class methods who need `query` and `sql` as closures 
+    function cls.get_sql()
+        -- because model is a property of sql,
+        -- here decouple sql from being a property of model
+        return sql
+    end
     function cls.all()
-        local res, err = query('SELECT * FROM '..cls._quoted_table_name)
+        local res, err = query('SELECT * FROM '..sql._quoted_table_name)
         if not res then
             return nil, err
         end
@@ -105,7 +111,7 @@ function Model.bind(cls, t)
         end
         return res
     end
-    -- methods proxy to sql builder, use them like:
+    -- methods proxy to sql builder, use them like: cls.where():where():exec(),
     -- cls.where{}:select{}:exec() or cls.select{}:where{}:exec() 
     function cls.select(params)
         return sql:new{}:select(params)
@@ -140,6 +146,17 @@ function Model.bind(cls, t)
     function cls.join(params)
         return sql:new{}:join(params)
     end
+    -- these methods require no closure, but we still define them here to 
+    -- uniforming calling class methods 
+    function cls.get(params)
+        local res, err = cls.where(params):exec(true)
+        if not res then
+            return nil, err
+        elseif #res ~= 1 then
+            return nil, 'expect 1 record, but get '..#res
+        end
+        return cls.db_to_lua(res[1])
+    end    
     function cls.db_to_lua(attrs)
         local err
         for i, field in ipairs(cls.fields) do
@@ -154,19 +171,10 @@ function Model.bind(cls, t)
         end
         return setmetatable(attrs, cls)
     end
-    function cls.get(params)
-        local res, err = cls.where(params):exec(true)
-        if not res then
-            return nil, err
-        elseif #res ~= 1 then
-            return nil, 'expect 1 record, but get '..#res
-        end
-        return cls.db_to_lua(res[1])
-    end    
     -- instance methods, call them like: ins:delete() or ins:save()
     function cls.delete(self)
         if self.id then
-            return query('DELETE FROM '..self._quoted_table_name..' WHERE id = '..self.id)       
+            return query('DELETE FROM '..sql._quoted_table_name..' WHERE id = '..self.id)       
         else
             return nil, 'id must be provided when deleting a record'
         end
@@ -191,7 +199,7 @@ function Model.bind(cls, t)
                 return nil, {__all=err}
             end
         else
-            local attrs, errors = validate_for_create(self)   
+            local attrs, errors = self:validate_for_create()   
             if errors then
                 return nil ,errors
             end
