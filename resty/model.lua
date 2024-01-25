@@ -909,7 +909,7 @@ end
 function Xodel.get_or_create(cls, params, defaults, columns)
   local values_list, insert_columns = Sql:_get_insert_values_token(dict(params, defaults))
   local insert_columns_token = as_token(insert_columns)
-  local all_columns_token = as_token(list(columns or { cls.primary_key }, insert_columns):uniq())
+  local all_columns_token = as_token(Array.unique(list(columns or { cls.primary_key }, insert_columns)))
   local insert_sql = string_format("(INSERT INTO %s(%s) SELECT %s WHERE NOT EXISTS (%s) RETURNING %s)",
     cls.table_name,
     insert_columns_token,
