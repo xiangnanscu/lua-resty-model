@@ -1,3 +1,4 @@
+---@diagnostic disable: invisible
 -- https://www.postgreSql.org/docs/current/sql-select.html
 -- https://www.postgreSql.org/docs/current/sql-insert.html
 -- https://www.postgreSql.org/docs/current/sql-update.html
@@ -8,6 +9,7 @@ local Sql = require "resty.sql"
 local Query = require "resty.query"
 local Array = require "resty.array"
 local Object = require "resty.object"
+local utils = require "resty.utils"
 local getenv = require "resty.dotenv".getenv
 local setmetatable = setmetatable
 local ipairs = ipairs
@@ -158,6 +160,7 @@ local MODEL_MERGE_NAMES = {
   primary_key = true,
   unique_together = true,
   referenced_label_column = true,
+  preload = true,
 }
 
 local base_model = {
@@ -247,7 +250,7 @@ end
 
 ---@param json {[string]:any}
 ---@param kwargs? {[string]:any}
----@return Field
+---@return AnyField
 local function make_field_from_json(json, kwargs)
   local options = dict(json, kwargs)
   assert(not options[1])
@@ -264,7 +267,7 @@ local function make_field_from_json(json, kwargs)
   if (options.type == "string" or options.type == "alioss") and not options.maxlength then
     options.maxlength = DEFAULT_STRING_MAXLENGTH
   end
-  ---@type Field
+  ---@type AnyField
   local fcls = Fields[options.type]
   if not fcls then
     error("invalid field type:" .. tostring(options.type))
@@ -285,11 +288,8 @@ local as_literal = Sql.as_literal
 local as_literal_without_brackets = Sql.as_literal_without_brackets
 
 
-
-
----@param model Xodel
----@return table
-local function make_record_meta(model)
+---@param ModelClass Xodel
+local function make_record_meta(ModelClass)
   local RecordClass = dict(Object, {})
 
   RecordClass.__index = RecordClass
@@ -302,60 +302,61 @@ local function make_record_meta(model)
   end
 
   function RecordClass.delete(self, key)
-    key = model:check_unique_key(key or model.primary_key)
+    key = ModelClass:check_unique_key(key or ModelClass.primary_key)
     if self[key] == nil then
       error("empty value for delete key:" .. key)
     end
-    return model:create_sql():delete { [key] = self[key] }:returning(key):exec()
+    return ModelClass:create_sql():delete { [key] = self[key] }:returning(key):exec()
   end
 
   function RecordClass.save(self, names, key)
-    return model:save(self, names, key)
+    return ModelClass:save(self, names, key)
   end
 
   function RecordClass.save_create(self, names, key)
-    return model:save_create(self, names, key)
+    return ModelClass:save_create(self, names, key)
   end
 
   function RecordClass.save_update(self, names, key)
-    return model:save_update(self, names, key)
+    return ModelClass:save_update(self, names, key)
   end
 
   function RecordClass.validate(self, names, key)
-    return model:validate(self, names, key)
+    return ModelClass:validate(self, names, key)
   end
 
   function RecordClass.validate_update(self, names)
-    return model:validate_update(self, names)
+    return ModelClass:validate_update(self, names)
   end
 
   function RecordClass.validate_create(self, names)
-    return model:validate_create(self, names)
+    return ModelClass:validate_create(self, names)
   end
 
   return RecordClass -- setmetatable(RecordClass, model)
 end
 
-local function create_model_proxy(Model)
-  local proxy = { __model__ = Model }
+local function create_model_proxy(ModelClass)
+  local proxy = {}
   local function __index(_, k)
     local sql_k = Sql[k]
     if sql_k ~= nil then
       if type(sql_k) == 'function' then
         return function(_, ...)
-          return sql_k(Model:create_sql(), ...)
+          return sql_k(ModelClass:create_sql(), ...)
         end
       else
         return sql_k
       end
     end
-    local model_k = Model[k]
+    local model_k = ModelClass[k]
     if model_k ~= nil then
       if type(model_k) == 'function' then
         return function(cls, ...)
           if cls == proxy then
-            return model_k(Model, ...)
+            return model_k(ModelClass, ...)
           elseif k == 'query' then
+            -- ModelClass.query(statement, compact?), cls is statement in this case
             return model_k(cls, ...)
           else
             error(string_format("calling model proxy method `%s` with first argument not being itself is not allowed", k))
@@ -369,44 +370,43 @@ local function create_model_proxy(Model)
     end
   end
   local function __newindex(t, k, v)
-    Model[k] = v
+    ModelClass[k] = v
   end
 
   return setmetatable(proxy, {
-    __call = Model.create_record,
+    __call = ModelClass.create_record,
     __index = __index,
     __newindex = __newindex
   })
 end
 
----@class Xodel
+---@class Xodel:Sql
 ---@operator call:Xodel
----@field __index Xodel
----@field __normalized__? boolean
+---@field private __index Xodel
+---@field private __normalized__? boolean
 ---@field __is_model_class__? boolean
----@field __SQL_BUILDER__? boolean
+---@field private __SQL_BUILDER__? boolean
 ---@field DEFAULT  fun():'DEFAULT'
 ---@field NULL  userdata
 ---@field db_options? QueryOpts
 ---@field as_token  fun(DBValue):string
 ---@field as_literal  fun(DBValue):string
----@field r  fun(string):fun():string
----@field make_field_from_json fun(table):Field
+---@field make_field_from_json fun(table):AnyField
 ---@field RecordClass table
 ---@field extends? table
 ---@field admin? table
----@field is_admin_mode? boolean
 ---@field table_name string
 ---@field referenced_label_column? string
+---@field preload? boolean
 ---@field label string
----@field fields {[string]:Field}
----@field field_names array
+---@field fields {[string]:AnyField}
+---@field field_names Array
 ---@field mixins? table[]
 ---@field abstract? boolean
 ---@field auto_primary_key? boolean
 ---@field primary_key string
 ---@field unique_together? string[]|string[][]
----@field names array
+---@field names Array
 ---@field auto_now_name string
 ---@field auto_now_add_name string
 ---@field foreign_keys table
@@ -426,9 +426,6 @@ local Xodel = {
   as_literal = Sql.as_literal,
 }
 setmetatable(Xodel, {
-  ---@param t Xodel
-  ---@param ... ModelOpts
-  ---@return Xodel
   __call = function(t, ...)
     return t:mix_with_base(...)
   end
@@ -436,15 +433,11 @@ setmetatable(Xodel, {
 
 Xodel.__index = Xodel
 
--- function Xodel.__call(cls, ...)
---   return cls.new(cls, ...)
--- end
-
 ---@param cls Xodel
----@param self? table
+---@param attrs? table
 ---@return Xodel
-function Xodel.new(cls, self)
-  return setmetatable(self or {}, cls)
+function Xodel.new(cls, attrs)
+  return setmetatable(attrs or {}, cls)
 end
 
 ---@class ModelOpts
@@ -456,12 +449,13 @@ end
 ---@field table_name? string
 ---@field label? string
 ---@field fields? {[string]:table}
----@field field_names? array
+---@field field_names? Array
 ---@field auto_primary_key? boolean
 ---@field primary_key? string
 ---@field unique_together? string[]|string[][]
 ---@field db_options? QueryOpts
 ---@field referenced_label_column? string
+---@field preload? boolean
 
 ---@param cls Xodel
 ---@param options ModelOpts
@@ -504,6 +498,7 @@ function Xodel.check_field_name(cls, name)
   end
 end
 
+---@private
 ---@param cls Xodel
 ---@param opts ModelOpts
 ---@return Xodel
@@ -520,6 +515,7 @@ function Xodel._make_model_class(cls, opts)
     primary_key = opts.primary_key,
     unique_together = opts.unique_together,
     referenced_label_column = opts.referenced_label_column,
+    preload = opts.preload,
   })
   if opts.db_options then
     ModelClass.query = Query(opts.db_options)
@@ -594,7 +590,7 @@ function Xodel.normalize(cls, options)
   local model = {
     admin = clone(options.admin or {}),
   }
-  for _, extend_attr in ipairs({ 'table_name', 'label', 'referenced_label_column' }) do
+  for _, extend_attr in ipairs({ 'table_name', 'label', 'referenced_label_column', 'preload' }) do
     if options[extend_attr] == nil then
       if options.extends then
         model[extend_attr] = options.extends[extend_attr]
@@ -605,7 +601,7 @@ function Xodel.normalize(cls, options)
   end
   local opts_fields = {}
   local opts_field_names = Array {}
-  -- first check top level array field
+  -- first check top level Array field
   for i, field in ipairs(options) do
     field = ensure_field_as_options(field)
     opts_field_names:push(field.name)
@@ -724,6 +720,7 @@ function Xodel.resolve_self_foreignkey(cls)
     local field = cls.fields[name]
     local fk_model = field.reference
     if fk_model == "self" then
+      ---@cast field ForeignkeyField
       fk_model = cls
       field.reference = cls
       field:setup_with_fk_model(cls)
@@ -834,9 +831,9 @@ function Xodel.merge_model(cls, a, b)
 end
 
 ---@param cls Xodel
----@param a Field
----@param b Field
----@return Field
+---@param a AnyField
+---@param b AnyField
+---@return AnyField
 function Xodel.merge_field(cls, a, b)
   local aopts = is_field_class(a) and a:get_options() or clone(a)
   local bopts = is_field_class(b) and b:get_options() or clone(b)
@@ -1026,7 +1023,7 @@ function Xodel.prepare_for_db(cls, data, columns, is_update)
     end
     local value = data[name]
     if field.prepare_for_db and value ~= nil then
-      local val, err = field:prepare_for_db(value, data)
+      local val, err = field:prepare_for_db(value)
       if val == nil and err then
         return nil, cls:make_field_error(name, err)
       else
@@ -1066,14 +1063,14 @@ function Xodel.validate_create(cls, input, names)
     if not field then
       error(string_format("invalid field name '%s' for model '%s'", name, cls.table_name))
     end
-    local value, err, index = field:validate(rawget(input, name), input)
+    local value, err, index = field:validate(rawget(input, name))
     if err ~= nil then
       return nil, cls:make_field_error(name, err, index)
     elseif field.default and (value == nil or value == "") then
       if type(field.default) ~= "function" then
         value = field.default
-      else
-        value, err = field.default(input)
+      elseif field.type ~= 'uuid' then
+        value, err = field.default()
         if value == nil then
           return nil, cls:make_field_error(name, err, index)
         end
@@ -1108,7 +1105,7 @@ function Xodel.validate_update(cls, input, names)
     local err, index
     local value = rawget(input, name)
     if value ~= nil then
-      value, err, index = field:validate(value, input)
+      value, err, index = field:validate(value)
       if err ~= nil then
         return nil, cls:make_field_error(name, err, index)
       elseif value == nil then
@@ -1359,16 +1356,16 @@ end
 
 ---@param cls Xodel
 ---@param kwargs table
----@return array<XodelInstance>
+---@return Array<XodelInstance>
 function Xodel.filter(cls, kwargs)
   return cls:create_sql():where(kwargs):exec()
 end
 
 ---@param cls Xodel
 ---@param kwargs table
----@return array<XodelInstance>
+---@return Array<XodelInstance>
 function Xodel.filter_with_fk_labels(cls, kwargs)
-  local records = cls:create_sql():load_all_fk_labels():where(kwargs)
+  local records = cls:create_sql():load_fk_labels():where(kwargs)
   return records:exec()
 end
 
