@@ -1069,7 +1069,7 @@ function Xodel.validate_create(cls, input, names)
     elseif field.default and (value == nil or value == "") then
       if type(field.default) ~= "function" then
         value = field.default
-      elseif field.type ~= 'uuid' then
+      else
         value, err = field.default()
         if value == nil then
           return nil, cls:make_field_error(name, err, index)
