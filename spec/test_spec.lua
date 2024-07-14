@@ -457,115 +457,115 @@ mdesc("Xodel.where", function()
   end)
   mit("where exists", function()
     local statement = eval [[usr:where_exists(usr:where{id=1})]]
-    assert.are.same(statement, 'SELECT * FROM usr WHERE EXISTS (SELECT * FROM usr WHERE usr.id = 1)')
+    assert.are.same(statement, 'SELECT * FROM usr T WHERE EXISTS (SELECT * FROM usr T WHERE T.id = 1)')
   end)
   mit("where null", function()
     local statement = eval [[usr:where_null("username")]]
-    assert.are.same(statement, 'SELECT * FROM usr WHERE usr.username IS NULL')
+    assert.are.same(statement, 'SELECT * FROM usr T WHERE T.username IS NULL')
   end)
   mit("where in", function()
     local statement = eval [[usr:where_in("id", {1,2,3})]]
-    assert.are.same(statement, 'SELECT * FROM usr WHERE (usr.id) IN (1, 2, 3)')
+    assert.are.same(statement, 'SELECT * FROM usr T WHERE (T.id) IN (1, 2, 3)')
   end)
   mit("where between", function()
     local statement = eval [[usr:where_between("id", 2, 4)]]
-    assert.are.same(statement, 'SELECT * FROM usr WHERE usr.id BETWEEN 2 AND 4')
+    assert.are.same(statement, 'SELECT * FROM usr T WHERE T.id BETWEEN 2 AND 4')
   end)
   mit("where not", function()
     local statement = eval [[usr:where_not("username", "foo")]]
-    assert.are.same(statement, "SELECT * FROM usr WHERE NOT (usr.username = 'foo')")
+    assert.are.same(statement, "SELECT * FROM usr T WHERE NOT (T.username = 'foo')")
   end)
   mit("where not null", function()
     local statement = eval [[usr:where_not_null("username")]]
-    assert.are.same(statement, 'SELECT * FROM usr WHERE usr.username IS NOT NULL')
+    assert.are.same(statement, 'SELECT * FROM usr T WHERE T.username IS NOT NULL')
   end)
   mit("where not in", function()
     local statement = eval [[usr:where_not_in("id", {1,2,3})]]
-    assert.are.same(statement, 'SELECT * FROM usr WHERE (usr.id) NOT IN (1, 2, 3)')
+    assert.are.same(statement, 'SELECT * FROM usr T WHERE (T.id) NOT IN (1, 2, 3)')
   end)
   mit("where not between", function()
     local statement = eval [[usr:where_not_between("id", 2, 4)]]
-    assert.are.same(statement, 'SELECT * FROM usr WHERE usr.id NOT BETWEEN 2 AND 4')
+    assert.are.same(statement, 'SELECT * FROM usr T WHERE T.id NOT BETWEEN 2 AND 4')
   end)
   mit("where not exists", function()
     local statement = eval [[usr:where_not_exists(usr:where{id=1})]]
-    assert.are.same(statement, 'SELECT * FROM usr WHERE NOT EXISTS (SELECT * FROM usr WHERE usr.id = 1)')
+    assert.are.same(statement, 'SELECT * FROM usr T WHERE NOT EXISTS (SELECT * FROM usr T WHERE T.id = 1)')
   end)
   local ops = { lt = "<", lte = "<=", gt = ">", gte = ">=", ne = "<>", eq = "=" }
   for key, op in pairs(ops) do
     mit("where by arithmetic operator: __" .. key, function()
       local statement = eval(format([[usr:where{id__%s=2}:select('id')]], key))
-      assert.are.same(statement, format([[SELECT usr.id FROM usr WHERE usr.id %s 2]], op))
+      assert.are.same(statement, format([[SELECT T.id FROM usr T WHERE T.id %s 2]], op))
     end)
   end
   mit("where in", function()
     local res = eval [[usr:where{username__in={'u1','u2'}}]]
-    assert.are.same(res, [[SELECT * FROM usr WHERE usr.username IN ('u1', 'u2')]])
+    assert.are.same(res, [[SELECT * FROM usr T WHERE T.username IN ('u1', 'u2')]])
   end)
   mit("where contains", function()
     local res = eval [[usr:where{username__contains='u'}]]
-    assert.are.same(res, [[SELECT * FROM usr WHERE usr.username LIKE '%u%']])
+    assert.are.same(res, [[SELECT * FROM usr T WHERE T.username LIKE '%u%']])
   end)
   mit("where startswith", function()
     local res = eval [[usr:where{username__startswith='u'}]]
-    assert.are.same(res, [[SELECT * FROM usr WHERE usr.username LIKE 'u%']])
+    assert.are.same(res, [[SELECT * FROM usr T WHERE T.username LIKE 'u%']])
   end)
   mit("where endswith", function()
     local res = eval [[usr:where{username__endswith='u'}]]
-    assert.are.same(res, [[SELECT * FROM usr WHERE usr.username LIKE '%u']])
+    assert.are.same(res, [[SELECT * FROM usr T WHERE T.username LIKE '%u']])
   end)
   mit("where null true", function()
     local res = eval [[usr:where{username__null=true}]]
-    assert.are.same(res, [[SELECT * FROM usr WHERE usr.username IS NULL]])
+    assert.are.same(res, [[SELECT * FROM usr T WHERE T.username IS NULL]])
   end)
   mit("where null false", function()
     local res = eval [[usr:where{username__null=false}]]
-    assert.are.same(res, [[SELECT * FROM usr WHERE usr.username IS NOT NULL]])
+    assert.are.same(res, [[SELECT * FROM usr T WHERE T.username IS NOT NULL]])
   end)
   mit("where notin", function()
     local res = eval [[usr:where{username__notin={'u1','u2'}}]]
-    assert.are.same(res, [[SELECT * FROM usr WHERE usr.username NOT IN ('u1', 'u2')]])
+    assert.are.same(res, [[SELECT * FROM usr T WHERE T.username NOT IN ('u1', 'u2')]])
   end)
   mit("where foreignkey eq", function()
     local res = eval [[profile:where{usr_id__username__eq='u1'}]]
     assert.are.same(res,
-      [[SELECT * FROM profile INNER JOIN usr T1 ON (profile.usr_id = T1.id) WHERE T1.username = 'u1']])
+      [[SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username = 'u1']])
   end)
   mit("where foreignkey in", function()
     local res = eval [[profile:where{usr_id__username__in={'u1','u2'}}]]
     assert.are.same(res,
-      [[SELECT * FROM profile INNER JOIN usr T1 ON (profile.usr_id = T1.id) WHERE T1.username IN ('u1', 'u2')]])
+      [[SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username IN ('u1', 'u2')]])
   end)
   mit("where foreignkey contains", function()
     local res = eval [[profile:where{usr_id__username__contains='u'}]]
     assert.are.same(res,
-      [[SELECT * FROM profile INNER JOIN usr T1 ON (profile.usr_id = T1.id) WHERE T1.username LIKE '%u%']])
+      [[SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username LIKE '%u%']])
   end)
   mit("where foreignkey startswith", function()
     local res = eval [[profile:where{usr_id__username__startswith='u'}]]
     assert.are.same(res,
-      [[SELECT * FROM profile INNER JOIN usr T1 ON (profile.usr_id = T1.id) WHERE T1.username LIKE 'u%']])
+      [[SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username LIKE 'u%']])
   end)
   mit("where foreignkey endswith", function()
     local res = eval [[profile:where{usr_id__username__endswith='u'}]]
     assert.are.same(res,
-      [[SELECT * FROM profile INNER JOIN usr T1 ON (profile.usr_id = T1.id) WHERE T1.username LIKE '%u']])
+      [[SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username LIKE '%u']])
   end)
   mit("where foreignkey null true", function()
     local res = eval [[profile:where{usr_id__username__null=true}]]
     assert.are.same(res,
-      [[SELECT * FROM profile INNER JOIN usr T1 ON (profile.usr_id = T1.id) WHERE T1.username IS NULL]])
+      [[SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username IS NULL]])
   end)
   mit("where foreignkey null false", function()
     local res = eval [[profile:where{usr_id__username__null=false}]]
     assert.are.same(res,
-      [[SELECT * FROM profile INNER JOIN usr T1 ON (profile.usr_id = T1.id) WHERE T1.username IS NOT NULL]])
+      [[SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username IS NOT NULL]])
   end)
   for key, op in pairs(ops) do
     mit("where foreignkey number operator " .. key, function()
       local statement = eval(format([[profile:where{usr_id__permission__%s=2}]], key))
       assert.are.same(statement,
-        format([[SELECT * FROM profile INNER JOIN usr T1 ON (profile.usr_id = T1.id) WHERE T1.permission %s 2]], op))
+        format([[SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission %s 2]], op))
     end)
   end
 end)
@@ -699,7 +699,7 @@ mdesc("etc", function()
 end)
 mdesc("sql injection", function()
   mit("where key", function()
-    local segment = 'id=1;select * from usr where id'
+    local segment = 'id=1;select * FROM usr T where id'
     assert.Error(function()
       models.usr:where { [segment] = 2 }:exec()
     end, string.format("invalid field name: '%s'", segment))
