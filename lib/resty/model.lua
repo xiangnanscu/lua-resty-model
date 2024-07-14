@@ -1299,9 +1299,9 @@ end
 
 ---get select token
 ---@private
----@param a (fun(ctx:table):string)|DBValue
+---@param a (fun(ctx:table):string|table)|DBValue
 ---@param b? DBValue
----@param ...? DBValue
+---@param ... DBValue
 ---@return string
 function Sql:_get_select_token(a, b, ...)
   if b == nil then
@@ -1901,7 +1901,7 @@ function Sql:distinct()
   return self
 end
 
----@param a (fun(ctx:table):string)|DBValue
+---@param a (fun(ctx:table):string|table)|DBValue
 ---@param b? DBValue
 ---@param ...? DBValue
 ---@return self
@@ -1978,7 +1978,7 @@ function Sql:returning_literal(a, b, ...)
   return self
 end
 
----@param a (fun(ctx:table):string)|DBValue
+---@param a (fun(ctx:table):string|table)|DBValue
 ---@param ... DBValue
 function Sql:group(a, ...)
   local s = self:_get_select_token(a, ...)
@@ -2009,7 +2009,7 @@ function Sql:_get_order_column(key)
   end
 end
 
----@param a DBValue
+---@param a (fun(ctx:table):string|table)|DBValue
 ---@param b? DBValue
 ---@param ...? DBValue
 ---@return string
@@ -2023,6 +2023,16 @@ function Sql:_get_order_token(a, b, ...)
       return as_token(tokens)
     elseif type(a) == "string" then
       return self:_get_order_column(a) --[[@as string]]
+    elseif type(a) == 'function' then
+      ---@cast a -DBValue
+      local order_args = a(self:_create_context())
+      if type(order_args) == 'string' then
+        return order_args
+      elseif type(order_args) == 'table' then
+        return table_concat(order_args, ', ')
+      else
+        error("wrong type:" .. type(order_args))
+      end
     else
       return as_token(a)
     end
@@ -2035,10 +2045,11 @@ function Sql:_get_order_token(a, b, ...)
   end
 end
 
+---@param a (fun(ctx:table):string|table)|DBValue
 ---@param ...? DBValue
 ---@return self
-function Sql:order(...)
-  local s = self:_get_order_token(...)
+function Sql:order(a, ...)
+  local s = self:_get_order_token(a, ...)
   if s == "" then
   elseif not self._order then
     self._order = s
@@ -4621,43 +4632,50 @@ end
 local update_args = { 'where', 'where_or', 'or_where', 'or_where_or', 'returning', 'raw' }
 local insert_args = { 'returning', 'raw' }
 local select_args = { 'select', 'load_fk', 'load_fk_labels', 'where', 'where_or', 'or_where', 'or_where_or',
-  'order', 'group', 'having', 'limit', 'offset', 'distinct', 'raw', 'flat', 'compact', 'get', 'exists' }
+  'order', 'group', 'having', 'limit', 'offset', 'distinct', 'raw', 'compact', 'flat', 'get', 'exists' }
 
 ---@alias updateArgs {update:table, where?:table, where_or?:table, returning?:table|string[], raw?:boolean}
 ---@alias insertArgs {insert:table, returning?:table|string[], raw?:boolean}
 ---@alias selectArgs {select?:table|string[], load_fk?:string,load_fk_labels?:string[], where?:table, where_or?:table,or_where?:table, order?:table|string[], group?:table|string[], limit?:integer, offset?:integer, distinct?:boolean, get?:table|string[],flat?:string, raw?:boolean, exists?:boolean}
+
+local function ensure_array(o)
+  if type(o) ~= 'table' or o[1] == nil then
+    return { o }
+  end
+  return o
+end
 
 ---@param cls Xodel
 ---@param data updateArgs|insertArgs|selectArgs
 ---@return table
 function Xodel.meta_query(cls, data)
   if data.update then
-    local records = cls:create_sql():update(data.update)
+    local sql = cls:create_sql():update(unpack(ensure_array(data.update)))
     for i, arg_name in ipairs(update_args) do
       if data[arg_name] ~= nil then
-        records = records[arg_name](records, data[arg_name])
+        sql = sql[arg_name](sql, unpack(ensure_array(data[arg_name])))
       end
     end
-    return records:exec()
+    return sql:exec()
   elseif data.insert then
-    local records = cls:create_sql():insert(data.insert)
+    local sql = cls:create_sql():insert(data.insert)
     for i, arg_name in ipairs(insert_args) do
       if data[arg_name] ~= nil then
-        records = records[arg_name](records, data[arg_name])
+        sql = sql[arg_name](sql, unpack(ensure_array(data[arg_name])))
       end
     end
-    return records:exec()
+    return sql:exec()
   else
-    local records = cls:create_sql()
+    local sql = cls:create_sql()
     for i, arg_name in ipairs(select_args) do
       if data[arg_name] ~= nil then
-        records = records[arg_name](records, data[arg_name])
+        sql = sql[arg_name](sql, unpack(ensure_array(data[arg_name])))
       end
     end
     if data.get or data.flat or data.exists then
-      return records
+      return sql
     else
-      return records:exec()
+      return sql:exec()
     end
   end
 end
