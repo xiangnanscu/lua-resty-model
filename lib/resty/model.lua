@@ -8,25 +8,16 @@ local Fields = require "resty.fields"
 local Query = require "resty.query"
 local Object = require "resty.object"
 local Array = require "resty.array"
-local getenv = require "resty.dotenv".getenv
+local getenv = require "resty.utils".getenv
 local ngx = ngx
-local nkeys, clone, isempty, NULL, table_new, table_clear
+local clone, isempty, NULL, table_new, table_clear
 if ngx then
-  nkeys = require "table.nkeys"
   clone = require "table.clone"
   isempty = require "table.isempty"
   NULL = ngx.null
   table_new = table.new
   table_clear = require("table.clear")
 else
-  nkeys = function(t)
-    local count = 0
-    for k, v in pairs(t) do
-      count = count + 1
-    end
-    return count
-  end
-
   clone = function(t)
     local t2 = {}
     for k, v in pairs(t) do
@@ -102,14 +93,6 @@ local table_concat = table.concat
 ---@field returning?  string
 ---@field join_args? string[][]
 
-local default_query = Query {
-  HOST = getenv "PGHOST" or "127.0.0.1",
-  PORT = getenv "PGPORT" or 5432,
-  DATABASE = getenv "PGDATABASE" or "postgres",
-  USER = getenv "PGUSER" or "postgres",
-  PASSWORD = getenv "PGPASSWORD" or "",
-}
-local normalize_field_shortcuts = Fields.basefield.normalize_field_shortcuts
 
 local PG_SET_MAP = {
   _union = 'UNION',
@@ -120,138 +103,6 @@ local PG_SET_MAP = {
   _intersect_all = 'INTERSECT ALL'
 }
 local COMPARE_OPERATORS = { lt = "<", lte = "<=", gt = ">", gte = ">=", ne = "<>", eq = "=" }
-
-local DEFAULT_PRIMARY_KEY = 'id'
-local DEFAULT_STRING_MAXLENGTH = 256
-local IS_PG_KEYWORDS = {
-  -- operator reserve because _parse_column logic
-  EQ = true,
-  -- IN = true,
-  NOTIN = true,
-  CONTAINS = true,
-  STARTSWITH = true,
-  ENDSWITH = true,
-  -- NULL = true,
-  LT = true,
-  LTE = true,
-  GT = true,
-  GTE = true,
-  NE = true,
-  -- operator reserve because _parse_column logic
-  ALL = true,
-  ANALYSE = true,
-  ANALYZE = true,
-  AND = true,
-  ANY = true,
-  ARRAY = true,
-  AS = true,
-  ASC = true,
-  ASYMMETRIC = true,
-  AUTHORIZATION = true,
-  BINARY = true,
-  BOTH = true,
-  CASE = true,
-  CAST = true,
-  CHECK = true,
-  COLLATE = true,
-  COLLATION = true,
-  COLUMN = true,
-  CONCURRENTLY = true,
-  CONSTRAINT = true,
-  CREATE = true,
-  CROSS = true,
-  CURRENT_CATALOG = true,
-  CURRENT_DATE = true,
-  CURRENT_ROLE = true,
-  CURRENT_SCHEMA = true,
-  CURRENT_TIME = true,
-  CURRENT_TIMESTAMP = true,
-  CURRENT_USER = true,
-  DEFAULT = true,
-  DEFERRABLE = true,
-  DESC = true,
-  DISTINCT = true,
-  DO = true,
-  ELSE = true,
-  END = true,
-  EXCEPT = true,
-  FALSE = true,
-  FETCH = true,
-  FOR = true,
-  FOREIGN = true,
-  FREEZE = true,
-  FROM = true,
-  FULL = true,
-  GRANT = true,
-  GROUP = true,
-  HAVING = true,
-  ILIKE = true,
-  IN = true,
-  INITIALLY = true,
-  INNER = true,
-  INTERSECT = true,
-  INTO = true,
-  IS = true,
-  ISNULL = true,
-  JOIN = true,
-  LATERAL = true,
-  LEADING = true,
-  LEFT = true,
-  LIKE = true,
-  LIMIT = true,
-  LOCALTIME = true,
-  LOCALTIMESTAMP = true,
-  NATURAL = true,
-  NOT = true,
-  NOTNULL = true,
-  NULL = true,
-  OFFSET = true,
-  ON = true,
-  ONLY = true,
-  OR = true,
-  ORDER = true,
-  OUTER = true,
-  OVERLAPS = true,
-  PLACING = true,
-  PRIMARY = true,
-  REFERENCES = true,
-  RETURNING = true,
-  RIGHT = true,
-  SELECT = true,
-  SESSION_USER = true,
-  SIMILAR = true,
-  SOME = true,
-  SYMMETRIC = true,
-  TABLE = true,
-  TABLESAMPLE = true,
-  THEN = true,
-  TO = true,
-  TRAILING = true,
-  TRUE = true,
-  UNION = true,
-  UNIQUE = true,
-  USER = true,
-  USING = true,
-  VARIADIC = true,
-  VERBOSE = true,
-  WHEN = true,
-  WHERE = true,
-  WINDOW = true,
-  WITH = true,
-}
-local MODEL_MERGE_NAMES = {
-  admin = true,
-  table_name = true,
-  class_name = true,
-  label = true,
-  db_options = true,
-  abstract = true,
-  auto_primary_key = true,
-  primary_key = true,
-  unique_together = true,
-  referenced_label_column = true,
-  preload = true,
-}
 
 ---@param s string
 ---@return fun():string
@@ -291,26 +142,6 @@ local function flat(tbl)
 end
 
 local function get_keys(rows)
-  local columns = {}
-  if rows[1] then
-    local d = {}
-    for _, row in ipairs(rows) do
-      for k, _ in pairs(row) do
-        if not d[k] then
-          d[k] = true
-          table_insert(columns, k)
-        end
-      end
-    end
-  else
-    for k, _ in pairs(rows) do
-      table_insert(columns, k)
-    end
-  end
-  return columns
-end
-
-local function get_keys_head(rows)
   local columns = {}
   for k, _ in pairs(rows[1] or rows) do
     table_insert(columns, k)
@@ -495,7 +326,9 @@ local function get_join_table_condition(opts, key)
   if #froms > 0 then
     from = table_concat(froms, " ")
   end
-  if #wheres > 0 then
+  if #wheres == 1 then
+    where = wheres[1]
+  elseif #wheres > 1 then
     where = "(" .. table_concat(wheres, ") AND (") .. ")"
   end
   return from, where
@@ -625,12 +458,6 @@ end
 local Sql = setmetatable({}, SqlMeta)
 Sql.__index = Sql
 Sql.__SQL_BUILDER__ = true
-Sql.NULL = NULL
-Sql.DEFAULT = DEFAULT
-Sql.token = make_token
-Sql.as_token = as_token
-Sql.as_literal = as_literal
-Sql.as_literal_without_brackets = as_literal_without_brackets
 
 function Sql:__tostring()
   return self:statement()
@@ -998,21 +825,13 @@ function Sql:_base_get_condition_token(cond, op, dval)
 end
 
 ---@private
----@param kwargs {[string|number]:any}
+---@param kwargs {[string]:any}
 ---@param logic? "AND"|"OR"
 ---@return string
 function Sql:_base_get_condition_token_from_table(kwargs, logic)
   local tokens = {}
   for k, value in pairs(kwargs) do
     tokens[#tokens + 1] = format("%s = %s", k, as_literal(value))
-    -- if type(k) == "string" then
-    --   tokens[#tokens + 1] = format("%s = %s", k, as_literal(value))
-    -- else
-    --   local token = self:_base_get_condition_token(value)
-    --   if token ~= nil and token ~= "" then
-    --     tokens[#tokens + 1] = '(' .. token .. ')'
-    --   end
-    -- end
   end
   if logic == nil then
     return table_concat(tokens, " AND ")
@@ -1264,7 +1083,7 @@ end
 ---@param columns? string[]
 ---@return string[], string[]
 function Sql:_get_bulk_insert_values_token(rows, columns)
-  columns = columns or get_keys_head(rows)
+  columns = columns or get_keys(rows)
   rows = self:_rows_to_array(rows, columns)
   return map(rows, as_literal), columns
 end
@@ -1471,6 +1290,16 @@ function Sql:_get_bulk_upsert_token(rows, key, columns)
   end
 end
 
+---@param rows Record[]
+---@param key? Keys
+---@param columns? string[]
+function Sql:align(rows, key, columns)
+  rows, key, columns = self:_clean_bulk_params(rows, key, columns)
+  local upsert_query = self.model:create_sql():upsert(rows, key, columns):returning(key)
+  self:with("U", upsert_query):where_not_in(key, Sql:new { table_name = 'U' }:_base_select(key)):delete()
+  return self
+end
+
 ---@private
 ---@param rows Sql
 ---@param key Keys
@@ -1580,20 +1409,13 @@ function Sql:_handle_where_token(where_token, tpl)
 end
 
 ---@private
----@param kwargs {[string|number]:any}
+---@param kwargs {[string]:any}
 ---@param logic? string
 ---@return string
 function Sql:_get_condition_token_from_table(kwargs, logic)
   local tokens = {}
   for k, value in pairs(kwargs) do
-    if type(k) == "string" then
-      tokens[#tokens + 1] = self:_get_expr_token(value, self:_parse_column(k))
-    else
-      local token = self:_get_condition_token(value)
-      if token ~= nil and token ~= "" then
-        tokens[#tokens + 1] = '(' .. token .. ')'
-      end
-    end
+    tokens[#tokens + 1] = self:_get_expr_token(value, self:_parse_column(k))
   end
   if logic == nil then
     return table_concat(tokens, " AND ")
@@ -1838,7 +1660,7 @@ end
 ---@param rows Record[]
 ---@return self
 function Sql:with_values(name, rows)
-  local columns = get_keys_head(rows)
+  local columns = get_keys(rows)
   rows, columns = self:_get_cte_values_literal(rows, columns, true)
   local cte_name = format("%s(%s)", name, table_concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(rows))
@@ -1849,7 +1671,7 @@ end
 ---@param key Keys
 ---@return self|XodelInstance[]
 function Sql:get_merge(rows, key)
-  local columns = get_keys_head(rows)
+  local columns = get_keys(rows)
   rows, columns = self:_get_cte_values_literal(rows, columns, true)
   local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
   local cte_name = format("V(%s)", table_concat(columns, ", "))
@@ -2351,12 +2173,14 @@ end
 function Sql:or_where_not_in(cols, range)
   if type(cols) == "string" then
     cols = self:_get_column(cols)
+    return Sql._base_or_where_not_in(self, cols, range)
   else
+    local res = {}
     for i = 1, #cols do
-      cols[i] = self:_get_column(cols[i])
+      res[i] = self:_get_column(cols[i])
     end
+    return Sql._base_or_where_not_in(self, res, range)
   end
-  return Sql._base_or_where_not_in(self, cols, range)
 end
 
 ---@param col string
@@ -2698,7 +2522,7 @@ end
 ---@return string[], string[]
 function Sql:_get_cte_values_literal(rows, columns, no_check)
   -- {{a=1,b=2}, {a=3,b=4}} => {"(1, 2)", "(3, 4)"}, {'a','b'}
-  columns = columns or get_keys_head(rows)
+  columns = columns or get_keys(rows)
   rows = self:_rows_to_array(rows, columns)
   local first_row = rows[1]
   for i, col in ipairs(columns) do
@@ -2787,12 +2611,11 @@ function Sql:_parse_column(key, as_select, disable_alias)
         local alias = self._join_keys[join_key]
         if not alias then
           prefix = self:_handle_manual_join(
-            "INNER",
-            { field.reference },
+            self._join_type or "INNER",
+            { fk_model },
             function(ctx)
-              return format("%s = %s",
-                ctx[model.table_name][field_name],
-                ctx[field.reference.table_name][field.reference_column])
+              local left_model_index = model == self.model and 1 or #ctx - 1
+              return format("%s = %s", ctx[left_model_index][field_name], ctx[#ctx][field.reference_column])
             end,
             join_key)
         else
@@ -3416,6 +3239,145 @@ function Sql:where_recursive(name, value, select_names)
 end
 
 -- Model defination
+local default_query = Query {
+  HOST = getenv "PGHOST" or "127.0.0.1",
+  PORT = getenv "PGPORT" or 5432,
+  DATABASE = getenv "PGDATABASE" or "postgres",
+  USER = getenv "PGUSER" or "postgres",
+  PASSWORD = getenv "PGPASSWORD" or "",
+}
+local normalize_field_shortcuts = Fields.basefield.normalize_field_shortcuts
+local DEFAULT_PRIMARY_KEY = 'id'
+local DEFAULT_STRING_MAXLENGTH = 256
+local IS_PG_KEYWORDS = {
+  -- operator reserve because _parse_column logic
+  EQ = true,
+  -- IN = true,
+  NOTIN = true,
+  CONTAINS = true,
+  STARTSWITH = true,
+  ENDSWITH = true,
+  -- NULL = true,
+  LT = true,
+  LTE = true,
+  GT = true,
+  GTE = true,
+  NE = true,
+  -- operator reserve because _parse_column logic
+  ALL = true,
+  ANALYSE = true,
+  ANALYZE = true,
+  AND = true,
+  ANY = true,
+  ARRAY = true,
+  AS = true,
+  ASC = true,
+  ASYMMETRIC = true,
+  AUTHORIZATION = true,
+  BINARY = true,
+  BOTH = true,
+  CASE = true,
+  CAST = true,
+  CHECK = true,
+  COLLATE = true,
+  COLLATION = true,
+  COLUMN = true,
+  CONCURRENTLY = true,
+  CONSTRAINT = true,
+  CREATE = true,
+  CROSS = true,
+  CURRENT_CATALOG = true,
+  CURRENT_DATE = true,
+  CURRENT_ROLE = true,
+  CURRENT_SCHEMA = true,
+  CURRENT_TIME = true,
+  CURRENT_TIMESTAMP = true,
+  CURRENT_USER = true,
+  DEFAULT = true,
+  DEFERRABLE = true,
+  DESC = true,
+  DISTINCT = true,
+  DO = true,
+  ELSE = true,
+  END = true,
+  EXCEPT = true,
+  FALSE = true,
+  FETCH = true,
+  FOR = true,
+  FOREIGN = true,
+  FREEZE = true,
+  FROM = true,
+  FULL = true,
+  GRANT = true,
+  GROUP = true,
+  HAVING = true,
+  ILIKE = true,
+  IN = true,
+  INITIALLY = true,
+  INNER = true,
+  INTERSECT = true,
+  INTO = true,
+  IS = true,
+  ISNULL = true,
+  JOIN = true,
+  LATERAL = true,
+  LEADING = true,
+  LEFT = true,
+  LIKE = true,
+  LIMIT = true,
+  LOCALTIME = true,
+  LOCALTIMESTAMP = true,
+  NATURAL = true,
+  NOT = true,
+  NOTNULL = true,
+  NULL = true,
+  OFFSET = true,
+  ON = true,
+  ONLY = true,
+  OR = true,
+  ORDER = true,
+  OUTER = true,
+  OVERLAPS = true,
+  PLACING = true,
+  PRIMARY = true,
+  REFERENCES = true,
+  RETURNING = true,
+  RIGHT = true,
+  SELECT = true,
+  SESSION_USER = true,
+  SIMILAR = true,
+  SOME = true,
+  SYMMETRIC = true,
+  TABLE = true,
+  TABLESAMPLE = true,
+  THEN = true,
+  TO = true,
+  TRAILING = true,
+  TRUE = true,
+  UNION = true,
+  UNIQUE = true,
+  USER = true,
+  USING = true,
+  VARIADIC = true,
+  VERBOSE = true,
+  WHEN = true,
+  WHERE = true,
+  WINDOW = true,
+  WITH = true,
+}
+local MODEL_MERGE_NAMES = {
+  admin = true,
+  table_name = true,
+  class_name = true,
+  label = true,
+  db_options = true,
+  abstract = true,
+  auto_primary_key = true,
+  primary_key = true,
+  unique_together = true,
+  referenced_label_column = true,
+  preload = true,
+}
 local base_model = {
   abstract = true,
   field_names = Array { DEFAULT_PRIMARY_KEY, "ctime", "utime" },
@@ -3548,41 +3510,35 @@ local function create_model_proxy(ModelClass)
   local proxy = {}
   local function __index(_, k)
     local sql_k = Sql[k]
-    if sql_k ~= nil then
-      if type(sql_k) == 'function' then
-        return function(_, ...)
-          return sql_k(ModelClass:create_sql(), ...)
-        end
-      else
-        return sql_k
+    if type(sql_k) == 'function' then
+      return function(_, ...)
+        return sql_k(ModelClass:create_sql(), ...)
       end
     end
     local model_k = ModelClass[k]
-    if model_k ~= nil then
-      if type(model_k) == 'function' then
-        return function(cls, ...)
-          if cls == proxy then
-            return model_k(ModelClass, ...)
-          elseif k == 'query' then
-            -- ModelClass.query(statement, compact?), cls is statement in this case
-            return model_k(cls, ...)
-          else
-            error(string_format("calling model proxy method `%s` with first argument not being itself is not allowed", k))
-          end
+    if type(model_k) == 'function' then
+      return function(cls, ...)
+        if cls == proxy then
+          return model_k(ModelClass, ...)
+        elseif k == 'query' then
+          -- ModelClass.query(statement, compact?), cls is statement in this case
+          return model_k(cls, ...)
+        else
+          error(string_format("calling model proxy method `%s` with first argument not being itself is not allowed", k))
         end
-      else
-        return model_k
       end
     else
-      return nil
+      return model_k
     end
   end
   local function __newindex(t, k, v)
-    ModelClass[k] = v
+    rawset(ModelClass, k, v)
   end
-
+  local function __call(t, ...)
+    return ModelClass:create_record(...)
+  end
   return setmetatable(proxy, {
-    __call = ModelClass.create_record,
+    __call = __call,
     __index = __index,
     __newindex = __newindex
   })
@@ -3627,10 +3583,10 @@ local Xodel = {
   query = default_query,
   DEFAULT_PRIMARY_KEY = DEFAULT_PRIMARY_KEY,
   NULL = NULL,
-  token = Sql.token,
-  DEFAULT = Sql.DEFAULT,
-  as_token = Sql.as_token,
-  as_literal = Sql.as_literal,
+  DEFAULT = DEFAULT,
+  token = make_token,
+  as_token = as_token,
+  as_literal = as_literal,
 }
 setmetatable(Xodel, {
   __call = function(t, ...)
@@ -3739,6 +3695,12 @@ end
 ---@param opts ModelOpts
 ---@return Xodel
 function Xodel._make_model_class(cls, opts)
+  local auto_primary_key
+  if opts.auto_primary_key == nil then
+    auto_primary_key = Xodel.auto_primary_key
+  else
+    auto_primary_key = opts.auto_primary_key
+  end
   local ModelClass = dict(cls, {
     table_name = opts.table_name,
     class_name = opts.class_name,
@@ -3751,6 +3713,7 @@ function Xodel._make_model_class(cls, opts)
     abstract = opts.abstract,
     primary_key = opts.primary_key,
     unique_together = opts.unique_together,
+    auto_primary_key = auto_primary_key,
     referenced_label_column = opts.referenced_label_column,
     preload = opts.preload,
   })
@@ -3811,12 +3774,6 @@ function Xodel._make_model_class(cls, opts)
   ModelClass:ensure_admin_list_names();
   if ModelClass.auto_now_add_name then
     ModelClass:ensure_ctime_list_names(ModelClass.auto_now_add_name);
-  end
-  if ModelClass.table_name then
-    setmetatable(ModelClass, {
-      __call = ModelClass.create_record,
-      -- __newindex = disable_setting_model_attrs
-    })
   end
   local proxy = create_model_proxy(ModelClass)
   Xodel.resolve_self_foreignkey(proxy)
