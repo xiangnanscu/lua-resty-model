@@ -1749,6 +1749,7 @@ function Sql:select_as(key, alias)
   else
     self._select = self._select .. ", " .. col
   end
+  self:_keep_args("_select_args", key)
   return self
 end
 
@@ -1765,6 +1766,20 @@ function Sql:select_literal(a, b, ...)
     self._select = self._select .. ", " .. s
   end
   self:_keep_args("_select_literal_args", a, b, ...)
+  return self
+end
+
+---@param key string
+---@param alias string
+---@return self
+function Sql:select_literal_as(key, alias)
+  local col = self:_get_select_literal(key) .. ' AS ' .. alias
+  if not self._select then
+    self._select = col
+  else
+    self._select = self._select .. ", " .. col
+  end
+  self:_keep_args("_select_literal_args", key)
   return self
 end
 
@@ -2814,6 +2829,16 @@ function Sql:_get_bulk_key(columns)
   return pk
 end
 
+function Sql:_get_columns_from_row(row)
+  local columns = {}
+  for k, _ in pairs(row) do
+    if self.model.fields[k] then
+      columns[#columns + 1] = k
+    end
+  end
+  return columns
+end
+
 function Sql:_clean_bulk_params(rows, key, columns)
   if isempty(rows) then
     error("empty rows passed to merge")
@@ -2822,12 +2847,7 @@ function Sql:_clean_bulk_params(rows, key, columns)
     rows = { rows }
   end
   if columns == nil then
-    columns = {}
-    for k, _ in pairs(rows[1]) do
-      if self.model.fields[k] then
-        columns[#columns + 1] = k
-      end
-    end
+    columns = self:_get_columns_from_row(rows[1])
     if #columns == 0 then
       error("no columns provided for bulk")
     end
@@ -4429,7 +4449,6 @@ end
 ---@return Records?, string[]|ValidateError
 function Xodel.validate_create_data(cls, rows, columns)
   local err_obj, cleaned
-  -- TODO: columns没有提供值时从rows里面获取, 以便和merge的逻辑一致. 但是要考虑排除列id的情况
   columns = columns or cls.names
   if rows[1] then
     ---@cast rows Record[]

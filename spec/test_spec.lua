@@ -114,7 +114,7 @@ local function crate_table_from_models()
   local res = {}
   for i = #models, 1, -1 do
     local model = models[i]
-    assert(Usr.query("DROP TABLE IF EXISTS " .. model.table_name))
+    assert(Usr.query("DROP TABLE IF EXISTS " .. model.table_name .. " CASCADE"))
   end
   for _, model in ipairs(models) do
     assert(Usr.query(migrate.get_table_defination(model)))

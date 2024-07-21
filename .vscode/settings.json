@@ -1,0 +1,66 @@
+{
+  "editor.quickSuggestionsDelay": 200,
+  "editor.suggest.snippetsPreventQuickSuggestions": true,
+  "files.associations": {
+    "*.json": "jsonc"
+  },
+  "search.exclude": {
+    "package-lock.json": true,
+    "auto_generated": true,
+    "public/**": true
+  },
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "editor.formatOnPaste": false, // required
+  "editor.formatOnType": false, // required
+  "editor.formatOnSave": true, // optional
+  "editor.formatOnSaveMode": "file", // required to format on save
+  "files.autoSave": "onFocusChange",
+  "Prettier-SQL.SQLFlavourOverride": "postgresql",
+  "[sql]": {
+    "editor.defaultFormatter": "inferrinizzard.prettier-sql-vscode"
+  },
+  "Lua.runtime.version": "LuaJIT",
+  "Lua.diagnostics.globals": [
+    "ngx",
+    "xodel",
+    "loger"
+  ],
+  // https://github.com/sumneko/lua-language-server/tree/master/meta/3rd
+  "Lua.workspace.library": [
+    "types",
+    "${3rd}/lfs/library",
+    "${3rd}/luassert/library",
+    "${3rd}/busted/library",
+    "${3rd}/OpenResty/library"
+  ],
+  "Lua.runtime.unicodeName": true,
+  "Lua.typeFormat.config": {
+    "format_line": "false",
+    "auto_complete_end": "false",
+    "auto_complete_table_sep": "false"
+  },
+  "Lua.workspace.checkThirdParty": false,
+  "Lua.completion.autoRequire": false,
+  "html.format.unformatted": "wbr,%",
+  "html.format.wrapAttributesIndentSize": 2,
+  "html.format.wrapAttributes": "force-expand-multiline", //volar格式化template的选项
+  "html.format.wrapLineLength": 80,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[javascript]": {
+    "editor.defaultFormatter": "rvest.vs-code-prettier-eslint"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "rvest.vs-code-prettier-eslint"
+  },
+  "[vue]": {
+    "editor.defaultFormatter": "rvest.vs-code-prettier-eslint"
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
+  },
+  "Lua.diagnostics.disable": [
+    "duplicate-set-field"
+  ]
+}
