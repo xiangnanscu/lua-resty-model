@@ -2503,14 +2503,14 @@ end
 ---@param amount? number
 ---@return self
 function Sql:increase(name, amount)
-  return self:update { [name] = self.token(format("%s + %s", name, amount or 1)) }
+  return self:update { [name] = make_token(format("%s + %s", name, amount or 1)) }
 end
 
 ---@param name string
 ---@param amount? number
 ---@return self
 function Sql:decrease(name, amount)
-  return self:update { [name] = self.token(format("%s - %s", name, amount or 1)) }
+  return self:update { [name] = make_token(format("%s - %s", name, amount or 1)) }
 end
 
 --- {{id=1}, {id=2}, {id=3}} => columns: {'id'}  keys: {{1},{2},{3}}
@@ -2613,7 +2613,7 @@ function Sql:_parse_column(key, as_select, disable_alias)
         -- fk__id, unnecessary suffix, ignore
         break
       else
-        -- fk__name, need inner join
+        -- fk__name, need inner join: field_name -> fk, name -> token
         if not join_key then
           -- prefix with field_name because fk_model can be referenced multiple times
           join_key = field_name
@@ -2629,7 +2629,7 @@ function Sql:_parse_column(key, as_select, disable_alias)
             self._join_type or "INNER",
             { fk_model },
             function(ctx)
-              local left_model_index = model == self.model and 1 or #ctx - 1
+              local left_model_index = field_name == join_key and 1 or #ctx - 1
               return format("%s = %s", ctx[left_model_index][field_name], ctx[#ctx][field.reference_column])
             end,
             join_key)
@@ -3526,6 +3526,8 @@ local function make_record_meta(ModelClass)
   return RecordClass -- setmetatable(RecordClass, model)
 end
 
+---@param ModelClass Xodel
+---@return Xodel
 local function create_model_proxy(ModelClass)
   local proxy = {}
   local function __index(_, k)
