@@ -6,9 +6,7 @@
 local encode = require("cjson").encode
 local Fields = require "resty.fields"
 local Query = require "resty.query"
-local Object = require "resty.object"
 local Array = require "resty.array"
-local getenv = require "resty.utils".getenv
 local ngx = ngx
 local clone, isempty, NULL, table_new, table_clear
 if ngx then
@@ -65,7 +63,7 @@ local table_concat = table.concat
 ---@alias Token fun(): string
 ---@alias DBLoadValue string|number|integer|boolean|table
 ---@alias DBValue DBLoadValue|Token
----@alias Record {[string]:DBValue}
+---@alias Record {[string]:DBValue|Record[]}
 ---@alias Records Record|Record[]
 ---@alias ValidateErrorObject {[string]: any}
 ---@alias ValidateError string|ValidateErrorObject
@@ -116,6 +114,26 @@ end
 
 local function DEFAULT()
   return "DEFAULT"
+end
+
+local function list(a, b)
+  local t = clone(a)
+  if b then
+    for _, v in ipairs(b) do
+      t[#t + 1] = v
+    end
+  end
+  return t
+end
+
+local function dict(t1, t2)
+  local res = clone(t1)
+  if t2 then
+    for key, value in pairs(t2) do
+      res[key] = value
+    end
+  end
+  return res
 end
 
 local function map(tbl, func)
@@ -184,7 +202,11 @@ local function as_literal(value)
     if value.__SQL_BUILDER__ then
       return "(" .. value:statement() .. ")"
     elseif value[1] ~= nil then
-      return "(" .. table_concat(map(value, as_literal), ", ") .. ")"
+      local result = {}
+      for i, v in ipairs(value) do
+        result[i] = as_literal(v)
+      end
+      return "(" .. table_concat(result, ", ") .. ")"
     else
       error("empty table is not allowed")
     end
@@ -211,7 +233,11 @@ local function as_token(value)
     if value.__SQL_BUILDER__ then
       return "(" .. value:statement() .. ")"
     elseif value[1] ~= nil then
-      return table_concat(map(value, as_token), ", ")
+      local result = {}
+      for i, v in ipairs(value) do
+        result[i] = as_token(v)
+      end
+      return table_concat(result, ", ")
     else
       error("empty table is not allowed")
     end
@@ -239,7 +265,11 @@ local function as_literal_without_brackets(value)
     if value.__SQL_BUILDER__ then
       return "(" .. value:statement() .. ")"
     elseif value[1] ~= nil then
-      return table_concat(map(value, as_literal_without_brackets), ", ")
+      local result = {}
+      for i, v in ipairs(value) do
+        result[i] = as_literal_without_brackets(v)
+      end
+      return table_concat(result, ", ")
     else
       error("empty table is not allowed")
     end
@@ -413,6 +443,8 @@ end
 ---@class Sql
 ---@field model Xodel
 ---@field table_name string
+---@field as_token  fun(DBValue):string
+---@field as_literal  fun(DBValue):string
 ---@field private _pcall? boolean
 ---@field private _as?  string
 ---@field private _with?  string
@@ -454,10 +486,13 @@ end
 ---@field private _skip_validate? boolean
 ---@field private _commit? boolean
 ---@field private _compact? boolean
+---@field private _return_all? boolean
 ---@field private _raw? boolean
 local Sql = setmetatable({}, SqlMeta)
 Sql.__index = Sql
 Sql.__SQL_BUILDER__ = true
+Sql.as_token = as_token
+Sql.as_literal = as_literal
 
 function Sql:__tostring()
   return self:statement()
@@ -1290,12 +1325,55 @@ function Sql:_get_bulk_upsert_token(rows, key, columns)
   end
 end
 
+-- WITH
+--   U AS (
+--     INSERT INTO
+--       inst_config AS T (name, inst_id, seq, status, position)
+--     VALUES
+--       ('tom', 1, 1, 'ok', 'ceo'),
+--       ('kate', 2, 2, 'ok', 'cto') ON CONFLICT (inst_id, name)
+--     DO
+--     UPDATE
+--     SET
+--       seq = EXCLUDED.seq,
+--       status = EXCLUDED.status,
+--       position = EXCLUDED.position
+--     RETURNING
+--       T.inst_id,
+--       T.name
+--   )
+-- DELETE FROM inst_config T
+-- WHERE
+--   (T.inst_id, T.name) NOT IN (
+--     SELECT
+--       inst_id,
+--       name
+--     FROM
+--       U
+--   )
+-- RETURNING
+--   *;
 ---@param rows Record[]
 ---@param key? Keys
 ---@param columns? string[]
 function Sql:align(rows, key, columns)
   rows, key, columns = self:_clean_bulk_params(rows, key, columns)
-  local upsert_query = self.model:create_sql():upsert(rows, key, columns):returning(key)
+  local upsert_query = self.model:create_sql()
+  if not self._skip_validate then
+    ---@diagnostic disable-next-line: cast-local-type
+    rows, key, columns = self.model:validate_create_rows(rows, key, columns)
+    if rows == nil then
+      error(key)
+    end
+  end
+  ---@diagnostic disable-next-line: cast-local-type, param-type-mismatch
+  rows, columns = self.model:prepare_db_rows(rows, columns, false)
+  if rows == nil then
+    error(columns)
+  end
+  upsert_query:returning(key)
+  ---@diagnostic disable-next-line: param-type-mismatch
+  Sql._base_upsert(upsert_query, rows, key, columns)
   self:with("U", upsert_query):where_not_in(key, Sql:new { table_name = 'U' }:_base_select(key)):delete()
   return self
 end
@@ -1512,7 +1590,7 @@ function Sql:_statement_for_set()
   return statement
 end
 
----@param ... Sql[]|string[]
+---@param ... Sql|string
 ---@return self
 function Sql:prepend(...)
   if not self._prepend then
@@ -1526,7 +1604,7 @@ function Sql:prepend(...)
   return self
 end
 
----@param ... Sql[]|string[]
+---@param ... Sql|string
 ---@return self
 function Sql:append(...)
   if not self._append then
@@ -2129,13 +2207,14 @@ end
 ---@return self
 function Sql:where_not_in(cols, range)
   if type(cols) == "string" then
-    cols = self:_get_column(cols)
+    return Sql._base_where_not_in(self, self:_get_column(cols), range)
   else
+    local res = {}
     for i = 1, #cols do
-      cols[i] = self:_get_column(cols[i])
+      res[i] = self:_get_column(cols[i])
     end
+    return Sql._base_where_not_in(self, res, range)
   end
-  return Sql._base_where_not_in(self, cols, range)
 end
 
 ---@param col string
@@ -2681,7 +2760,7 @@ function Sql:_get_column(key)
     if self._as then
       return self._as .. '.' .. key
     else
-      return self.model.name_cache[key]
+      return self.model.column_cache[key]
     end
   end
   if key == '*' then
@@ -2814,7 +2893,7 @@ end
 
 function Sql:_get_bulk_key(columns)
   if self.model.unique_together and self.model.unique_together[1] then
-    return self.model.unique_together[1]
+    return clone(self.model.unique_together[1])
   end
   for index, name in ipairs(columns) do
     local f = self.model.fields[name]
@@ -2925,7 +3004,7 @@ function Sql:updates(rows, key, columns)
     ---@diagnostic disable-next-line: cast-local-type
     rows, key, columns = self.model:validate_update_rows(rows, key, columns)
     if rows == nil then
-      error(columns)
+      error(key)
     end
   end
   ---@diagnostic disable-next-line: cast-local-type, param-type-mismatch
@@ -2945,23 +3024,28 @@ function Sql:get_multiple(keys, columns)
 end
 
 ---@param statement string
----@return Array<XodelInstance>, table?
+---@return Array<XodelInstance>|Array<XodelInstance>[]
 function Sql:exec_statement(statement)
+  -- https://github.com/leafo/pgmoon/blob/cd42b4a12ceae969db3f38bb2757ae738e4b0e32/pgmoon/init.moon#L872
   local records = assert(self.model.query(statement, self._compact))
-  local multiple_records
+  local all_results
   if self._prepend then
-    multiple_records = records
+    all_results = records
     records = records[#self._prepend + 1]
   elseif self._append then
-    multiple_records = records
+    all_results = records
     records = records[1]
   end
   if (self._raw or self._raw == nil) or self._compact or self._update or self._insert or self._delete then
     if (self._update or self._insert or self._delete) and self._returning then
       records.affected_rows = nil
     end
-    ---@cast records Array<Record>
-    return setmetatable(records, Array), multiple_records
+    if self._return_all then
+      return all_results
+    else
+      ---@cast records Array<Record>
+      return setmetatable(records, Array)
+    end
   else
     ---@type Xodel
     local cls = self.model
@@ -2996,8 +3080,12 @@ function Sql:exec_statement(statement)
         records[i] = cls:create_record(record)
       end
     end
-    ---@cast records Array<XodelInstance>
-    return setmetatable(records, Array), multiple_records
+    if self._return_all then
+      return all_results
+    else
+      ---@cast records Array<XodelInstance>
+      return setmetatable(records, Array)
+    end
   end
 end
 
@@ -3024,13 +3112,6 @@ function Sql:count(cond, op, dval)
   end
 end
 
----@param rows Records|Sql
----@param columns? string[]
----@return self
-function Sql:create(rows, columns)
-  return self:insert(rows, columns):execr()
-end
-
 ---@return boolean
 function Sql:exists()
   local statement = format("SELECT EXISTS (%s)", self:select(1):limit(1):compact():statement())
@@ -3042,9 +3123,47 @@ function Sql:exists()
   end
 end
 
+---@param params table
+---@param defaults? table
+---@param columns? string[]
+---@return XodelInstance, boolean
+function Sql:get_or_create(params, defaults, columns)
+  local values_list, insert_columns = Sql:_get_insert_values_token(dict(params, defaults))
+  local insert_columns_token = as_token(insert_columns)
+  local all_columns_token = as_token(Array.unique(list(columns or { self.model.primary_key }, insert_columns)))
+  local insert_sql = format('(INSERT INTO "%s"(%s) SELECT %s WHERE NOT EXISTS (%s) RETURNING %s)',
+    self.table_name,
+    insert_columns_token,
+    as_literal_without_brackets(values_list),
+    self.model:create_sql():select(1):where(params),
+    all_columns_token
+  )
+  local inserted_set = Sql:new { model = self.model, table_name = 'new_records' }:as("new_records")
+      :with(format("new_records(%s)", all_columns_token), insert_sql)
+      :_base_select(all_columns_token):_base_select("TRUE AS __is_inserted__")
+  -- main sql
+  local selected_set = self:where(params):_base_select(all_columns_token):_base_select(
+    "FALSE AS __is_inserted__")
+  local records = inserted_set:union_all(selected_set):exec()
+  if #records > 1 then
+    error("multiple records returned")
+  end
+  local ins = records[1]
+  ---@diagnostic disable-next-line: undefined-field
+  local created = ins.__is_inserted__
+  ins.__is_inserted__ = nil
+  return ins, created
+end
+
 ---@return self
 function Sql:compact()
   self._compact = true
+  return self
+end
+
+---@return self
+function Sql:return_all()
+  self._return_all = true
   return self
 end
 
@@ -3105,7 +3224,7 @@ end
 ---@param cond? table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
----@return XodelInstance?, number?
+---@return XodelInstance|false
 function Sql:try_get(cond, op, dval)
   if self._raw == nil then
     self._raw = false
@@ -3122,7 +3241,7 @@ function Sql:try_get(cond, op, dval)
   if #records == 1 then
     return records[1]
   else
-    return nil, #records
+    return false
   end
 end
 
@@ -3131,15 +3250,24 @@ end
 ---@param dval? DBValue
 ---@return XodelInstance
 function Sql:get(cond, op, dval)
-  local record, record_number = self:try_get(cond, op, dval)
-  if not record then
-    if record_number == 0 then
-      error("record not found")
-    else
-      error("multiple records returned: " .. record_number)
+  if self._raw == nil then
+    self._raw = false
+  end
+  local records
+  if cond ~= nil then
+    if type(cond) == 'table' and next(cond) == nil then
+      error("empty condition table is not allowed")
     end
+    records = self:where(cond, op, dval):limit(2):exec()
   else
-    return record
+    records = self:limit(2):exec()
+  end
+  if #records == 1 then
+    return records[1]
+  elseif #records == 0 then
+    error("record not found")
+  else
+    error(format("multiple records returned: %d", #records))
   end
 end
 
@@ -3259,13 +3387,7 @@ function Sql:where_recursive(name, value, select_names)
 end
 
 -- Model defination
-local default_query = Query {
-  HOST = getenv "PGHOST" or "127.0.0.1",
-  PORT = getenv "PGPORT" or 5432,
-  DATABASE = getenv "PGDATABASE" or "postgres",
-  USER = getenv "PGUSER" or "postgres",
-  PASSWORD = getenv "PGPASSWORD" or "",
-}
+local default_query = Query {}
 local normalize_field_shortcuts = Fields.basefield.normalize_field_shortcuts
 local DEFAULT_PRIMARY_KEY = 'id'
 local DEFAULT_STRING_MAXLENGTH = 256
@@ -3398,7 +3520,7 @@ local MODEL_MERGE_NAMES = {
   referenced_label_column = true,
   preload = true,
 }
-local base_model = {
+local BaseModel = {
   abstract = true,
   field_names = Array { DEFAULT_PRIMARY_KEY, "ctime", "utime" },
   fields = {
@@ -3407,30 +3529,6 @@ local base_model = {
     utime = { label = "更新时间", type = "datetime", auto_now = true }
   }
 }
-
-local function disable_setting_model_attrs(cls, key, value)
-  error(string_format("modify model class '%s' is not allowed (key: %s, value: %s)", cls.table_name, key, value))
-end
-
-local function list(a, b)
-  local t = clone(a)
-  if b then
-    for _, v in ipairs(b) do
-      t[#t + 1] = v
-    end
-  end
-  return t
-end
-
-local function dict(t1, t2)
-  local res = clone(t1)
-  if t2 then
-    for key, value in pairs(t2) do
-      res[key] = value
-    end
-  end
-  return res
-end
 
 local API_TABLE_NAMES = {
   T = true,
@@ -3480,7 +3578,7 @@ end
 
 ---@param ModelClass Xodel
 local function make_record_meta(ModelClass)
-  local RecordClass = dict(Object, {})
+  local RecordClass = {}
 
   RecordClass.__index = RecordClass
 
@@ -3596,7 +3694,7 @@ end
 ---@field auto_now_name string
 ---@field auto_now_add_name string
 ---@field foreign_keys table
----@field name_cache {[string]:string}
+---@field column_cache {[string]:string}
 ---@field clean? function
 ---@field name_to_label {[string]:string}
 ---@field label_to_name {[string]:string}
@@ -3685,15 +3783,10 @@ function Xodel.create_sql(cls)
 end
 
 ---@param cls Xodel
----@param rows? table[]
+---@param rows table[]
 ---@return Sql
 function Xodel.create_sql_as(cls, table_name, rows)
-  local alias_sql = Sql:new { model = cls, table_name = table_name }:as(table_name)
-  if rows then
-    return alias_sql:with_values(table_name, rows)
-  else
-    return alias_sql
-  end
+  return Sql:new { model = cls, table_name = table_name }:as(table_name):with_values(table_name, rows)
 end
 
 ---@param cls Xodel
@@ -3812,10 +3905,8 @@ function Xodel.normalize(cls, options)
     admin = clone(options.admin or {}),
   }
   for _, extend_attr in ipairs(EXTEND_ATTRS) do
-    if options[extend_attr] == nil then
-      if options.extends then
-        model[extend_attr] = options.extends[extend_attr]
-      end
+    if options[extend_attr] == nil and extends and extends[extend_attr] then
+      model[extend_attr] = extends[extend_attr]
     else
       model[extend_attr] = options[extend_attr]
     end
@@ -3850,8 +3941,16 @@ function Xodel.normalize(cls, options)
   end
   model.field_names = normalize_field_names(clone(opts_names))
   model.fields = {}
+  local abstract
+  if options.abstract ~= nil then
+    abstract = not not options.abstract
+  else
+    abstract = model.table_name == nil
+  end
   for _, name in ipairs(model.field_names) do
-    cls.check_field_name(model, name)
+    if not abstract then
+      cls.check_field_name(model, name)
+    end
     local field = opts_fields[name]
     if not field then
       local tname = model.table_name or '[abstract model]'
@@ -3884,17 +3983,18 @@ function Xodel.normalize(cls, options)
       model[key] = value
     end
   end
-  local unique_together = options.unique_together or {}
+  if not options.unique_together and extends and extends.unique_together then
+    model.unique_together = extends.unique_together:filter(function(group)
+      return Array.every(group, function(name)
+        return model.fields[name]
+      end)
+    end)
+  end
+  local unique_together = model.unique_together or {}
   if type(unique_together[1]) == 'string' then
     unique_together = { unique_together }
   end
   model.unique_together = unique_together
-  local abstract
-  if options.abstract ~= nil then
-    abstract = not not options.abstract
-  else
-    abstract = model.table_name == nil
-  end
   model.abstract = abstract
   model.__normalized__ = true
   if options.mixins then
@@ -3990,9 +4090,9 @@ function Xodel.materialize_with_table_name(cls, opts)
     cls.fields[pk_name] = Fields.integer:create_field { name = pk_name, primary_key = true, serial = true }
     table_insert(cls.field_names, 1, pk_name)
   end
-  cls.name_cache = {}
+  cls.column_cache = {}
   for name, field in pairs(cls.fields) do
-    cls.name_cache[name] = cls.table_name .. "." .. name
+    cls.column_cache[name] = cls.table_name .. "." .. name
     if field.reference then
       field.table_name = table_name
     end
@@ -4005,7 +4105,7 @@ end
 ---@param ... ModelOpts
 ---@return Xodel
 function Xodel.mix_with_base(cls, ...)
-  return cls:mix(base_model, ...)
+  return cls:mix(BaseModel, ...)
 end
 
 ---@param cls Xodel
@@ -4040,7 +4140,7 @@ function Xodel.merge_model(cls, a, b)
   local A = a.__normalized__ and a or cls:normalize(a)
   local B = b.__normalized__ and b or cls:normalize(b)
   local C = {}
-  local field_names = (A.field_names + B.field_names):uniq()
+  local field_names = A.field_names:concat(B.field_names):unique()
   local fields = {}
   for i, name in ipairs(field_names) do
     local af = A.fields[name]
@@ -4098,9 +4198,12 @@ function Xodel.to_json(cls, names)
       field_names = clone(cls.field_names),
       label_to_name = clone(cls.label_to_name),
       name_to_label = clone(cls.name_to_label),
-      fields = Object.from_entries(cls.field_names:map(function(name)
+      fields = cls.field_names:map(function(name)
         return { name, cls.fields[name]:json() }
-      end))
+      end):reduce(function(acc, pair)
+        acc[pair[1]] = pair[2]
+        return acc
+      end, {}),
     }
   else
     if type(names) ~= 'table' then
@@ -4127,48 +4230,6 @@ function Xodel.to_json(cls, names)
       fields = fields,
     }
   end
-end
-
----@param cls Xodel
----@return Record[]
-function Xodel.all(cls)
-  local records = assert(cls.query("SELECT * FROM " .. cls.table_name))
-  for i = 1, #records do
-    records[i] = cls:load(records[i])
-  end
-  return setmetatable(records, Array)
-end
-
----@param cls Xodel
----@param params table
----@param defaults? table
----@param columns? string[]
----@return XodelInstance, boolean
-function Xodel.get_or_create(cls, params, defaults, columns)
-  local values_list, insert_columns = Sql:_get_insert_values_token(dict(params, defaults))
-  local insert_columns_token = as_token(insert_columns)
-  local all_columns_token = as_token(Array.unique(list(columns or { cls.primary_key }, insert_columns)))
-  local insert_sql = string_format("(INSERT INTO %s(%s) SELECT %s WHERE NOT EXISTS (%s) RETURNING %s)",
-    cls.table_name,
-    insert_columns_token,
-    as_literal_without_brackets(values_list),
-    cls:create_sql():select(1):where(params),
-    all_columns_token
-  )
-  local inserted_set = cls:create_sql_as("new_records")
-      :with(string_format("new_records(%s)", all_columns_token), insert_sql)
-      :_base_select(all_columns_token):_base_select("TRUE AS __is_inserted__")
-  local selected_set = cls:create_sql():where(params):_base_select(all_columns_token):_base_select(
-    "FALSE AS __is_inserted__")
-  local records = inserted_set:union_all(selected_set):exec()
-  if #records > 1 then
-    error("multiple records returned")
-  end
-  local ins = records[1]
-  ---@diagnostic disable-next-line: undefined-field
-  local created = ins.__is_inserted__
-  ins.__is_inserted__ = nil
-  return ins, created
 end
 
 ---@param cls Xodel
@@ -4369,6 +4430,97 @@ function Xodel.validate_update(cls, input, names)
       return res
     end
   end
+end
+
+---@param cls Xodel
+---@param tf TableField like MegaDoc.dests
+---@return ForeignkeyField? like Dest.doc_id
+function Xodel._get_cascade_field(cls, tf)
+  if tf.cascade_column then
+    return tf.model.fields[tf.cascade_column]
+  end
+  local table_validate_columns = tf.names or tf.form_names or tf.model.names
+  for i, column in ipairs(table_validate_columns) do
+    local fk = tf.model.fields[column]
+    if fk == nil then
+      error(string_format("cascade field '%s' not found for model '%s'", column, cls.table_name))
+    end
+    if fk.type == 'foreignkey' and fk.reference.table_name == cls.table_name then
+      return fk
+    end
+  end
+end
+
+---@param cls Xodel
+---@param callback fun(tf:TableField, fk:ForeignkeyField)
+function Xodel._walk_cascade_fields(cls, callback)
+  for _, name in ipairs(cls.names) do
+    local field = cls.fields[name]
+    if field.type == 'table' and not field.model.abstract then
+      local fk = cls:_get_cascade_field(field)
+      if not fk then
+        error(string_format("cascade field '%s' not found for model '%s'", field.name, cls.table_name))
+      end
+      callback(field, fk)
+    end
+  end
+end
+
+---@param cls Xodel
+---@param input Record
+---@param names? string[]
+---@return Record
+---@overload fun(cls:Xodel, input:Record, names?:string[]):nil, ValidateError
+function Xodel.validate_cascade_update(cls, input, names)
+  local data, err = cls:validate_update(input, names)
+  if data == nil then
+    ---@diagnostic disable-next-line: return-type-mismatch
+    return nil, err
+  end
+  -- loger(data)
+  cls:_walk_cascade_fields(function(tf, fk)
+    local rows = data[tf.name] ---@cast rows Record[]
+    for _, row in ipairs(rows) do
+      row[fk.name] = input[fk.reference_column]
+    end
+  end)
+  return data
+end
+
+---@param cls Xodel
+---@param input Record
+---@param names? string[]
+---@param key?  string
+---@return XodelInstance
+function Xodel.save_cascade_update(cls, input, names, key)
+  names = Array(names or cls.names)
+  local data = assert(cls:validate_cascade_update(input, names))
+  if not key then
+    key = cls.primary_key
+  else
+    key = cls:check_unique_key(key)
+  end
+  local look_value = input[key]
+  if look_value == nil then
+    error("no primary or unique key value for save_update")
+  end
+  local names_without_tablefield = names:filter(function(name)
+    return cls.fields[name].type ~= 'table'
+  end)
+  local prepared = assert(cls:prepare_for_db(data, names_without_tablefield, true))
+  local updated_sql = cls:create_sql():_base_update(prepared):where { [key] = look_value }
+      :_base_returning(key)
+  cls:_walk_cascade_fields(function(tf, fk)
+    local rows = data[tf.name] ---@cast rows Record[]
+    if #rows > 0 then
+      local align_sql = tf.model:where { [fk.name] = input[fk.reference_column] }:skip_validate():align(rows)
+      updated_sql:prepend(align_sql)
+    else
+      local delete_sql = tf.model:delete():where { [fk.name] = input[fk.reference_column] }
+      updated_sql:prepend(delete_sql)
+    end
+  end)
+  return updated_sql:execr()
 end
 
 ---@param cls Xodel
@@ -4610,11 +4762,11 @@ end
 local update_args = { 'where', 'where_or', 'or_where', 'or_where_or', 'returning', 'raw' }
 local insert_args = { 'returning', 'raw' }
 local select_args = { 'select', 'load_fk', 'load_fk_labels', 'where', 'where_or', 'or_where', 'or_where_or',
-  'order', 'group', 'having', 'limit', 'offset', 'distinct', 'raw', 'compact', 'flat', 'get', 'exists' }
+  'order', 'group', 'having', 'limit', 'offset', 'distinct', 'raw', 'compact', 'flat', 'get', 'try_get', 'exists' }
 
 ---@alias updateArgs {update:table, where?:table, where_or?:table, returning?:table|string[], raw?:boolean}
 ---@alias insertArgs {insert:table, returning?:table|string[], raw?:boolean}
----@alias selectArgs {select?:table|string[], load_fk?:string,load_fk_labels?:string[], where?:table, where_or?:table,or_where?:table, order?:table|string[], group?:table|string[], limit?:integer, offset?:integer, distinct?:boolean, get?:table|string[],flat?:string, raw?:boolean, exists?:boolean}
+---@alias selectArgs {select?:table|string[], load_fk?:string,load_fk_labels?:string[], where?:table, where_or?:table,or_where?:table, order?:table|string[], group?:table|string[], limit?:integer, offset?:integer, distinct?:boolean, get?:table|string[],try_get?:table|string[],flat?:string, raw?:boolean, exists?:boolean}
 
 local function ensure_array(o)
   if type(o) ~= 'table' or o[1] == nil then
@@ -4650,7 +4802,7 @@ function Xodel.meta_query(cls, data)
         sql = sql[arg_name](sql, unpack(ensure_array(data[arg_name])))
       end
     end
-    if data.get or data.flat or data.exists then
+    if data.get or data.try_get or data.flat or data.exists then
       return sql
     else
       return sql:exec()
@@ -4661,7 +4813,7 @@ end
 local whitelist = { DEFAULT = true, as_token = true, as_literal = true, __call = true, new = true, token = true }
 for k, v in pairs(Sql) do
   if type(v) == 'function' and not whitelist[k] then
-    assert(Xodel[k] == nil, "same function name appears:" .. k)
+    assert(Xodel[k] == nil, format("Xodel.%s can't be defined as Sql.%s already exists", k, k))
   end
 end
 return Xodel

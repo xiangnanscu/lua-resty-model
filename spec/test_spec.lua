@@ -267,13 +267,13 @@ mdesc("Xodel:insert(rows:table|table[]|Sql, columns?:string[])", function()
     end, expected)
   end)
 end)
-mdesc("Xodel:create", function()
+mdesc("Xodel:insert", function()
   mit("create", function()
-    local res = eval [[dept:returning('*'):create{name ='d1'}]]
+    local res = eval [[dept:insert{name ='d1'}:returning('*'):execr()]]
     assert.are.same(res, { { id = 1, name = 'd1' } })
   end)
   mit("create multiple rows", function()
-    local res = eval [[dept:returning('name'):create{{name ='d2'}, {name ='d3'}}]]
+    local res = eval [[dept:insert{{name ='d2'}, {name ='d3'}}:returning('name'):execr()]]
     assert.are.same(res, { { name = 'd2' }, { name = 'd3' } })
   end)
 end)
@@ -283,7 +283,7 @@ mdesc("Xodel:count(cond?, op?, dval?)", function()
     assert.are.same(cnt, 2)
   end)
   mit("test with Xodel:all", function()
-    local us = eval [[dept:all()]]
+    local us = eval [[dept:execr()]]
     local cnt = eval [[dept:count()]]
     assert.are.same(#us, cnt)
   end)
@@ -624,7 +624,7 @@ mdesc("Xodel:get_or_create(params:table, defaults?:table, columns?:string[])", f
 end)
 describe("Xodel api:", function()
   mit("test chat model", function()
-    local res1 = models.message:returning('*'):create({
+    local res1 = models.message:insert({
       { id = 1, creator = 1, target = 2, content = 'c121' },
       { id = 2, creator = 1, target = 2, content = 'c122' },
       { id = 3, creator = 2, target = 1, content = 'c123' },
@@ -632,7 +632,7 @@ describe("Xodel api:", function()
       { id = 5, creator = 1, target = 3, content = 'c132' },
       { id = 6, creator = 3, target = 1, content = 'c133' },
       { id = 7, creator = 1, target = 3, content = 'c134' },
-      { id = 8, creator = 2, target = 3, content = 'c231' }, })
+      { id = 8, creator = 2, target = 3, content = 'c231' }, }):returning('*'):execr()
     -- SELECT DISTINCT ON (CASE WHEN creator=1 THEN target ELSE creator END)  creator, target, content
     -- FROM message
     -- WHERE creator=1 OR target=1
@@ -743,14 +743,13 @@ mdesc("Xodel:delete(cond?, op?, dval?)", function()
   end)
   mit("create with foreign model returning all", function()
     local u = models.usr:get { id = 3 }
-    local res = eval([[profile:returning("*"):create{usr_id=u, age=12}]], { u = u })
+    local res = eval([[profile:insert{usr_id=u, age=12}:returning("*"):execr()]], { u = u })
     assert.are.same(res[1].usr_id, 3)
   end)
   mit("insert from delete returning", function()
     local u = models.usr:get { id = 2 }
-    local p = eval [[log:returning("*"):create(
-      profile:delete { id = 2 }:returning('id'):returning_literal("usr", "delete"),
-      { 'delete_id', 'model_name', "action" })]]
+    local p = eval [[log:insert(profile:delete { id = 2 }:returning('id'):returning_literal("usr", "delete"),
+      { 'delete_id', 'model_name', "action" }):returning("*"):execr()]]
     assert.are.same(p[1].delete_id, u.id)
   end)
 end)
