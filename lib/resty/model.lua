@@ -51,12 +51,11 @@ local type = type
 local pairs = pairs
 local assert = assert
 local error = error
-local string_format = string.format
-local table_insert = table.insert
+local insert = table.insert
 local ngx_localtime = ngx.localtime
 local next = next
 local format = string.format
-local table_concat = table.concat
+local concat = table.concat
 
 ---@alias Keys string|string[]
 ---@alias SqlSet "_union"|"_union_all"| "_except"| "_except_all"|"_intersect"|"_intersect_all"
@@ -116,6 +115,9 @@ local function DEFAULT()
   return "DEFAULT"
 end
 
+---@param a table
+---@param b? table
+---@return Array
 local function list(a, b)
   local t = clone(a)
   if b then
@@ -123,9 +125,12 @@ local function list(a, b)
       t[#t + 1] = v
     end
   end
-  return t
+  return Array(t)
 end
 
+---@param t1 table
+---@param t2? table
+---@return table
 local function dict(t1, t2)
   local res = clone(t1)
   if t2 then
@@ -162,7 +167,7 @@ end
 local function get_keys(rows)
   local columns = {}
   for k, _ in pairs(rows[1] or rows) do
-    table_insert(columns, k)
+    insert(columns, k)
   end
   return columns
 end
@@ -206,7 +211,7 @@ local function as_literal(value)
       for i, v in ipairs(value) do
         result[i] = as_literal(v)
       end
-      return "(" .. table_concat(result, ", ") .. ")"
+      return "(" .. concat(result, ", ") .. ")"
     else
       error("empty table is not allowed")
     end
@@ -237,7 +242,7 @@ local function as_token(value)
       for i, v in ipairs(value) do
         result[i] = as_token(v)
       end
-      return table_concat(result, ", ")
+      return concat(result, ", ")
     else
       error("empty table is not allowed")
     end
@@ -269,7 +274,7 @@ local function as_literal_without_brackets(value)
       for i, v in ipairs(value) do
         result[i] = as_literal_without_brackets(v)
       end
-      return table_concat(result, ", ")
+      return concat(result, ", ")
     else
       error("empty table is not allowed")
     end
@@ -293,7 +298,7 @@ local function get_list_tokens(a, b, ...)
     for i, name in ipairs { a, b, ... } do
       res[#res + 1] = as_token(name)
     end
-    return table_concat(res, ", ")
+    return concat(res, ", ")
   end
 end
 
@@ -354,12 +359,12 @@ local function get_join_table_condition(opts, key)
     end
   end
   if #froms > 0 then
-    from = table_concat(froms, " ")
+    from = concat(froms, " ")
   end
   if #wheres == 1 then
     where = wheres[1]
   elseif #wheres > 1 then
-    where = "(" .. table_concat(wheres, ") AND (") .. ")"
+    where = "(" .. concat(wheres, ") AND (") .. ")"
   end
   return from, where
 end
@@ -373,7 +378,7 @@ local function get_join_table_condition_select(opts, init_from)
       froms[#froms + 1] = format('%s JOIN %s ON (%s)', args[1], args[2], args[3])
     end
   end
-  return table_concat(froms, " ")
+  return concat(froms, " ")
 end
 
 ---base util: sql.assemble
@@ -601,7 +606,7 @@ end
 ---@return self
 function Sql:_base_merge(rows, key, columns)
   rows, columns = self:_get_cte_values_literal(rows, columns, false)
-  local cte_name = format("V(%s)", table_concat(columns, ", "))
+  local cte_name = format("V(%s)", concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(rows))
   local join_cond = self:_get_join_condition_from_key(key, "V", "W")
   local vals_columns = map(columns, _prefix_with_V)
@@ -655,7 +660,7 @@ function Sql:_base_updates(rows, key, columns)
   if rows.__SQL_BUILDER__ then
     ---@cast rows Sql
     columns = columns or flat(rows._returning_args)
-    local cte_name = format("V(%s)", table_concat(columns, ", "))
+    local cte_name = format("V(%s)", concat(columns, ", "))
     local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
     self:with(cte_name, rows)
     return Sql._base_update(self, self:_get_update_token_with_prefix(columns, key, "V"))
@@ -665,7 +670,7 @@ function Sql:_base_updates(rows, key, columns)
   else
     ---@cast rows Record[]
     rows, columns = self:_get_cte_values_literal(rows, columns, false)
-    local cte_name = format("V(%s)", table_concat(columns, ", "))
+    local cte_name = format("V(%s)", concat(columns, ", "))
     local cte_values = format("(VALUES %s)", as_token(rows))
     local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
     self:with(cte_name, cte_values)
@@ -869,9 +874,9 @@ function Sql:_base_get_condition_token_from_table(kwargs, logic)
     tokens[#tokens + 1] = format("%s = %s", k, as_literal(value))
   end
   if logic == nil then
-    return table_concat(tokens, " AND ")
+    return concat(tokens, " AND ")
   else
-    return table_concat(tokens, " " .. logic .. " ")
+    return concat(tokens, " " .. logic .. " ")
   end
 end
 
@@ -1096,16 +1101,16 @@ function Sql:_get_insert_values_token(row, columns)
   if not columns then
     columns = {}
     for k, v in pairs(row) do
-      table_insert(columns, k)
-      table_insert(value_list, v)
+      insert(columns, k)
+      insert(value_list, v)
     end
   else
     for _, col in pairs(columns) do
       local v = row[col]
       if v ~= nil then
-        table_insert(value_list, v)
+        insert(value_list, v)
       else
-        table_insert(value_list, DEFAULT)
+        insert(value_list, DEFAULT)
       end
     end
   end
@@ -1134,7 +1139,7 @@ function Sql:_get_update_token_with_prefix(columns, key, prefix)
   if type(key) == "string" then
     for i, col in ipairs(columns) do
       if col ~= key then
-        table_insert(tokens, format("%s = %s.%s", col, prefix, col))
+        insert(tokens, format("%s = %s.%s", col, prefix, col))
       end
     end
   else
@@ -1144,11 +1149,11 @@ function Sql:_get_update_token_with_prefix(columns, key, prefix)
     end
     for i, col in ipairs(columns) do
       if not sets[col] then
-        table_insert(tokens, format("%s = %s.%s", col, prefix, col))
+        insert(tokens, format("%s = %s.%s", col, prefix, col))
       end
     end
   end
-  return table_concat(tokens, ", ")
+  return concat(tokens, ", ")
 end
 
 ---get select token
@@ -1173,7 +1178,7 @@ function Sql:_get_select_token(a, b, ...)
       if type(select_args) == 'string' then
         return select_args
       elseif type(select_args) == 'table' then
-        return table_concat(select_args, ', ')
+        return concat(select_args, ', ')
       else
         error("wrong type:" .. type(select_args))
       end
@@ -1185,7 +1190,7 @@ function Sql:_get_select_token(a, b, ...)
     for i, name in ipairs { a, b, ... } do
       res[#res + 1] = as_token(self:_get_select_column(name))
     end
-    return table_concat(res, ", ")
+    return concat(res, ", ")
   end
 end
 
@@ -1210,7 +1215,7 @@ function Sql:_get_select_literal(a, b, ...)
     for i, name in ipairs { a, b, ... } do
       res[#res + 1] = as_literal(name)
     end
-    return table_concat(res, ", ")
+    return concat(res, ", ")
   end
 end
 
@@ -1223,15 +1228,15 @@ function Sql:_get_update_token(row, columns)
   local kv = {}
   if not columns then
     for k, v in pairs(row) do
-      table_insert(kv, format("%s = %s", k, as_literal(v)))
+      insert(kv, format("%s = %s", k, as_literal(v)))
     end
   else
     for _, k in ipairs(columns) do
       local v = row[k]
-      table_insert(kv, format("%s = %s", k, v ~= nil and as_literal(v) or 'DEFAULT'))
+      insert(kv, format("%s = %s", k, v ~= nil and as_literal(v) or 'DEFAULT'))
     end
   end
-  return table_concat(kv, ", ")
+  return concat(kv, ", ")
 end
 
 ---@private
@@ -1441,7 +1446,7 @@ function Sql:_get_join_condition_from_key(key, left_table, right_table)
   for _, k in ipairs(key) do
     res[#res + 1] = format("%s.%s = %s.%s", left_table, k, right_table, k)
   end
-  return table_concat(res, " AND ")
+  return concat(res, " AND ")
 end
 
 ---@private
@@ -1496,9 +1501,9 @@ function Sql:_get_condition_token_from_table(kwargs, logic)
     tokens[#tokens + 1] = self:_get_expr_token(value, self:_parse_column(k))
   end
   if logic == nil then
-    return table_concat(tokens, " AND ")
+    return concat(tokens, " AND ")
   else
-    return table_concat(tokens, " " .. logic .. " ")
+    return concat(tokens, " " .. logic .. " ")
   end
 end
 
@@ -1599,7 +1604,7 @@ function Sql:prepend(...)
   local n = select("#", ...)
   for i = n, 1, -1 do
     local e = select(i, ...)
-    table_insert(self._prepend, 1, e)
+    insert(self._prepend, 1, e)
   end
   return self
 end
@@ -1649,7 +1654,7 @@ function Sql:statement()
         res[#res + 1] = sql:statement()
       end
     end
-    statement = table_concat(res, ';') .. ';' .. statement
+    statement = concat(res, ';') .. ';' .. statement
   end
   if self._append then
     local res = {}
@@ -1660,7 +1665,7 @@ function Sql:statement()
         res[#res + 1] = sql:statement()
       end
     end
-    statement = statement .. ';' .. table_concat(res, ';')
+    statement = statement .. ';' .. concat(res, ';')
   end
   return statement
 end
@@ -1740,7 +1745,7 @@ end
 function Sql:with_values(name, rows)
   local columns = get_keys(rows)
   rows, columns = self:_get_cte_values_literal(rows, columns, true)
-  local cte_name = format("%s(%s)", name, table_concat(columns, ", "))
+  local cte_name = format("%s(%s)", name, concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(rows))
   return self:with(cte_name, cte_values)
 end
@@ -1752,7 +1757,7 @@ function Sql:get_merge(rows, key)
   local columns = get_keys(rows)
   rows, columns = self:_get_cte_values_literal(rows, columns, true)
   local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
-  local cte_name = format("V(%s)", table_concat(columns, ", "))
+  local cte_name = format("V(%s)", concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(rows))
   self:_base_select("V.*"):with(cte_name, cte_values):_base_join("RIGHT", "V", join_cond)
   return self
@@ -1893,21 +1898,6 @@ function Sql:returning_literal(a, b, ...)
   return self
 end
 
----@param a (fun(ctx:table):string|table)|DBValue
----@param ... DBValue
-function Sql:group(a, ...)
-  local s = self:_get_select_token(a, ...)
-  if s == "" then
-  elseif not self._group then
-    self._group = s
-  else
-    self._group = self._group .. ", " .. s
-  end
-  return self
-end
-
-function Sql:group_by(...) return self:group(...) end
-
 ---@param key DBValue
 ---@return DBValue
 function Sql:_get_order_column(key)
@@ -1944,7 +1934,7 @@ function Sql:_get_order_token(a, b, ...)
       if type(order_args) == 'string' then
         return order_args
       elseif type(order_args) == 'table' then
-        return table_concat(order_args, ', ')
+        return concat(order_args, ', ')
       else
         error("wrong type:" .. type(order_args))
       end
@@ -1956,7 +1946,7 @@ function Sql:_get_order_token(a, b, ...)
     for i, name in ipairs { a, b, ... } do
       res[#res + 1] = as_token(self:_get_order_column(name))
     end
-    return table_concat(res, ", ")
+    return concat(res, ", ")
   end
 end
 
@@ -2101,9 +2091,9 @@ function Sql:_parse_where_exp(cond, father_op)
   end
   local where_token
   if logic_op == 'not' or logic_op == 'NOT' then
-    where_token = 'NOT ' .. table_concat(tokens, " AND NOT ")
+    where_token = 'NOT ' .. concat(tokens, " AND NOT ")
   else
-    where_token = table_concat(tokens, format(" %s ", logic_op))
+    where_token = concat(tokens, format(" %s ", logic_op))
   end
 
   if logic_priority[logic_op] < logic_priority[father_op] then
@@ -2327,246 +2317,6 @@ function Sql:or_where_not_exists(builder)
   return self
 end
 
----@param cond table|string|fun(ctx:table):string
----@param op? DBValue
----@param dval? DBValue
-function Sql:having(cond, op, dval)
-  if self._having then
-    self._having = format("(%s) AND (%s)", self._having, self:_get_condition_token(cond, op, dval))
-  else
-    self._having = self:_get_condition_token(cond, op, dval)
-  end
-  return self
-end
-
----@param cond table|string|fun(ctx:table):string
----@param op? DBValue
----@param dval? DBValue
-function Sql:having_not(cond, op, dval)
-  if self._having then
-    self._having = format("(%s) AND (%s)", self._having, self:_get_condition_token_not(cond, op, dval))
-  else
-    self._having = self:_get_condition_token_not(cond, op, dval)
-  end
-  return self
-end
-
----@param builder Sql
----@return self
-function Sql:having_exists(builder)
-  if self._having then
-    self._having = format("(%s) AND EXISTS (%s)", self._having, builder)
-  else
-    self._having = format("EXISTS (%s)", builder)
-  end
-  return self
-end
-
----@param builder Sql
----@return self
-function Sql:having_not_exists(builder)
-  if self._having then
-    self._having = format("(%s) AND NOT EXISTS (%s)", self._having, builder)
-  else
-    self._having = format("NOT EXISTS (%s)", builder)
-  end
-  return self
-end
-
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:having_in(cols, range)
-  local in_token = self:_get_in_token(cols, range)
-  if self._having then
-    self._having = format("(%s) AND %s", self._having, in_token)
-  else
-    self._having = in_token
-  end
-  return self
-end
-
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:having_not_in(cols, range)
-  local not_in_token = self:_get_in_token(cols, range, "NOT IN")
-  if self._having then
-    self._having = format("(%s) AND %s", self._having, not_in_token)
-  else
-    self._having = not_in_token
-  end
-  return self
-end
-
----@param col string
----@return self
-function Sql:having_null(col)
-  if self._having then
-    self._having = format("(%s) AND %s IS NULL", self._having, col)
-  else
-    self._having = col .. " IS NULL"
-  end
-  return self
-end
-
----@param col string
----@return self
-function Sql:having_not_null(col)
-  if self._having then
-    self._having = format("(%s) AND %s IS NOT NULL", self._having, col)
-  else
-    self._having = col .. " IS NOT NULL"
-  end
-  return self
-end
-
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:having_between(col, low, high)
-  if self._having then
-    self._having = format("(%s) AND (%s BETWEEN %s AND %s)", self._having, col, low, high)
-  else
-    self._having = format("%s BETWEEN %s AND %s", col, low, high)
-  end
-  return self
-end
-
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:having_not_between(col, low, high)
-  if self._having then
-    self._having = format("(%s) AND (%s NOT BETWEEN %s AND %s)", self._having, col, low, high)
-  else
-    self._having = format("%s NOT BETWEEN %s AND %s", col, low, high)
-  end
-  return self
-end
-
----@param cond table|string|fun(ctx:table):string
----@param op? DBValue
----@param dval? DBValue
-function Sql:or_having(cond, op, dval)
-  if self._having then
-    self._having = format("%s OR %s", self._having, self:_get_condition_token(cond, op, dval))
-  else
-    self._having = self:_get_condition_token(cond, op, dval)
-  end
-  return self
-end
-
----@param cond table|string|fun(ctx:table):string
----@param op? DBValue
----@param dval? DBValue
-function Sql:or_having_not(cond, op, dval)
-  if self._having then
-    self._having = format("%s OR %s", self._having, self:_get_condition_token_not(cond, op, dval))
-  else
-    self._having = self:_get_condition_token_not(cond, op, dval)
-  end
-  return self
-end
-
----@param builder Sql
----@return self
-function Sql:or_having_exists(builder)
-  if self._having then
-    self._having = format("%s OR EXISTS (%s)", self._having, builder)
-  else
-    self._having = format("EXISTS (%s)", builder)
-  end
-  return self
-end
-
----@param builder Sql
----@return self
-function Sql:or_having_not_exists(builder)
-  if self._having then
-    self._having = format("%s OR NOT EXISTS (%s)", self._having, builder)
-  else
-    self._having = format("NOT EXISTS (%s)", builder)
-  end
-  return self
-end
-
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:or_having_in(cols, range)
-  local in_token = self:_get_in_token(cols, range)
-  if self._having then
-    self._having = format("%s OR %s", self._having, in_token)
-  else
-    self._having = in_token
-  end
-  return self
-end
-
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:or_having_not_in(cols, range)
-  local not_in_token = self:_get_in_token(cols, range, "NOT IN")
-  if self._having then
-    self._having = format("%s OR %s", self._having, not_in_token)
-  else
-    self._having = not_in_token
-  end
-  return self
-end
-
----@param col string
----@return self
-function Sql:or_having_null(col)
-  if self._having then
-    self._having = format("%s OR %s IS NULL", self._having, col)
-  else
-    self._having = col .. " IS NULL"
-  end
-  return self
-end
-
----@param col string
----@return self
-function Sql:or_having_not_null(col)
-  if self._having then
-    self._having = format("%s OR %s IS NOT NULL", self._having, col)
-  else
-    self._having = col .. " IS NOT NULL"
-  end
-  return self
-end
-
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:or_having_between(col, low, high)
-  if self._having then
-    self._having = format("%s OR (%s BETWEEN %s AND %s)", self._having, col, low, high)
-  else
-    self._having = format("%s BETWEEN %s AND %s", col, low, high)
-  end
-  return self
-end
-
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:or_having_not_between(col, low, high)
-  if self._having then
-    self._having = format("%s OR (%s NOT BETWEEN %s AND %s)", self._having, col, low, high)
-  else
-    self._having = format("%s NOT BETWEEN %s AND %s", col, low, high)
-  end
-  return self
-end
-
 ---@param a (fun(ctx:table):string)|DBValue
 ---@param b? DBValue
 ---@param ...? DBValue
@@ -2605,7 +2355,7 @@ function Sql:_base_get_multiple(keys, columns)
   columns = columns or get_keys(keys[1])
   keys, columns = self:_get_cte_values_literal(keys, columns, false)
   local join_cond = self:_get_join_condition_from_key(columns, "V", self._as or self.table_name)
-  local cte_name = format("V(%s)", table_concat(columns, ", "))
+  local cte_name = format("V(%s)", concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(keys))
   return self:with(cte_name, cte_values):right_join("V", join_cond)
 end
@@ -3036,7 +2786,7 @@ function Sql:exec_statement(statement)
     all_results = records
     records = records[1]
   end
-  if (self._raw or self._raw == nil) or self._compact or self._update or self._insert or self._delete then
+  if (self._raw == nil or self._raw) or self._compact or self._update or self._insert or self._delete then
     if (self._update or self._insert or self._delete) and self._returning then
       records.affected_rows = nil
     end
@@ -3121,44 +2871,6 @@ function Sql:exists()
   else
     return res[1][1]
   end
-end
-
----@param params table
----@param defaults? table
----@param columns? string[]
----@return XodelInstance, boolean
-function Sql:get_or_create(params, defaults, columns)
-  local values_list, insert_columns = Sql:_get_insert_values_token(dict(params, defaults))
-  local insert_columns_token = as_token(insert_columns)
-  local all_columns_token = as_token(Array.unique(list(columns or { self.model.primary_key }, insert_columns)))
-  local insert_sql = format('(INSERT INTO "%s"(%s) SELECT %s WHERE NOT EXISTS (%s) RETURNING %s)',
-    self.table_name,
-    insert_columns_token,
-    as_literal_without_brackets(values_list),
-    self.model:create_sql():select(1):where(params),
-    all_columns_token
-  )
-  local inserted_set = Sql:new { model = self.model, table_name = 'new_records' }:as("new_records")
-      :with(format("new_records(%s)", all_columns_token), insert_sql)
-      :_base_select(all_columns_token):_base_select("TRUE AS __is_inserted__")
-  -- main sql
-  local selected_set = self:where(params):_base_select(all_columns_token):_base_select(
-    "FALSE AS __is_inserted__")
-  local records = inserted_set:union_all(selected_set):exec()
-  if #records > 1 then
-    error("multiple records returned")
-  end
-  local ins = records[1]
-  ---@diagnostic disable-next-line: undefined-field
-  local created = ins.__is_inserted__
-  ins.__is_inserted__ = nil
-  return ins, created
-end
-
----@return self
-function Sql:compact()
-  self._compact = true
-  return self
 end
 
 ---@return self
@@ -3279,18 +2991,6 @@ end
 ---@return table|Array<Record>
 function Sql:execr()
   return self:raw():exec()
-end
-
----@param names? string[] select names for load_fk_labels
----@return self
-function Sql:load_fk_labels(names)
-  for i, name in ipairs(names or self.model.names) do
-    local field = self.model.fields[name]
-    if field and field.type == 'foreignkey' and field.reference_label_column ~= field.reference_column then
-      self:load_fk(field.name, field.reference_label_column)
-    end
-  end
-  return self
 end
 
 ---@param fk_name string
@@ -3537,10 +3237,10 @@ local API_TABLE_NAMES = {
   V = true,
 }
 local function check_reserved(name)
-  assert(type(name) == "string", string_format("name must be string, not %s (%s)", type(name), name))
+  assert(type(name) == "string", format("name must be string, not %s (%s)", type(name), name))
   assert(not name:find("__", 1, true), "don't use __ in a table or column name")
   assert(not IS_PG_KEYWORDS[name:upper()],
-    string_format("%s is a postgresql reserved word, can't be used as a table or column name", name))
+    format("%s is a postgresql reserved word, can't be used as a table or column name", name))
   assert(not API_TABLE_NAMES[name], "don't use " .. name .. " as a table or column name")
 end
 
@@ -3564,7 +3264,7 @@ end
 local function normalize_field_names(field_names)
   assert(type(field_names) == "table", "you must provide field_names for a model")
   for _, name in ipairs(field_names) do
-    assert(type(name) == 'string', string_format("field_names must be string, not %s", type(name)))
+    assert(type(name) == 'string', format("field_names must be string, not %s", type(name)))
   end
   return Array(field_names)
 end
@@ -3644,7 +3344,7 @@ local function create_model_proxy(ModelClass)
           -- ModelClass.query(statement, compact?), cls is statement in this case
           return model_k(cls, ...)
         else
-          error(string_format("calling model proxy method `%s` with first argument not being itself is not allowed", k))
+          error(format("calling model proxy method `%s` with first argument not being itself is not allowed", k))
         end
       end
     else
@@ -3801,7 +3501,7 @@ end
 function Xodel.check_field_name(cls, name)
   check_reserved(name);
   if (cls[name] ~= nil) then
-    error(string_format("field name '%s' conflicts with model class attributes", name))
+    error(format("field name '%s' conflicts with model class attributes", name))
   end
 end
 
@@ -3850,7 +3550,7 @@ function Xodel._make_model_class(cls, opts)
     local field = ModelClass.fields[name]
     if field.primary_key then
       local pk_name = field.name
-      assert(not pk_defined, string_format('duplicated primary key: "%s" and "%s"', pk_name, pk_defined))
+      assert(not pk_defined, format('duplicated primary key: "%s" and "%s"', pk_name, pk_defined))
       pk_defined = pk_name
       ModelClass.primary_key = pk_name
       if not field.serial then
@@ -3875,7 +3575,7 @@ function Xodel._make_model_class(cls, opts)
   for _, unique_group in ipairs(ModelClass.unique_together or {}) do
     for i, name in ipairs(unique_group) do
       if not ModelClass.fields[name] then
-        error(string_format("invalid unique_together name %s for model %s", name, ModelClass.table_name))
+        error(format("invalid unique_together name %s for model %s", name, ModelClass.table_name))
       end
     end
     uniques:push(Array(clone(unique_group)))
@@ -3957,12 +3657,12 @@ function Xodel.normalize(cls, options)
       if extends then
         field = extends.fields[name]
         if not field then
-          error(string_format("'%s' field name '%s' is not in fields and parent fields", tname, name))
+          error(format("'%s' field name '%s' is not in fields and parent fields", tname, name))
         else
           field = ensure_field_as_options(field, name)
         end
       else
-        error(string_format("Model class '%s's field name '%s' is not in fields", tname, name))
+        error(format("Model class '%s's field name '%s' is not in fields", tname, name))
       end
     elseif extends and extends.fields[name] then
       local pfield = extends.fields[name]
@@ -4078,7 +3778,7 @@ function Xodel.materialize_with_table_name(cls, opts)
   local label = opts.label
   if not table_name then
     local names_hint = cls.field_names and cls.field_names:join(",") or "no field_names"
-    error(string_format("you must define table_name for a non-abstract model (%s)", names_hint))
+    error(format("you must define table_name for a non-abstract model (%s)", names_hint))
   end
   check_reserved(table_name)
   cls.table_name = table_name
@@ -4088,7 +3788,7 @@ function Xodel.materialize_with_table_name(cls, opts)
     local pk_name = DEFAULT_PRIMARY_KEY
     cls.primary_key = pk_name
     cls.fields[pk_name] = Fields.integer:create_field { name = pk_name, primary_key = true, serial = true }
-    table_insert(cls.field_names, 1, pk_name)
+    insert(cls.field_names, 1, pk_name)
   end
   cls.column_cache = {}
   for name, field in pairs(cls.fields) do
@@ -4153,7 +3853,7 @@ function Xodel.merge_model(cls, a, b)
       fields[name] = bf
     else
       error(
-        string_format("can't find field %s for model %s and %s", name, A.table_name, B.table_name))
+        format("can't find field %s for model %s and %s", name, A.table_name, B.table_name))
     end
   end
   -- merge的时候abstract应该当做可合并的属性
@@ -4255,7 +3955,7 @@ function Xodel.check_unique_key(cls, key)
     error("invalid field name: " .. key)
   end
   if not (pkf.primary_key or pkf.unique) then
-    error(string_format("field '%s' is not primary_key or not unique", key))
+    error(format("field '%s' is not primary_key or not unique", key))
   end
   return key
 end
@@ -4299,10 +3999,10 @@ function Xodel.save_update(cls, input, names, key)
     data[key] = updated[1][key]
     return cls:create_record(data)
   elseif #updated == 0 then
-    error(string_format("update failed, record does not exist(model:%s, key:%s, value:%s)", cls.table_name,
+    error(format("update failed, record does not exist(model:%s, key:%s, value:%s)", cls.table_name,
       key, look_value))
   else
-    error(string_format("expect 1 but %s records are updated(model:%s, key:%s, value:%s)",
+    error(format("expect 1 but %s records are updated(model:%s, key:%s, value:%s)",
       #updated,
       cls.table_name,
       key,
@@ -4321,7 +4021,7 @@ function Xodel.prepare_for_db(cls, data, columns, is_update)
   for _, name in ipairs(columns or cls.names) do
     local field = cls.fields[name]
     if not field then
-      error(string_format("invalid field name '%s' for model '%s'", name, cls.table_name))
+      error(format("invalid field name '%s' for model '%s'", name, cls.table_name))
     end
     local value = data[name]
     if field.prepare_for_db and value ~= nil then
@@ -4363,7 +4063,7 @@ function Xodel.validate_create(cls, input, names)
   for _, name in ipairs(names or cls.names) do
     local field = cls.fields[name]
     if not field then
-      error(string_format("invalid field name '%s' for model '%s'", name, cls.table_name))
+      error(format("invalid field name '%s' for model '%s'", name, cls.table_name))
     end
     local value, err, index = field:validate(rawget(input, name))
     if err ~= nil then
@@ -4402,7 +4102,7 @@ function Xodel.validate_update(cls, input, names)
   for _, name in ipairs(names or cls.names) do
     local field = cls.fields[name]
     if not field then
-      error(string_format("invalid field name '%s' for model '%s'", name, cls.table_name))
+      error(format("invalid field name '%s' for model '%s'", name, cls.table_name))
     end
     local err, index
     local value = rawget(input, name)
@@ -4443,7 +4143,7 @@ function Xodel._get_cascade_field(cls, tf)
   for i, column in ipairs(table_validate_columns) do
     local fk = tf.model.fields[column]
     if fk == nil then
-      error(string_format("cascade field '%s' not found for model '%s'", column, cls.table_name))
+      error(format("cascade field '%s' not found for model '%s'", column, cls.table_name))
     end
     if fk.type == 'foreignkey' and fk.reference.table_name == cls.table_name then
       return fk
@@ -4459,7 +4159,7 @@ function Xodel._walk_cascade_fields(cls, callback)
     if field.type == 'table' and not field.model.abstract then
       local fk = cls:_get_cascade_field(field)
       if not fk then
-        error(string_format("cascade field '%s' not found for model '%s'", field.name, cls.table_name))
+        error(format("cascade field '%s' not found for model '%s'", field.name, cls.table_name))
       end
       callback(field, fk)
     end
@@ -4745,18 +4445,63 @@ function Xodel.filter(cls, kwargs)
 end
 
 ---@param cls Xodel
----@param kwargs table
----@return Array<XodelInstance>
-function Xodel.filter_with_fk_labels(cls, kwargs)
-  local records = cls:create_sql():load_fk_labels():where(kwargs)
-  return records:exec()
-end
-
----@param cls Xodel
 ---@param data table
 ---@return XodelInstance
 function Xodel.create_record(cls, data)
   return setmetatable(data, cls.RecordClass)
+end
+
+---@param cls Xodel
+---@param names? string[] select names for load_fk_labels
+---@return self
+function Xodel.load_fk_labels(cls, names)
+  local sql = cls:create_sql()
+  for i, name in ipairs(names or cls.names) do
+    local field = cls.fields[name]
+    if field and field.type == 'foreignkey' and field.reference_label_column ~= field.reference_column then
+      sql:load_fk(field.name, field.reference_label_column)
+    end
+  end
+  return sql
+end
+
+---@param cls Xodel
+---@param params table
+---@param defaults? table
+---@param columns? string[]
+---@return XodelInstance, boolean
+function Xodel.get_or_create(cls, params, defaults, columns)
+  local values_list, insert_columns = Sql:_get_insert_values_token(dict(params, defaults))
+  local insert_columns_token = as_token(insert_columns)
+  local all_columns_token = as_token(list(columns or { cls.primary_key }, insert_columns):unique())
+  local insert_sql = format('(INSERT INTO "%s"(%s) SELECT %s WHERE NOT EXISTS (%s) RETURNING %s)',
+    cls.table_name,
+    insert_columns_token,
+    as_literal_without_brackets(values_list),
+    cls:create_sql():select(1):where(params),
+    all_columns_token
+  )
+  local inserted_set = Sql:new { model = cls, table_name = 'new_records' }:as("new_records")
+      :with(format("new_records(%s)", all_columns_token), insert_sql)
+      :_base_select(all_columns_token):_base_select("TRUE AS __is_inserted__")
+  -- main sql
+  local selected_set = cls:create_sql():where(params):_base_select(all_columns_token):_base_select(
+    "FALSE AS __is_inserted__")
+  local records = inserted_set:union_all(selected_set):exec()
+  if #records > 1 then
+    error("multiple records returned")
+  end
+  local ins = records[1]
+  ---@diagnostic disable-next-line: undefined-field
+  local created = ins.__is_inserted__
+  ins.__is_inserted__ = nil
+  return ins, created
+end
+
+---@return self
+function Sql:compact()
+  self._compact = true
+  return self
 end
 
 local update_args = { 'where', 'where_or', 'or_where', 'or_where_or', 'returning', 'raw' }
