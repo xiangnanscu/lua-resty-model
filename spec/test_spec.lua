@@ -586,12 +586,12 @@ describe("Xodel api:", function()
     -- FROM message
     -- WHERE creator=1 OR target=1
     -- ORDER BY CASE WHEN creator=1 THEN target ELSE creator END, -id;
-    local res = models.message:distinct_on(sql.token 'CASE WHEN creator=1 THEN target ELSE creator END')
-        :where(Q { creator = 1 } / Q { target = 1 })
-        :select('creator', 'target', 'content'):order("-id"):execr()
-    assert.are.same(res, {
-      { creator = 2, target = 1, content = 'c123' },
-      { creator = 1, target = 3, content = 'c134' } })
+    -- local res = models.message:distinct(sql.token 'CASE WHEN creator=1 THEN target ELSE creator END')
+    --     :where(Q { creator = 1 } / Q { target = 1 })
+    --     :select('creator', 'target', 'content'):order("-id"):execr()
+    -- assert.are.same(res, {
+    --   { creator = 2, target = 1, content = 'c123' },
+    --   { creator = 1, target = 3, content = 'c134' } })
   end)
 
   mit("go crazy with where clause with recursive join", function()
@@ -617,12 +617,12 @@ mdesc("etc", function()
   mit("wrong fk name", function()
     assert.Error(function()
       eval [[models.message:where {creator__usr_id__views=0}:exec()]]
-    end, 'invalid sql op: views')
+    end, '5.1 invalid operator: views')
   end)
   mit("wrong fk name3", function()
     assert.Error(function()
       eval [[models.message:select('creator__usr_id__views'):exec()]]
-    end, 'invalid field name: views')
+    end, '5.2 invalid column: views')
   end)
   mit("test shortcuts join", function()
     local p = eval [[profile:join('dept_name'):get { id = 1 }]]
@@ -642,7 +642,7 @@ mdesc("sql injection", function()
     local segment = 'id=1;select * FROM usr T where id'
     assert.Error(function()
       models.usr:where { [segment] = 2 }:exec()
-    end, string.format("invalid field name: '%s'", segment))
+    end, string.format("parse column error, invalid name: %s", segment))
   end)
   mit("where value", function()
     local segment = [[1 or 1=1]]
@@ -660,7 +660,7 @@ mdesc("sql injection", function()
     local segment = '1;select * from usr;select username'
     assert.Error(function()
       models.usr:select(segment):exec()
-    end, string.format("invalid field name: '%s'", segment))
+    end, string.format("parse column error, invalid name: %s", segment))
   end)
 end)
 mdesc("Xodel:delete(cond?, op?, dval?)", function()

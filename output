@@ -67,10 +67,10 @@ ok 18 - test insert update user skip validate
 ok 19 - test insert insert one user with invalid columns
 INSERT INTO profile AS T (usr, parent, child, age) VALUES (2, NULL, NULL, 82), (3, NULL, NULL, 62), (4, NULL, NULL, 42), (5, NULL, NULL, 52), (6, NULL, NULL, 32), (7, NULL, NULL, 12)
 UPDATE profile T SET child = 2 WHERE T.usr = 2
-UPDATE profile T SET parent = 1, child = 3 WHERE T.usr = 3
+UPDATE profile T SET child = 3, parent = 1 WHERE T.usr = 3
 UPDATE profile T SET parent = 2 WHERE T.usr = 4
 UPDATE profile T SET child = 5 WHERE T.usr = 5
-UPDATE profile T SET parent = 4, child = 6 WHERE T.usr = 6
+UPDATE profile T SET child = 6, parent = 4 WHERE T.usr = 6
 UPDATE profile T SET parent = 5 WHERE T.usr = 7
 INSERT INTO org AS T (name) VALUES ('o1'), ('o2'), ('o3')
 INSERT INTO org_admin AS T (usr, org) VALUES (2, 1), (3, 2), (4, 3)
@@ -592,7 +592,7 @@ profile{usr_id=1, dept_name='d1', age=20}:save()
 ```
 
 ```sql
-INSERT INTO profile AS T (dept_name, age, salary, usr_id, sex) VALUES ('d1', 20, 1000, 1, 'f') RETURNING *
+INSERT INTO profile AS T (age, usr_id, dept_name, sex, salary) VALUES (20, 1, 'd1', 'f', 1000) RETURNING *
 ```
 
 ```js
@@ -613,7 +613,7 @@ profile{usr_id=2, dept_name='d2', salary=500, sex='m', age=50}:save{'usr_id','de
 ```
 
 ```sql
-INSERT INTO profile AS T (usr_id, dept_name) VALUES (2, 'd2') RETURNING *
+INSERT INTO profile AS T (dept_name, usr_id) VALUES ('d2', 2) RETURNING *
 ```
 
 ```js
@@ -651,7 +651,7 @@ profile{id=5, age=55, usr_id=3, dept_name='d3',}:save_create()
 ```
 
 ```sql
-INSERT INTO profile AS T (dept_name, age, salary, usr_id, sex) VALUES ('d3', 55, 1000, 3, 'f') RETURNING *
+INSERT INTO profile AS T (age, usr_id, dept_name, sex, salary) VALUES (55, 3, 'd3', 'f', 1000) RETURNING *
 ```
 
 ```js
@@ -737,7 +737,7 @@ evaluate:merge({{usr_id=1, year=2021, rank='A'},{usr_id=1, year=2022, rank='B'}}
 ```
 
 ```sql
-WITH V(year, usr_id, rank) AS (VALUES (2021::integer, 1::integer, 'A'::varchar), (2022, 1, 'B')), U AS (UPDATE evaluate W SET rank = V.rank FROM V WHERE V.usr_id = W.usr_id AND V.year = W.year RETURNING V.year, V.usr_id, V.rank) INSERT INTO evaluate AS T (year, usr_id, rank) SELECT V.year, V.usr_id, V.rank FROM V LEFT JOIN U AS W ON (V.usr_id = W.usr_id AND V.year = W.year) WHERE W.usr_id IS NULL RETURNING T.rank
+WITH V(rank, year, usr_id) AS (VALUES ('A'::varchar, 2021::integer, 1::integer), ('B', 2022, 1)), U AS (UPDATE evaluate W SET rank = V.rank FROM V WHERE V.usr_id = W.usr_id AND V.year = W.year RETURNING V.rank, V.year, V.usr_id) INSERT INTO evaluate AS T (rank, year, usr_id) SELECT V.rank, V.year, V.usr_id FROM V LEFT JOIN U AS W ON (V.usr_id = W.usr_id AND V.year = W.year) WHERE W.usr_id IS NULL RETURNING T.rank
 ```
 
 ```js
@@ -814,7 +814,7 @@ evaluate:upsert({{usr_id=1, year=2021, rank='A'},{usr_id=1, year=2022, rank='B'}
 ```
 
 ```sql
-INSERT INTO evaluate AS T (year, usr_id, rank) VALUES (2021, 1, 'A'), (2022, 1, 'B') ON CONFLICT (usr_id, year) DO UPDATE SET rank = EXCLUDED.rank RETURNING T.rank
+INSERT INTO evaluate AS T (rank, year, usr_id) VALUES ('A', 2021, 1), ('B', 2022, 1) ON CONFLICT (usr_id, year) DO UPDATE SET rank = EXCLUDED.rank RETURNING T.rank
 ```
 
 ```js
@@ -1466,7 +1466,7 @@ usr:get_or_create({username='goc2'}, {permission = 5})
 ```
 
 ```sql
-WITH new_records(id, permission, username) AS (INSERT INTO "usr"(permission, username) SELECT 5, 'goc2' WHERE NOT EXISTS (SELECT 1 FROM usr T WHERE T.username = 'goc2') RETURNING id, permission, username) SELECT id, permission, username, TRUE AS __is_inserted__ FROM new_records new_records UNION ALL (SELECT id, permission, username, FALSE AS __is_inserted__ FROM usr T WHERE T.username = 'goc2')
+WITH new_records(id, username, permission) AS (INSERT INTO "usr"(username, permission) SELECT 'goc2', 5 WHERE NOT EXISTS (SELECT 1 FROM usr T WHERE T.username = 'goc2') RETURNING id, username, permission) SELECT id, username, permission, TRUE AS __is_inserted__ FROM new_records new_records UNION ALL (SELECT id, username, permission, FALSE AS __is_inserted__ FROM usr T WHERE T.username = 'goc2')
 ```
 
 ```js
@@ -1481,10 +1481,6 @@ ok 112 - Xodel:get_or_create(params:table, defaults?:table, columns?:string[]) m
 ## test chat model
 ```sql
 INSERT INTO message AS T (creator, target, content) VALUES (1, 2, 'c121'), (1, 2, 'c122'), (2, 1, 'c123'), (1, 3, 'c131'), (1, 3, 'c132'), (3, 1, 'c133'), (1, 3, 'c134'), (2, 3, 'c231') RETURNING *
-```
-
-```sql
-SELECT DISTINCT ON(CASE WHEN creator=1 THEN target ELSE creator END) T.creator, T.target, T.content FROM message T WHERE (T.creator = 1) OR (T.target = 1) ORDER BY CASE WHEN creator=1 THEN target ELSE creator END, T.id DESC
 ```
 
 ok 113 - Xodel api: test chat model
@@ -1522,49 +1518,7 @@ ok 115 - etc wrong fk name
 models.message:select('creator__usr_id__views'):exec()
 ```
 
-```sql
-SELECT T1.usr_id AS creator__usr_id__views FROM message T INNER JOIN profile T1 ON (T.creator = T1.id)
-```
-
-```js
-[
-  {
-    creator__usr_id__views: 1,
-  },
-  {
-    creator__usr_id__views: 1,
-  },
-  {
-    creator__usr_id__views: 2,
-  },
-  {
-    creator__usr_id__views: 1,
-  },
-  {
-    creator__usr_id__views: 1,
-  },
-  {
-    creator__usr_id__views: 3,
-  },
-  {
-    creator__usr_id__views: 1,
-  },
-  {
-    creator__usr_id__views: 2,
-  },
-  {
-    creator__usr_id__views: 1,
-  },
-]
-```
-
-not ok 116 - etc wrong fk name3
-# spec/test_spec.lua @ 151
-# Failure message: spec/test_spec.lua:623: Expected a different error.
-# Caught:
-# (no error)
-# Expected:
-# (string) 'invalid field name: views'
+ok 116 - etc wrong fk name3
 ## test shortcuts join
 ```lua
 profile:join('dept_name'):get { id = 1 }
@@ -1630,13 +1584,7 @@ SELECT T1.permission AS uperm FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1
 ok 119 - etc sql select_as foreignkey
 # sql injection
 ## where key
-not ok 120 - sql injection where key
-# spec/test_spec.lua @ 151
-# Failure message: spec/test_spec.lua:643: Expected a different error.
-# Caught:
-# (string) 'parse column error, invalid name: id=1;select * FROM usr T where id'
-# Expected:
-# (string) 'invalid field name: 'id=1;select * FROM usr T where id''
+ok 120 - sql injection where key
 ## where value
 ```sql
 SELECT * FROM usr T WHERE T.id = '1 or 1=1'
@@ -1646,13 +1594,7 @@ ok 121 - sql injection where value
 ## order
 ok 122 - sql injection order
 ## select
-not ok 123 - sql injection select
-# spec/test_spec.lua @ 151
-# Failure message: spec/test_spec.lua:661: Expected a different error.
-# Caught:
-# (string) 'parse column error, invalid name: 1;select * from usr;select username'
-# Expected:
-# (string) 'invalid field name: '1;select * from usr;select username''
+ok 123 - sql injection select
 # Xodel:delete(cond?, op?, dval?)
 ## model class delete all
 ```lua
@@ -1782,5 +1724,4 @@ ok 130 - field stuff array field validate
 ## alioss_list
 ok 131 - field stuff alioss_list
 1..131
-info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.
-info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.
+Done in 0.35s.

@@ -57,6 +57,7 @@ local next = next
 local format = string.format
 local concat = table.concat
 
+---@alias ColumnContext "select"|"returning"|"aggregate"|"group_by"|"order_by"|"distinct"|"where"|"having"|"F"|"Q"
 ---@alias Keys string|string[]
 ---@alias SqlSet "_union"|"_union_all"| "_except"| "_except_all"|"_intersect"|"_intersect_all"
 ---@alias Token fun(): string
@@ -99,7 +100,6 @@ local PG_SET_MAP = {
   _intersect = 'INTERSECT',
   _intersect_all = 'INTERSECT ALL'
 }
-local COMPARE_OPERATORS = { lt = "<", lte = "<=", gt = ">", gte = ">=", ne = "<>", eq = "=" }
 
 ---@param s string
 ---@return fun():string
@@ -1253,21 +1253,21 @@ end
 
 ---get select token
 ---@private
----@param suffix_as boolean whether to add AS suffix to the result
+---@param context ColumnContext
 ---@param a (fun(ctx:table):string|table)|DBValue
 ---@param b? DBValue
 ---@param ... DBValue
 ---@return string
-function Sql:_get_column_tokens(suffix_as, a, b, ...)
+function Sql:_get_column_tokens(context, a, b, ...)
   if b == nil then
     if type(a) == "table" then
       local tokens = {}
       for i = 1, #a do
-        tokens[i] = self:_get_column_token(a[i], suffix_as)
+        tokens[i] = self:_get_column_token(a[i], context)
       end
       return as_token(tokens)
     elseif type(a) == "string" then
-      return self:_get_column_token(a, suffix_as) --[[@as string]]
+      return self:_get_column_token(a, context) --[[@as string]]
     elseif type(a) == 'function' then
       ---@cast a -DBValue
       local select_args = a(self:_create_context())
@@ -1284,7 +1284,7 @@ function Sql:_get_column_tokens(suffix_as, a, b, ...)
   else
     local res = {}
     for i, name in ipairs { a, b, ... } do
-      res[#res + 1] = as_token(self:_get_column_token(name, suffix_as))
+      res[#res + 1] = as_token(self:_get_column_token(name, context))
     end
     return concat(res, ", ")
   end
@@ -1563,18 +1563,16 @@ end
 
 ---@private
 ---@param key DBValue
----@param suffix_as? boolean whether to add AS suffix to the result
+---@param context ColumnContext
 ---@return DBValue
-function Sql:_get_column_token(key, suffix_as)
-  if type(key) ~= 'string' then
-    return key
-  elseif key == '*' then
-    return key
-  elseif self.model.fields[key] then
+function Sql:_get_column_token(key, context)
+  if self.model.fields[key] then
     return (self._as or self.model.table_name) .. '.' .. key
+  elseif type(key) ~= 'string' or key == '*' then
+    return key
   else
-    local column = self:_parse_column(key)
-    if suffix_as then
+    local column = self:_parse_column(key, context)
+    if context == 'select' or context == 'returning' then
       return column .. ' AS ' .. key
     else
       return column
@@ -1642,11 +1640,13 @@ function Sql:_get_condition_token(cond, op, dval)
       return Sql._base_get_condition_token(self, cond)
     end
   elseif dval == nil then
+    -- use select context because it's a column name, the operator is =
     ---@cast cond string
-    return format("%s = %s", self:_parse_column(cond), as_literal(op))
+    return format("%s = %s", self:_parse_column(cond, "select"), as_literal(op))
   else
+    -- use select context because it's a column name, the operator is op
     ---@cast cond string
-    return format("%s %s %s", self:_parse_column(cond), op, as_literal(dval))
+    return format("%s %s %s", self:_parse_column(cond, "select"), op, as_literal(dval))
   end
 end
 
@@ -1943,18 +1943,12 @@ function Sql:delete(cond, op, dval)
   return self
 end
 
----@return self
-function Sql:distinct()
-  self._distinct = true
-  return self
-end
-
 ---@param a (fun(ctx:table):string|table)|DBValue
 ---@param b? DBValue
 ---@param ...? DBValue
 ---@return self
 function Sql:select(a, b, ...)
-  local s = self:_get_column_tokens(true, a, b, ...)
+  local s = self:_get_column_tokens("select", a, b, ...)
   if s == "" then
   elseif not self._select then
     self._select = s
@@ -2014,7 +2008,7 @@ end
 ---@param ...? DBValue
 ---@return self
 function Sql:returning(a, b, ...)
-  local s = self:_get_column_tokens(true, a, b, ...)
+  local s = self:_get_column_tokens("returning", a, b, ...)
   if s == "" then
   elseif not self._returning then
     self._returning = s
@@ -2044,7 +2038,7 @@ end
 ---@param a string
 ---@param ... string
 function Sql:group(a, ...)
-  local s = self:_get_column_tokens(false, a, ...)
+  local s = self:_get_column_tokens("group_by", a, ...)
   if s == "" then
   elseif not self._group then
     self._group = s
@@ -2058,6 +2052,130 @@ end
 
 function Sql:group_by(...) return self:group(...) end
 
+local string_db_types = {
+  varchar = true,
+  text = true,
+  char = true,
+  bpchar = true
+}
+local string_operators = {
+  contains = true,
+  startswith = true,
+  endswith = true,
+  regex = true,
+  regex_insensitive = true,
+  regex_sensitive = true,
+}
+
+local EXPR_OPERATORS = {
+  eq = function(key, value)
+    return format("%s = %s", key, as_literal(value))
+  end,
+  lt = function(key, value)
+    return format("%s < %s", key, as_literal(value))
+  end,
+  lte = function(key, value)
+    return format("%s <= %s", key, as_literal(value))
+  end,
+  gt = function(key, value)
+    return format("%s > %s", key, as_literal(value))
+  end,
+  gte = function(key, value)
+    return format("%s >= %s", key, as_literal(value))
+  end,
+  ne = function(key, value)
+    return format("%s <> %s", key, as_literal(value))
+  end,
+  ['in'] = function(key, value)
+    return format("%s IN %s", key, as_literal(value))
+  end,
+  notin = function(key, value)
+    return format("%s NOT IN %s", key, as_literal(value))
+  end,
+  contains = function(key, value)
+    return format("%s LIKE '%%%s%%'", key, value:gsub("'", "''"))
+  end,
+  icontains = function(key, value)
+    return format("%s ILIKE '%%%s%%'", key, value:gsub("'", "''"))
+  end,
+  startswith = function(key, value)
+    return format("%s LIKE '%s%%'", key, value:gsub("'", "''"))
+  end,
+  istartswith = function(key, value)
+    return format("%s ILIKE '%s%%'", key, value:gsub("'", "''"))
+  end,
+  endswith = function(key, value)
+    return format("%s LIKE '%%%s'", key, value:gsub("'", "''"))
+  end,
+  iendswith = function(key, value)
+    return format("%s ILIKE '%%%s'", key, value:gsub("'", "''"))
+  end,
+  range = function(key, value)
+    return format("%s BETWEEN %s AND %s", key, as_literal(value[1]), as_literal(value[2]))
+  end,
+  year = function(key, value)
+    return format("%s BETWEEN '%s-01-01' AND '%s-12-31'", key, value, value)
+  end,
+  month = function(key, value)
+    return format("EXTRACT('month' FROM %s) = '%s'", key, value)
+  end,
+  day = function(key, value)
+    return format("EXTRACT('day' FROM %s) = '%s'", key, value)
+  end,
+  regex = function(key, value)
+    return format("%s ~ '%%%s'", key, value:gsub("'", "''"))
+  end,
+  iregex = function(key, value)
+    return format("%s ~* '%%%s'", key, value:gsub("'", "''"))
+  end,
+  null = function(key, value)
+    if value then
+      return format("%s IS NULL", key)
+    else
+      return format("%s IS NOT NULL", key)
+    end
+  end,
+  isnull = function(key, value)
+    if value then
+      return format("%s IS NULL", key)
+    else
+      return format("%s IS NOT NULL", key)
+    end
+  end,
+  has_key = function(key, value)
+    return format("(%s) ? %s", key, value)
+  end,
+  has_keys = function(key, value)
+    return format("(%s) ?& [%s]", key, as_literal_without_brackets(value))
+  end,
+  has_any_keys = function(key, value)
+    return format("(%s) ?| [%s]", key, as_literal_without_brackets(value))
+  end,
+  json_contains = function(key, value)
+    return format("(%s) @> '%s'", key, encode(value))
+  end,
+  json_eq = function(key, value)
+    return format("(%s) = '%s'", key, encode(value))
+  end,
+  contained_by = function(key, value)
+    return format("(%s) <@ '%s'", key, encode(value))
+  end,
+}
+
+---@param value DBValue
+---@param key string
+---@param op string
+---@return string
+function Sql:_get_expr_token(value, key, op)
+  -- https://docs.djangoproject.com/en/5.1/ref/models/querysets/#field-lookups
+  value = self:_resolve_update_value(value)
+  local handler = EXPR_OPERATORS[op]
+  if not handler then
+    error("invalid sql op: " .. tostring(op))
+  end
+  return handler(key, value)
+end
+
 ---@param key DBValue
 ---@return DBValue
 function Sql:_get_order_column(key)
@@ -2067,7 +2185,7 @@ function Sql:_get_order_column(key)
     -- local matched = match(key, '^([-+])?([\\w_.]+)$', 'josui')
     local a, b = key:match("^([-+]?)([%w_]+)$")
     if a or b then
-      return format("%s %s", self:_parse_column(b), a == '-' and 'DESC' or 'ASC')
+      return format("%s %s", self:_parse_column(b, "order_by"), a == '-' and 'DESC' or 'ASC')
     else
       error(format("invalid order arg format: %s", key))
     end
@@ -2266,14 +2384,17 @@ function Sql:having(cond, op, dval)
   return self
 end
 
----@param a (fun(ctx:table):string)|DBValue
----@param b? DBValue
----@param ...? DBValue
+---@param ... string
 ---@return self
-function Sql:distinct_on(a, b, ...)
-  local s = self:_get_column_tokens(false, a, b, ...)
-  self._distinct_on = s
-  self._order = s
+function Sql:distinct(...)
+  -- PG requires: SELECT DISTINCT ON expressions must match initial ORDER BY expressions
+  -- so you'd better use order_by first
+  if select('#', ...) == 0 then
+    self._distinct = true
+  else
+    local distinct_token = self:_get_column_tokens("distinct", ...)
+    self._distinct_on = distinct_token
+  end
   return self
 end
 
@@ -2281,14 +2402,14 @@ end
 ---@param amount? number
 ---@return self
 function Sql:increase(name, amount)
-  return self:update { [name] = make_token(format("%s + %s", name, amount or 1)) }
+  return self:update { [name] = F(name) + (amount or 1) }
 end
 
 ---@param name string
 ---@param amount? number
 ---@return self
 function Sql:decrease(name, amount)
-  return self:update { [name] = make_token(format("%s - %s", name, amount or 1)) }
+  return self:update { [name] = F(name) - (amount or 1) }
 end
 
 --- {{id=1}, {id=2}, {id=3}} => columns: {'id'}  keys: {{1},{2},{3}}
@@ -2377,9 +2498,17 @@ local json_operators = {
   has_any_keys = true,
 }
 
+local NON_OPERATOR_CONTEXTS = {
+  select = true,
+  returning = true,
+  aggregate = true,
+  group_by = true,
+  order_by = true,
+  distinct = true,
+}
 -- Blog.objects.filter(entry__headline='a')
 ---@param key string column name
----@param context? string context: select/group_by/F, where/Q, having, aggregate
+---@param context? ColumnContext
 ---@return string resolved_column
 ---@return string operator
 function Sql:_parse_column(key, context)
@@ -2420,15 +2549,15 @@ function Sql:_parse_column(key, context)
         debug('1.3', model.class_name, token)
         column = token
       elseif last_field.reference then
-        -- 1.3 foreignkey model's field, may need a join
+        -- 1.4 foreignkey model's field, may need a join
         if token == last_field.reference_column then
-          -- 1.3.1 blog_id__id => redundant foreignkey suffix , rollback to last_token
-          debug('1.3.1', model.class_name, token)
+          -- 1.4.1 blog_id__id => redundant foreignkey suffix , rollback to last_token
+          debug('1.4.1', model.class_name, token)
           column = last_token
           token = last_token -- in case of blog_id__id__gt
         else
-          -- 1.3.2 blog_id__name => need a join
-          debug('1.3.2', model.class_name, last_token or '/', token)
+          -- 1.4.2 blog_id__name => need a join
+          debug('1.4.2', model.class_name, last_token or '/', token)
           column = token
           if not join_key then
             -- prefix with foreignkey name because a model can be referenced multiple times by the same model
@@ -2527,6 +2656,12 @@ function Sql:_parse_column(key, context)
       elseif last_token then
         -- 5. operator, write back
         debug('5', model.class_name, token)
+        if context == nil or not NON_OPERATOR_CONTEXTS[context] then
+          -- where or having or Q
+          assert(EXPR_OPERATORS[token], "5.1 invalid operator: " .. token)
+        else
+          error("5.2 invalid column: " .. token)
+        end
         op = token
         column = last_token
         break
@@ -2578,49 +2713,6 @@ function Sql:_get_having_column(key)
   error(format("invalid field name for having: '%s'", key))
 end
 
----@param key string single column name, exclude operator or foreign key
----@param is_having? boolean whether the column is used in having clause
----@return string?
-function Sql:_get_column(key, is_having)
-  if self.model.fields[key] then
-    return (self._as or self.table_name) .. '.' .. key
-    -- if self._as then
-    --   return self._as .. '.' .. key
-    -- else
-    --   return self.model.column_cache[key]
-    -- end
-  end
-  -- Book.objects.values('name').annotate(price_total=Sum('price')).filter(price_total=1)
-  if self._annotate and self._annotate[key] then
-    -- expression like: Count('entry') or F('price') * 10
-    return self._annotate[key]
-  end
-  local reversed_fk = self.model.reversed_fields[key] -- key: entry
-  if reversed_fk and self._join_keys then
-    local prefix = self._join_keys[key]
-    if not prefix then
-      return
-    end
-    -- TODO: 反向关联的column是不是只有这种情形
-    return prefix .. "." .. reversed_fk.reference.primary_key
-    -- local ref_column = reversed_fk.reference_column
-    -- if not is_having then
-    --   return prefix .. "." .. ref_column -- blog_id
-    -- else
-    --   -- Blog.objects.values('name').annotate(cnt=Count('entry')).filter(cnt=1)
-    --   return prefix .. "." .. reversed_fk.reference.primary_key
-    -- end
-  end
-  if key == '*' then
-    return '*'
-  end
-  -- local matched = match(key, '^([\\w_]+)[.]([\\w_]+)$', 'josui')
-  -- local table_name = key:match('^([%w_]+)[.][%w_]+$')
-  -- if table_name then
-  --   return key
-  -- end
-end
-
 ---@param f FClass|DBValue
 ---@return string
 function Sql:_resolve_field_builder(f)
@@ -2661,100 +2753,6 @@ function Sql:annotate(kwargs)
     end
   end
   return self
-end
-
-local string_db_types = {
-  varchar = true,
-  text = true,
-  char = true,
-  bpchar = true
-}
-local string_operators = {
-  contains = true,
-  startswith = true,
-  endswith = true,
-  regex = true,
-  regex_insensitive = true,
-  regex_sensitive = true,
-}
-
----@param value DBValue
----@param key string
----@param op string
----@return string
-function Sql:_get_expr_token(value, key, op)
-  -- https://docs.djangoproject.com/en/5.1/ref/models/querysets/#field-lookups
-  value = self:_resolve_update_value(value)
-  if op == "eq" then
-    return format("%s = %s", key, as_literal(value))
-  elseif op == "in" then
-    return format("%s IN %s", key, as_literal(value))
-  elseif op == "notin" then
-    return format("%s NOT IN %s", key, as_literal(value))
-  elseif COMPARE_OPERATORS[op] then
-    return format("%s %s %s", key, COMPARE_OPERATORS[op], as_literal(value))
-  elseif op == "contains" then
-    ---@cast value string
-    return format("%s LIKE '%%%s%%'", key, value:gsub("'", "''"))
-  elseif op == "icontains" then
-    ---@cast value string
-    return format("%s ILIKE '%%%s%%'", key, value:gsub("'", "''"))
-  elseif op == "startswith" then
-    ---@cast value string
-    return format("%s LIKE '%s%%'", key, value:gsub("'", "''"))
-  elseif op == "istartswith" then
-    ---@cast value string
-    return format("%s ILIKE '%s%%'", key, value:gsub("'", "''"))
-  elseif op == "endswith" then
-    ---@cast value string
-    return format("%s LIKE '%%%s'", key, value:gsub("'", "''"))
-  elseif op == "iendswith" then
-    ---@cast value string
-    return format("%s ILIKE '%%%s'", key, value:gsub("'", "''"))
-  elseif op == "range" then
-    ---@cast value table
-    return format("%s BETWEEN %s AND %s", key, as_literal(value[1]), as_literal(value[2]))
-  elseif op == 'year' then
-    return format("%s BETWEEN '%s-01-01' AND '%s-12-31'", key, value, value)
-  elseif op == 'month' then
-    return format("EXTRACT('month' FROM %s) = '%s'", key, value)
-  elseif op == 'day' then
-    return format("EXTRACT('day' FROM %s) = '%s'", key, value)
-  elseif op == "regex" then
-    ---@cast value string
-    return format("%s ~ '%%%s'", key, value:gsub("'", "''"))
-  elseif op == "iregex" then
-    ---@cast value string
-    return format("%s ~* '%%%s'", key, value:gsub("'", "''"))
-  elseif op == "null" or op == "isnull" then
-    if value then
-      return format("%s IS NULL", key)
-    else
-      return format("%s IS NOT NULL", key)
-    end
-  elseif op == "has_key" then
-    ---@cast value string
-    return format("(%s) ? %s", key, value)
-  elseif op == "has_keys" then
-    ---@cast value string
-    return format("(%s) ?& [%s]", key, as_literal_without_brackets(value))
-  elseif op == "has_any_keys" then
-    ---@cast value string
-    return format("(%s) ?| [%s]", key, as_literal_without_brackets(value))
-  elseif op == "json_contains" then
-    ---@cast value string
-    return format("(%s) @> '%s'", key, encode(value))
-  elseif op == "json_eq" then
-    ---@cast value string
-    return format("(%s) = '%s'", key, encode(value))
-  elseif op == "contained_by" then
-    ---@cast value string
-    return format("(%s) <@ '%s'", key, encode(value))
-  elseif type(op) == 'function' then
-    return format("%s %s", key, op(value))
-  else
-    error("invalid sql op: " .. tostring(op))
-  end
 end
 
 ---@param rows Records|Sql
