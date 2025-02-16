@@ -2168,7 +2168,7 @@ local EXPR_OPERATORS = {
 ---@return string
 function Sql:_get_expr_token(value, key, op)
   -- https://docs.djangoproject.com/en/5.1/ref/models/querysets/#field-lookups
-  value = self:_resolve_update_value(value)
+  value = self:_resolve_F(value)
   local handler = EXPR_OPERATORS[op]
   if not handler then
     error("invalid sql op: " .. tostring(op))
@@ -2341,12 +2341,12 @@ end
 
 ---@param q QClass
 ---@return string
-function Sql:_parse_Q(q)
+function Sql:_resolve_Q(q)
   if q.logic == "NOT" then
-    return format("NOT (%s)", self:_parse_Q(q.left))
+    return format("NOT (%s)", self:_resolve_Q(q.left))
   elseif q.left and q.right then
-    local left_token = self:_parse_Q(q.left)
-    local right_token = self:_parse_Q(q.right)
+    local left_token = self:_resolve_Q(q.left)
+    local right_token = self:_resolve_Q(q.right)
     return format("(%s) %s (%s)", left_token, q.logic, right_token)
   else
     return self:_get_condition_token_from_table(q.cond, q.logic)
@@ -2359,7 +2359,7 @@ end
 ---@return self
 function Sql:where(cond, op, dval)
   if type(cond) == 'table' and cond.__IS_LOGICAL_BUILDER__ then
-    local where_token = self:_parse_Q(cond)
+    local where_token = self:_resolve_Q(cond)
     if self._where == nil then
       self._where = where_token
     else
@@ -2656,10 +2656,11 @@ function Sql:_parse_column(key, context)
       elseif last_token then
         -- 5. operator, write back
         debug('5', model.class_name, token)
-        if context == nil or not NON_OPERATOR_CONTEXTS[context] then
-          -- where or having or Q
+        if context == nil or not NON_OPERATOR_CONTEXTS[context] then -- where or having or Q
+          -- 5.1 should be operator, check it
           assert(EXPR_OPERATORS[token], "5.1 invalid operator: " .. token)
         else
+          -- 5.2 select/returning etc context, shouldn't reach here
           error("5.2 invalid column: " .. token)
         end
         op = token
@@ -2781,7 +2782,7 @@ function Sql:insert(rows, columns)
   end
 end
 
-function Sql:_resolve_update_value(value)
+function Sql:_resolve_F(value)
   if type(value) == 'table' and value.__IS_FIELD_BUILDER__ then
     local exp_token = self:_resolve_field_builder(value)
     return function()
@@ -2801,7 +2802,7 @@ function Sql:update(row, columns)
     local err
     ---@cast row Record
     for k, v in pairs(row) do
-      row[k] = self:_resolve_update_value(v)
+      row[k] = self:_resolve_F(v)
     end
     if not self._skip_validate then
       ---@diagnostic disable-next-line: cast-local-type

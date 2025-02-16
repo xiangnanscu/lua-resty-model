@@ -6,14 +6,14 @@ DROP TABLE IF EXISTS org CASCADE
 DROP TABLE IF EXISTS usr_bak CASCADE
 DROP TABLE IF EXISTS usr CASCADE
 CREATE TABLE usr(
-  name varchar(5) NOT NULL UNIQUE,
+  permission integer DEFAULT 0,
   id SERIAL PRIMARY KEY NOT NULL,
-  permission integer DEFAULT 0
+  name varchar(5) NOT NULL UNIQUE
 )
 CREATE TABLE usr_bak(
-  name varchar(5) NOT NULL UNIQUE,
+  permission integer DEFAULT 0,
   id SERIAL PRIMARY KEY NOT NULL,
-  permission integer DEFAULT 0
+  name varchar(5) NOT NULL UNIQUE
 )
 CREATE TABLE org(
   id SERIAL PRIMARY KEY NOT NULL,
@@ -21,8 +21,8 @@ CREATE TABLE org(
 )
 CREATE TABLE org_admin(
   id SERIAL PRIMARY KEY NOT NULL,
-  org integer REFERENCES "org" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  usr integer REFERENCES "usr" ("id") ON DELETE CASCADE ON UPDATE CASCADE 
+  usr integer REFERENCES "usr" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
+  org integer REFERENCES "org" ("id") ON DELETE CASCADE ON UPDATE CASCADE 
 )
 CREATE TABLE profile(
   id SERIAL PRIMARY KEY NOT NULL,
@@ -32,22 +32,22 @@ CREATE TABLE profile(
   age integer DEFAULT 1
 )
 
-INSERT INTO usr AS T (name, permission) VALUES ('u1', 1)
+INSERT INTO usr AS T (permission, name) VALUES (1, 'u1')
 ok 1 - test insert insert one user
 
-INSERT INTO usr AS T (name, permission) VALUES ('u2', 2) RETURNING *
+INSERT INTO usr AS T (permission, name) VALUES (2, 'u2') RETURNING *
 ok 2 - test insert insert one user returning all
 
-INSERT INTO usr AS T (name, permission) VALUES ('u3', 0) RETURNING T.permission
+INSERT INTO usr AS T (permission, name) VALUES (0, 'u3') RETURNING T.permission
 ok 3 - test insert insert one user using default
 
-INSERT INTO usr AS T (name, permission) VALUES ('u4', 0), ('u5', 0) RETURNING T.name, T.permission
+INSERT INTO usr AS T (permission, name) VALUES (0, 'u4'), (0, 'u5') RETURNING T.name, T.permission
 ok 4 - test insert insert two users
 
-INSERT INTO usr AS T (name, permission) VALUES ('u6', 2) RETURNING T.name
+INSERT INTO usr AS T (permission, name) VALUES (2, 'u6') RETURNING T.name
 ok 5 - test insert insert one user returning id in compact form
 
-INSERT INTO usr AS T (name, permission) VALUES ('u7', 0), ('u8', 0) RETURNING T.name
+INSERT INTO usr AS T (permission, name) VALUES (0, 'u7'), (0, 'u8') RETURNING T.name
 ok 6 - test insert insert two users returning id in compact form
 
 INSERT INTO usr_bak AS T (name, permission) SELECT T.name, T.permission FROM usr T WHERE T.permission = 2 RETURNING T.name, T.permission
@@ -79,6 +79,7 @@ ok 15 - test insert insert two users validate maxlength failed at 2nd row
 ok 16 - test insert insert two users validate choices failed at 1st row
 
 ok 17 - test insert insert user skip validate
+
 ok 18 - test insert update user skip validate
 
 ok 19 - test insert insert one user with invalid columns
@@ -91,7 +92,7 @@ UPDATE profile T SET child = 5 WHERE T.usr = 5
 UPDATE profile T SET parent = 4, child = 6 WHERE T.usr = 6
 UPDATE profile T SET parent = 5 WHERE T.usr = 7
 INSERT INTO org AS T (name) VALUES ('o1'), ('o2'), ('o3')
-INSERT INTO org_admin AS T (org, usr) VALUES (1, 2), (2, 3), (3, 4)
+INSERT INTO org_admin AS T (usr, org) VALUES (2, 1), (3, 2), (4, 3)
 
 SELECT T.id, T.permission FROM usr T
 SELECT T.id, T.permission FROM usr T
@@ -728,9 +729,9 @@ profile{usr_id=1, dept_name='d1', age=20}:save()
 
 ```sql
 INSERT INTO
-  profile AS T (age, salary, usr_id, sex, dept_name)
+  profile AS T (salary, age, usr_id, dept_name, sex)
 VALUES
-  (20, 1000, 1, 'f', 'd1')
+  (1000, 20, 1, 'd1', 'f')
 RETURNING
   *
 ```
@@ -754,9 +755,9 @@ profile{usr_id=2, dept_name='d2', salary=500, sex='m', age=50}:save{'usr_id','de
 
 ```sql
 INSERT INTO
-  profile AS T (dept_name, usr_id)
+  profile AS T (usr_id, dept_name)
 VALUES
-  ('d2', 2)
+  (2, 'd2')
 RETURNING
   *
 ```
@@ -803,9 +804,9 @@ profile{id=5, age=55, usr_id=3, dept_name='d3',}:save_create()
 
 ```sql
 INSERT INTO
-  profile AS T (age, salary, usr_id, sex, dept_name)
+  profile AS T (salary, age, usr_id, dept_name, sex)
 VALUES
-  (55, 1000, 3, 'f', 'd3')
+  (1000, 55, 3, 'd3', 'f')
 RETURNING
   *
 ```
@@ -836,10 +837,10 @@ usr:merge({{permission=4, username ='u1'},{permission=2, username ='u22'}}, 'use
 
 ```sql
 WITH
-  V (username, permission) AS (
+  V (permission, username) AS (
     VALUES
-      ('u1'::varchar, 4::integer),
-      ('u22', 2)
+      (4::integer, 'u1'::varchar),
+      (2, 'u22')
   ),
   U AS (
     UPDATE usr W
@@ -850,14 +851,14 @@ WITH
     WHERE
       V.username = W.username
     RETURNING
-      V.username,
-      V.permission
+      V.permission,
+      V.username
   )
 INSERT INTO
-  usr AS T (username, permission)
+  usr AS T (permission, username)
 SELECT
-  V.username,
-  V.permission
+  V.permission,
+  V.username
 FROM
   V
   LEFT JOIN U AS W ON (V.username = W.username)
@@ -969,10 +970,10 @@ evaluate:merge({{usr_id=1, year=2021, rank='A'},{usr_id=1, year=2022, rank='B'}}
 
 ```sql
 WITH
-  V (year, usr_id, rank) AS (
+  V (usr_id, rank, year) AS (
     VALUES
-      (2021::integer, 1::integer, 'A'::varchar),
-      (2022, 1, 'B')
+      (1::integer, 'A'::varchar, 2021::integer),
+      (1, 'B', 2022)
   ),
   U AS (
     UPDATE evaluate W
@@ -984,16 +985,16 @@ WITH
       V.usr_id = W.usr_id
       AND V.year = W.year
     RETURNING
-      V.year,
       V.usr_id,
-      V.rank
+      V.rank,
+      V.year
   )
 INSERT INTO
-  evaluate AS T (year, usr_id, rank)
+  evaluate AS T (usr_id, rank, year)
 SELECT
-  V.year,
   V.usr_id,
-  V.rank
+  V.rank,
+  V.year
 FROM
   V
   LEFT JOIN U AS W ON (
@@ -1014,6 +1015,7 @@ RETURNING
 ```
 
 ok 58 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with array key
+
 ## merge multiple rows returning inserted rows with array key and specific columns
 ```lua
 evaluate:merge({{usr_id=2, year=2021, rank='A'},{usr_id=2, year=2022, rank='B'}}, {'usr_id', 'year'}, {'usr_id', 'year'}):returning('rank'):flat()
@@ -1074,10 +1076,10 @@ usr:upsert({{permission=4, username ='u1'},{permission=2, username ='u27'}}, 'us
 
 ```sql
 INSERT INTO
-  usr AS T (username, permission)
+  usr AS T (permission, username)
 VALUES
-  ('u1', 4),
-  ('u27', 2)
+  (4, 'u1'),
+  (2, 'u27')
 ON CONFLICT (username) DO
 UPDATE
 SET
@@ -1129,10 +1131,10 @@ evaluate:upsert({{usr_id=1, year=2021, rank='A'},{usr_id=1, year=2022, rank='B'}
 
 ```sql
 INSERT INTO
-  evaluate AS T (year, usr_id, rank)
+  evaluate AS T (usr_id, rank, year)
 VALUES
-  (2021, 1, 'A'),
-  (2022, 1, 'B')
+  (1, 'A', 2021),
+  (1, 'B', 2022)
 ON CONFLICT (usr_id, year) DO
 UPDATE
 SET
@@ -1172,7 +1174,6 @@ WHERE
 ```
 
 ok 66 - Xodel.update update one user
-
 ## update one user returning one column
 ```lua
  usr:update{permission=3}:where{id=1}:returning('permission'):exec() 
@@ -1314,10 +1315,10 @@ usr:updates({{permission=2, username ='u1'},{permission=3, username ='??'}}, 'us
 
 ```sql
 WITH
-  V (username, permission) AS (
+  V (permission, username) AS (
     VALUES
-      ('u1'::varchar, 2::integer),
-      ('??', 3)
+      (2::integer, 'u1'::varchar),
+      (3, '??')
   )
 UPDATE usr T
 SET
@@ -1348,10 +1349,10 @@ usr:updates({{permission=1, username ='u1'},{permission=3, username ='u3'}}, 'us
 
 ```sql
 WITH
-  V (username, permission) AS (
+  V (permission, username) AS (
     VALUES
-      ('u1'::varchar, 1::integer),
-      ('u3', 3)
+      (1::integer, 'u1'::varchar),
+      (3, 'u3')
   )
 UPDATE usr T
 SET
@@ -1406,111 +1407,6 @@ WHERE
 ```
 
 ok 74 - Xodel.where where basic
-## where or
-```lua
- usr:select('id'):where{id=1}:or_where{id=2}:order('id'):flat() 
-```
-
-```sql
-SELECT
-  T.id
-FROM
-  usr T
-WHERE
-  T.id = 1
-  OR T.id = 2
-ORDER BY
-  T.id ASC
-```
-
-```js
-[
-  1,
-  2,
-]
-```
-
-ok 75 - Xodel.where where or
-## and where or
-```lua
- usr:select('id'):where{id=1}:where_or{id=2, username='u3'}:order('id'):flat() 
-```
-
-```sql
-SELECT
-  T.id
-FROM
-  usr T
-WHERE
-  (T.id = 1)
-  AND (
-    T.id = 2
-    OR T.username = 'u3'
-  )
-ORDER BY
-  T.id ASC
-```
-
-```js
-[
-
-]
-```
-
-ok 76 - Xodel.where and where or
-## or where and
-```lua
- usr:select('id'):where{id=1}:or_where{id=2, username='u2'}:order('id'):flat() 
-```
-
-```sql
-SELECT
-  T.id
-FROM
-  usr T
-WHERE
-  T.id = 1
-  OR T.id = 2
-  AND T.username = 'u2'
-ORDER BY
-  T.id ASC
-```
-
-```js
-[
-  1,
-  2,
-]
-```
-
-ok 77 - Xodel.where or where and
-## or where or
-```lua
- usr:select('id'):where{id=1}:or_where_or{id=2, username='u3'}:order('id'):flat() 
-```
-
-```sql
-SELECT
-  T.id
-FROM
-  usr T
-WHERE
-  T.id = 1
-  OR T.id = 2
-  OR T.username = 'u3'
-ORDER BY
-  T.id ASC
-```
-
-```js
-[
-  1,
-  2,
-  3,
-]
-```
-
-ok 78 - Xodel.where or where or
 ## where condition by 2 args
 ```lua
  usr:select('id'):where('id', 3):exec() 
@@ -1533,7 +1429,7 @@ WHERE
 ]
 ```
 
-ok 79 - Xodel.where where condition by 2 args
+ok 75 - Xodel.where where condition by 2 args
 ## where condition by 3 args
 ```lua
  usr:select('id'):where('id', '<',  3):flat() 
@@ -1555,171 +1451,7 @@ WHERE
 ]
 ```
 
-ok 80 - Xodel.where where condition by 3 args
-## where exists
-```lua
-usr:where_exists(usr:where{id=1})
-```
-
-```sql
-SELECT
-  *
-FROM
-  usr T
-WHERE
-  EXISTS (
-    SELECT
-      *
-    FROM
-      usr T
-    WHERE
-      T.id = 1
-  )
-```
-
-ok 81 - Xodel.where where exists
-## where null
-```lua
-usr:where_null("username")
-```
-
-```sql
-SELECT
-  *
-FROM
-  usr T
-WHERE
-  T.username IS NULL
-```
-
-ok 82 - Xodel.where where null
-## where in
-```lua
-usr:where_in("id", {1,2,3})
-```
-
-```sql
-SELECT
-  *
-FROM
-  usr T
-WHERE
-  (T.id) IN (1, 2, 3)
-```
-
-ok 83 - Xodel.where where in
-## where between
-```lua
-usr:where_between("id", 2, 4)
-```
-
-```sql
-SELECT
-  *
-FROM
-  usr T
-WHERE
-  T.id BETWEEN 2 AND 4
-```
-
-ok 84 - Xodel.where where between
-## where not
-```lua
-usr:where_not("username", "foo")
-```
-
-```sql
-SELECT
-  *
-FROM
-  usr T
-WHERE
-  NOT (T.username = 'foo')
-```
-
-ok 85 - Xodel.where where not
-## where not null
-```lua
-usr:where_not_null("username")
-```
-
-```sql
-SELECT
-  *
-FROM
-  usr T
-WHERE
-  T.username IS NOT NULL
-```
-
-ok 86 - Xodel.where where not null
-## where not in
-```lua
-usr:where_not_in("id", {1,2,3})
-```
-
-```sql
-SELECT
-  *
-FROM
-  usr T
-WHERE
-  (T.id) NOT IN (1, 2, 3)
-```
-
-ok 87 - Xodel.where where not in
-## where not between
-```lua
-usr:where_not_between("id", 2, 4)
-```
-
-```sql
-SELECT
-  *
-FROM
-  usr T
-WHERE
-  T.id NOT BETWEEN 2 AND 4
-```
-
-ok 88 - Xodel.where where not between
-## where not exists
-```lua
-usr:where_not_exists(usr:where{id=1})
-```
-
-```sql
-SELECT
-  *
-FROM
-  usr T
-WHERE
-  NOT EXISTS (
-    SELECT
-      *
-    FROM
-      usr T
-    WHERE
-      T.id = 1
-  )
-```
-
-ok 89 - Xodel.where where not exists
-## where by arithmetic operator: __ne
-```lua
-usr:where{id__ne=2}:select('id')
-```
-
-```sql
-SELECT
-  T.id
-FROM
-  usr T
-WHERE
-  T.id <> 2
-```
-
-ok 90 - Xodel.where where by arithmetic operator: __ne
+ok 76 - Xodel.where where condition by 3 args
 ## where by arithmetic operator: __lt
 ```lua
 usr:where{id__lt=2}:select('id')
@@ -1734,7 +1466,7 @@ WHERE
   T.id < 2
 ```
 
-ok 91 - Xodel.where where by arithmetic operator: __lt
+ok 77 - Xodel.where where by arithmetic operator: __lt
 ## where by arithmetic operator: __lte
 ```lua
 usr:where{id__lte=2}:select('id')
@@ -1749,7 +1481,7 @@ WHERE
   T.id <= 2
 ```
 
-ok 92 - Xodel.where where by arithmetic operator: __lte
+ok 78 - Xodel.where where by arithmetic operator: __lte
 ## where by arithmetic operator: __gt
 ```lua
 usr:where{id__gt=2}:select('id')
@@ -1764,7 +1496,7 @@ WHERE
   T.id > 2
 ```
 
-ok 93 - Xodel.where where by arithmetic operator: __gt
+ok 79 - Xodel.where where by arithmetic operator: __gt
 ## where by arithmetic operator: __gte
 ```lua
 usr:where{id__gte=2}:select('id')
@@ -1779,7 +1511,7 @@ WHERE
   T.id >= 2
 ```
 
-ok 94 - Xodel.where where by arithmetic operator: __gte
+ok 80 - Xodel.where where by arithmetic operator: __gte
 ## where by arithmetic operator: __eq
 ```lua
 usr:where{id__eq=2}:select('id')
@@ -1794,7 +1526,22 @@ WHERE
   T.id = 2
 ```
 
-ok 95 - Xodel.where where by arithmetic operator: __eq
+ok 81 - Xodel.where where by arithmetic operator: __eq
+## where by arithmetic operator: __ne
+```lua
+usr:where{id__ne=2}:select('id')
+```
+
+```sql
+SELECT
+  T.id
+FROM
+  usr T
+WHERE
+  T.id <> 2
+```
+
+ok 82 - Xodel.where where by arithmetic operator: __ne
 ## where in
 ```lua
 usr:where{username__in={'u1','u2'}}
@@ -1809,7 +1556,7 @@ WHERE
   T.username IN ('u1', 'u2')
 ```
 
-ok 96 - Xodel.where where in
+ok 83 - Xodel.where where in
 ## where contains
 ```lua
 usr:where{username__contains='u'}
@@ -1824,7 +1571,7 @@ WHERE
   T.username LIKE '%u%'
 ```
 
-ok 97 - Xodel.where where contains
+ok 84 - Xodel.where where contains
 ## where startswith
 ```lua
 usr:where{username__startswith='u'}
@@ -1839,7 +1586,7 @@ WHERE
   T.username LIKE 'u%'
 ```
 
-ok 98 - Xodel.where where startswith
+ok 85 - Xodel.where where startswith
 ## where endswith
 ```lua
 usr:where{username__endswith='u'}
@@ -1854,7 +1601,7 @@ WHERE
   T.username LIKE '%u'
 ```
 
-ok 99 - Xodel.where where endswith
+ok 86 - Xodel.where where endswith
 ## where null true
 ```lua
 usr:where{username__null=true}
@@ -1869,7 +1616,7 @@ WHERE
   T.username IS NULL
 ```
 
-ok 100 - Xodel.where where null true
+ok 87 - Xodel.where where null true
 ## where null false
 ```lua
 usr:where{username__null=false}
@@ -1884,7 +1631,7 @@ WHERE
   T.username IS NOT NULL
 ```
 
-ok 101 - Xodel.where where null false
+ok 88 - Xodel.where where null false
 ## where notin
 ```lua
 usr:where{username__notin={'u1','u2'}}
@@ -1899,7 +1646,7 @@ WHERE
   T.username NOT IN ('u1', 'u2')
 ```
 
-ok 102 - Xodel.where where notin
+ok 89 - Xodel.where where notin
 ## where foreignkey eq
 ```lua
 profile:where{usr_id__username__eq='u1'}
@@ -1915,7 +1662,7 @@ WHERE
   T1.username = 'u1'
 ```
 
-ok 103 - Xodel.where where foreignkey eq
+ok 90 - Xodel.where where foreignkey eq
 ## where foreignkey in
 ```lua
 profile:where{usr_id__username__in={'u1','u2'}}
@@ -1931,7 +1678,7 @@ WHERE
   T1.username IN ('u1', 'u2')
 ```
 
-ok 104 - Xodel.where where foreignkey in
+ok 91 - Xodel.where where foreignkey in
 ## where foreignkey contains
 ```lua
 profile:where{usr_id__username__contains='u'}
@@ -1947,7 +1694,7 @@ WHERE
   T1.username LIKE '%u%'
 ```
 
-ok 105 - Xodel.where where foreignkey contains
+ok 92 - Xodel.where where foreignkey contains
 ## where foreignkey startswith
 ```lua
 profile:where{usr_id__username__startswith='u'}
@@ -1963,7 +1710,7 @@ WHERE
   T1.username LIKE 'u%'
 ```
 
-ok 106 - Xodel.where where foreignkey startswith
+ok 93 - Xodel.where where foreignkey startswith
 ## where foreignkey endswith
 ```lua
 profile:where{usr_id__username__endswith='u'}
@@ -1979,7 +1726,7 @@ WHERE
   T1.username LIKE '%u'
 ```
 
-ok 107 - Xodel.where where foreignkey endswith
+ok 94 - Xodel.where where foreignkey endswith
 ## where foreignkey null true
 ```lua
 profile:where{usr_id__username__null=true}
@@ -1995,7 +1742,7 @@ WHERE
   T1.username IS NULL
 ```
 
-ok 108 - Xodel.where where foreignkey null true
+ok 95 - Xodel.where where foreignkey null true
 ## where foreignkey null false
 ```lua
 profile:where{usr_id__username__null=false}
@@ -2011,23 +1758,7 @@ WHERE
   T1.username IS NOT NULL
 ```
 
-ok 109 - Xodel.where where foreignkey null false
-## where foreignkey number operator ne
-```lua
-profile:where{usr_id__permission__ne=2}
-```
-
-```sql
-SELECT
-  *
-FROM
-  profile T
-  INNER JOIN usr T1 ON (T.usr_id = T1.id)
-WHERE
-  T1.permission <> 2
-```
-
-ok 110 - Xodel.where where foreignkey number operator ne
+ok 96 - Xodel.where where foreignkey null false
 ## where foreignkey number operator lt
 ```lua
 profile:where{usr_id__permission__lt=2}
@@ -2043,7 +1774,7 @@ WHERE
   T1.permission < 2
 ```
 
-ok 111 - Xodel.where where foreignkey number operator lt
+ok 97 - Xodel.where where foreignkey number operator lt
 ## where foreignkey number operator lte
 ```lua
 profile:where{usr_id__permission__lte=2}
@@ -2059,7 +1790,7 @@ WHERE
   T1.permission <= 2
 ```
 
-ok 112 - Xodel.where where foreignkey number operator lte
+ok 98 - Xodel.where where foreignkey number operator lte
 ## where foreignkey number operator gt
 ```lua
 profile:where{usr_id__permission__gt=2}
@@ -2075,7 +1806,7 @@ WHERE
   T1.permission > 2
 ```
 
-ok 113 - Xodel.where where foreignkey number operator gt
+ok 99 - Xodel.where where foreignkey number operator gt
 ## where foreignkey number operator gte
 ```lua
 profile:where{usr_id__permission__gte=2}
@@ -2091,7 +1822,7 @@ WHERE
   T1.permission >= 2
 ```
 
-ok 114 - Xodel.where where foreignkey number operator gte
+ok 100 - Xodel.where where foreignkey number operator gte
 ## where foreignkey number operator eq
 ```lua
 profile:where{usr_id__permission__eq=2}
@@ -2107,7 +1838,23 @@ WHERE
   T1.permission = 2
 ```
 
-ok 115 - Xodel.where where foreignkey number operator eq
+ok 101 - Xodel.where where foreignkey number operator eq
+## where foreignkey number operator ne
+```lua
+profile:where{usr_id__permission__ne=2}
+```
+
+```sql
+SELECT
+  *
+FROM
+  profile T
+  INNER JOIN usr T1 ON (T.usr_id = T1.id)
+WHERE
+  T1.permission <> 2
+```
+
+ok 102 - Xodel.where where foreignkey number operator ne
 # Xodel.select
 ## select fk column
 ```lua
@@ -2134,7 +1881,7 @@ WHERE
 ]
 ```
 
-ok 116 - Xodel.select select fk column
+ok 103 - Xodel.select select fk column
 # Xodel:get(cond?, op?, dval?)
 ## basic
 ```lua
@@ -2160,7 +1907,7 @@ LIMIT
 }
 ```
 
-ok 117 - Xodel:get(cond?, op?, dval?) basic
+ok 104 - Xodel:get(cond?, op?, dval?) basic
 ## model load foreign row
 ```sql
 SELECT
@@ -2173,7 +1920,7 @@ LIMIT
   2
 ```
 
-ok 118 - Xodel:get(cond?, op?, dval?) model load foreign row
+ok 105 - Xodel:get(cond?, op?, dval?) model load foreign row
 ## fetch extra foreignkey field from database on demand
 ```sql
 SELECT
@@ -2186,7 +1933,7 @@ LIMIT
   2
 ```
 
-ok 119 - Xodel:get(cond?, op?, dval?) fetch extra foreignkey field from database on demand
+ok 106 - Xodel:get(cond?, op?, dval?) fetch extra foreignkey field from database on demand
 ## model load foreign row with specified columns
 ```lua
 profile:load_fk('usr_id', 'username', 'permission'):get{id=1}
@@ -2215,7 +1962,7 @@ LIMIT
 }
 ```
 
-ok 120 - Xodel:get(cond?, op?, dval?) model load foreign row with specified columns
+ok 107 - Xodel:get(cond?, op?, dval?) model load foreign row with specified columns
 ## model load foreign row with all columns by *
 ```lua
 profile:load_fk('usr_id', '*'):get{id=1}
@@ -2257,7 +2004,7 @@ LIMIT
   2
 ```
 
-ok 121 - Xodel:get(cond?, op?, dval?) model load foreign row with all columns by *
+ok 108 - Xodel:get(cond?, op?, dval?) model load foreign row with all columns by *
 ## model load foreign row with specified columns two api are the same
 ```lua
 profile:select("sex"):load_fk('usr_id', 'username', 'permission'):get{id=1}
@@ -2317,7 +2064,7 @@ LIMIT
 }
 ```
 
-ok 122 - Xodel:get(cond?, op?, dval?) model load foreign row with specified columns two api are the same
+ok 109 - Xodel:get(cond?, op?, dval?) model load foreign row with specified columns two api are the same
 ## Xodel:get(cond?, op?, dval?)
 ```lua
 usr:get{id__lt=3}
@@ -2334,7 +2081,7 @@ LIMIT
   2
 ```
 
-ok 123 - Xodel:get(cond?, op?, dval?) Xodel:get(cond?, op?, dval?)
+ok 110 - Xodel:get(cond?, op?, dval?) Xodel:get(cond?, op?, dval?)
 # Xodel:get_or_create(params:table, defaults?:table, columns?:string[])
 ## basic
 ```lua
@@ -2387,7 +2134,7 @@ UNION ALL
 }
 ```
 
-ok 124 - Xodel:get_or_create(params:table, defaults?:table, columns?:string[]) basic
+ok 111 - Xodel:get_or_create(params:table, defaults?:table, columns?:string[]) basic
 ## model get_or_create with defaults
 ```lua
 usr:get_or_create({username='goc2'}, {permission = 5})
@@ -2395,12 +2142,12 @@ usr:get_or_create({username='goc2'}, {permission = 5})
 
 ```sql
 WITH
-  new_records (id, username, permission) AS (
+  new_records (id, permission, username) AS (
     INSERT INTO
-      "usr" (username, permission)
+      "usr" (permission, username)
     SELECT
-      'goc2',
-      5
+      5,
+      'goc2'
     WHERE
       NOT EXISTS (
         SELECT
@@ -2412,13 +2159,13 @@ WITH
       )
     RETURNING
       id,
-      username,
-      permission
+      permission,
+      username
   )
 SELECT
   id,
-  username,
   permission,
+  username,
   TRUE AS __is_inserted__
 FROM
   new_records new_records
@@ -2426,8 +2173,8 @@ UNION ALL
 (
   SELECT
     id,
-    username,
     permission,
+    username,
     FALSE AS __is_inserted__
   FROM
     usr T
@@ -2444,7 +2191,7 @@ UNION ALL
 }
 ```
 
-ok 125 - Xodel:get_or_create(params:table, defaults?:table, columns?:string[]) model get_or_create with defaults
+ok 112 - Xodel:get_or_create(params:table, defaults?:table, columns?:string[]) model get_or_create with defaults
 ## test chat model
 ```sql
 INSERT INTO
@@ -2462,68 +2209,13 @@ RETURNING
   *
 ```
 
-```sql
-SELECT DISTINCT
-  ON (
-    CASE
-      WHEN creator = 1 THEN target
-      ELSE creator
-    END
-  ) T.creator,
-  T.target,
-  T.content
-FROM
-  message T
-WHERE
-  T.target = 1
-  OR T.creator = 1
-ORDER BY
-  CASE
-    WHEN creator = 1 THEN target
-    ELSE creator
-  END,
-  T.id DESC
-```
-
-ok 126 - Xodel api: test chat model
-## where by exp
-```sql
-SELECT
-  T.creator,
-  T.target
-FROM
-  message T
-WHERE
-  T.target = 2
-  and T.creator = 1
-  or T.target = 1
-  and T.creator = 2
-```
-
-```sql
-SELECT
-  T.creator,
-  T.target
-FROM
-  message T
-WHERE
-  NOT (
-    T.target = 2
-    or T.creator = 1
-  )
-  AND NOT (
-    T.target = 1
-    or T.creator = 2
-  )
-```
-
-ok 127 - Xodel api: where by exp
+ok 113 - Xodel api: test chat model
 ## go crazy with where clause with recursive join
 ```sql
 INSERT INTO
-  message AS T (target, content, creator)
+  message AS T (content, creator, target)
 VALUES
-  (2, 'crazy', 1)
+  ('crazy', 1, 2)
 RETURNING
   *
 ```
@@ -2560,8 +2252,8 @@ FROM
   INNER JOIN profile T1 ON (T.creator = T1.id)
   INNER JOIN usr T2 ON (T1.usr_id = T2.id)
 WHERE
-  T2.username LIKE '%1%'
-  AND T.id = 9
+  T.id = 9
+  AND T2.username LIKE '%1%'
   AND T1.age = 11
 ```
 
@@ -2578,20 +2270,21 @@ WHERE
   T.id = 9
 ```
 
-ok 128 - Xodel api: go crazy with where clause with recursive join
+ok 114 - Xodel api: go crazy with where clause with recursive join
 # etc
 ## wrong fk name
 ```lua
 models.message:where {creator__usr_id__views=0}:exec()
 ```
 
-ok 129 - etc wrong fk name
+ok 115 - etc wrong fk name
 ## wrong fk name3
 ```lua
 models.message:select('creator__usr_id__views'):exec()
 ```
 
-ok 130 - etc wrong fk name3
+ok 116 - etc wrong fk name3
+
 ## test shortcuts join
 ```lua
 profile:join('dept_name'):get { id = 1 }
@@ -2625,7 +2318,7 @@ LIMIT
 }
 ```
 
-ok 131 - etc test shortcuts join
+ok 117 - etc test shortcuts join
 ## sql select_as
 ```lua
 usr:select_as('id', 'value'):select_as('username', 'label'):where { id = 2 }:exec()
@@ -2650,7 +2343,7 @@ WHERE
 ]
 ```
 
-ok 132 - etc sql select_as
+ok 118 - etc sql select_as
 ## sql select_as foreignkey
 ```lua
 profile:select_as('usr_id__permission', 'uperm'):where { id = 2 }:exec()
@@ -2674,10 +2367,10 @@ WHERE
 ]
 ```
 
-ok 133 - etc sql select_as foreignkey
+ok 119 - etc sql select_as foreignkey
 # sql injection
 ## where key
-ok 134 - sql injection where key
+ok 120 - sql injection where key
 ## where value
 ```sql
 SELECT
@@ -2688,11 +2381,11 @@ WHERE
   T.id = '1 or 1=1'
 ```
 
-ok 135 - sql injection where value
+ok 121 - sql injection where value
 ## order
-ok 136 - sql injection order
+ok 122 - sql injection order
 ## select
-ok 137 - sql injection select
+ok 123 - sql injection select
 # Xodel:delete(cond?, op?, dval?)
 ## model class delete all
 ```lua
@@ -2709,8 +2402,7 @@ DELETE FROM evaluate T
 }
 ```
 
-ok 138 - Xodel:delete(cond?, op?, dval?) model class delete all
-
+ok 124 - Xodel:delete(cond?, op?, dval?) model class delete all
 ## model instance delete
 ```sql
 DELETE FROM message T
@@ -2751,7 +2443,7 @@ RETURNING
 ]
 ```
 
-ok 139 - Xodel:delete(cond?, op?, dval?) model instance delete
+ok 125 - Xodel:delete(cond?, op?, dval?) model instance delete
 ## model instance delete use non primary key
 ```sql
 SELECT
@@ -2784,7 +2476,7 @@ RETURNING
 ]
 ```
 
-ok 140 - Xodel:delete(cond?, op?, dval?) model instance delete use non primary key
+ok 126 - Xodel:delete(cond?, op?, dval?) model instance delete use non primary key
 ## create with foreign model returning all
 ```sql
 SELECT
@@ -2822,7 +2514,7 @@ RETURNING
 ]
 ```
 
-ok 141 - Xodel:delete(cond?, op?, dval?) create with foreign model returning all
+ok 127 - Xodel:delete(cond?, op?, dval?) create with foreign model returning all
 ## insert from delete returning
 ```sql
 SELECT
@@ -2874,13 +2566,13 @@ RETURNING
 ]
 ```
 
-ok 142 - Xodel:delete(cond?, op?, dval?) insert from delete returning
+ok 128 - Xodel:delete(cond?, op?, dval?) insert from delete returning
 # field stuff
 ## table field validate
-ok 143 - field stuff table field validate
+ok 129 - field stuff table field validate
 ## array field validate
-ok 144 - field stuff array field validate
+ok 130 - field stuff array field validate
 ## alioss_list
-ok 145 - field stuff alioss_list
-1..145
+ok 131 - field stuff alioss_list
+1..131
 
