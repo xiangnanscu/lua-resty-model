@@ -5,6 +5,7 @@ local array = require "resty.array"
 local migrate = require "resty.migrate"
 local Model = require("./lib/resty/model")
 local format = string.format
+local Q = Model.Q
 
 -- https://github.com/lunarmodules/busted/tree/master/busted/outputHandlers
 local function md(lang, s)
@@ -128,7 +129,7 @@ models = crate_table_from_models()
 utils.repr.hide_address = true
 local function eval(s, ctx)
   md('lua', s)
-  local res = { utils.eval(s, utils.dict(models, { models = models }, ctx)) }
+  local res = { utils.eval(s, utils.dict(models, { models = models, Q = Q }, ctx)) }
   local ins = res[1]
   if not Model:is_instance(ins) then
     md('js', utils.repr(ins))
@@ -431,22 +432,6 @@ mdesc("Xodel.where", function()
     local res = eval [[ usr:select('username','id'):where{id=1}:exec() ]]
     assert.are.same(res, { { id = 1, username = 'u1' } })
   end)
-  mit("where or", function()
-    local res = eval [[ usr:select('id'):where{id=1}:or_where{id=2}:order('id'):flat() ]]
-    assert.are.same(res, { 1, 2 })
-  end)
-  mit("and where or", function()
-    local res = eval [[ usr:select('id'):where{id=1}:where_or{id=2, username='u3'}:order('id'):flat() ]]
-    assert.are.same(res, {})
-  end)
-  mit("or where and", function()
-    local res = eval [[ usr:select('id'):where{id=1}:or_where{id=2, username='u2'}:order('id'):flat() ]]
-    assert.are.same(res, { 1, 2, })
-  end)
-  mit("or where or", function()
-    local res = eval [[ usr:select('id'):where{id=1}:or_where_or{id=2, username='u3'}:order('id'):flat() ]]
-    assert.are.same(res, { 1, 2, 3 })
-  end)
   mit("where condition by 2 args", function()
     local res = eval [[ usr:select('id'):where('id', 3):exec() ]]
     assert.are.same(res, { { id = 3 } })
@@ -454,42 +439,6 @@ mdesc("Xodel.where", function()
   mit("where condition by 3 args", function()
     local res = eval [[ usr:select('id'):where('id', '<',  3):flat() ]]
     assert.are.same(res, { 1, 2 })
-  end)
-  mit("where exists", function()
-    local statement = eval [[usr:where_exists(usr:where{id=1})]]
-    assert.are.same(statement, 'SELECT * FROM usr T WHERE EXISTS (SELECT * FROM usr T WHERE T.id = 1)')
-  end)
-  mit("where null", function()
-    local statement = eval [[usr:where_null("username")]]
-    assert.are.same(statement, 'SELECT * FROM usr T WHERE T.username IS NULL')
-  end)
-  mit("where in", function()
-    local statement = eval [[usr:where_in("id", {1,2,3})]]
-    assert.are.same(statement, 'SELECT * FROM usr T WHERE (T.id) IN (1, 2, 3)')
-  end)
-  mit("where between", function()
-    local statement = eval [[usr:where_between("id", 2, 4)]]
-    assert.are.same(statement, 'SELECT * FROM usr T WHERE T.id BETWEEN 2 AND 4')
-  end)
-  mit("where not", function()
-    local statement = eval [[usr:where_not("username", "foo")]]
-    assert.are.same(statement, "SELECT * FROM usr T WHERE NOT (T.username = 'foo')")
-  end)
-  mit("where not null", function()
-    local statement = eval [[usr:where_not_null("username")]]
-    assert.are.same(statement, 'SELECT * FROM usr T WHERE T.username IS NOT NULL')
-  end)
-  mit("where not in", function()
-    local statement = eval [[usr:where_not_in("id", {1,2,3})]]
-    assert.are.same(statement, 'SELECT * FROM usr T WHERE (T.id) NOT IN (1, 2, 3)')
-  end)
-  mit("where not between", function()
-    local statement = eval [[usr:where_not_between("id", 2, 4)]]
-    assert.are.same(statement, 'SELECT * FROM usr T WHERE T.id NOT BETWEEN 2 AND 4')
-  end)
-  mit("where not exists", function()
-    local statement = eval [[usr:where_not_exists(usr:where{id=1})]]
-    assert.are.same(statement, 'SELECT * FROM usr T WHERE NOT EXISTS (SELECT * FROM usr T WHERE T.id = 1)')
   end)
   local ops = { lt = "<", lte = "<=", gt = ">", gte = ">=", ne = "<>", eq = "=" }
   for key, op in pairs(ops) do
@@ -638,22 +587,13 @@ describe("Xodel api:", function()
     -- WHERE creator=1 OR target=1
     -- ORDER BY CASE WHEN creator=1 THEN target ELSE creator END, -id;
     local res = models.message:distinct_on(sql.token 'CASE WHEN creator=1 THEN target ELSE creator END')
-        :where_or { creator = 1, target = 1 }
+        :where(Q { creator = 1 } / Q { target = 1 })
         :select('creator', 'target', 'content'):order("-id"):execr()
     assert.are.same(res, {
       { creator = 2, target = 1, content = 'c123' },
       { creator = 1, target = 3, content = 'c134' } })
   end)
-  mit("where by exp", function()
-    local res = models.message:where_exp { 'or',
-      { 'and', { creator = 1, target = 2 } },
-      { 'and', { creator = 2, target = 1 } } }:select('creator', 'target'):execr()
-    local res2 = models.message:where_exp { 'not',
-      { 'or', { creator = 1, target = 2 } },
-      { 'or', { creator = 2, target = 1 } } }:select('creator', 'target'):execr()
-    assert.are.same(res, { { creator = 1, target = 2 }, { creator = 1, target = 2 }, { creator = 2, target = 1 } })
-    assert.are.same(res2, {})
-  end)
+
   mit("go crazy with where clause with recursive join", function()
     local message = models.message:save { creator = 1, target = 2, content = 'crazy' }
     local p = models.profile:get { id = message.creator }

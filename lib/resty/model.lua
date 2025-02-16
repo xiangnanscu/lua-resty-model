@@ -433,6 +433,100 @@ local function assemble_sql(opts)
   end
 end
 
+--TODO: support filter, COALESCE(return first non-null value)
+local Func = { __IS_FUNCTION__ = true }
+Func.__index = Func
+Func.__call = function(self, column)
+  if type(column) == 'string' then
+    return self:new { column = column }
+  else
+    return self:new { column = column[1], filter = column.filter }
+  end
+end
+function Func:class(args)
+  args.__index = args
+  return setmetatable(args, self)
+end
+
+function Func:new(args)
+  return setmetatable(args or {}, self)
+end
+
+local Count = Func:class { name = "COUNT", suffix = "_count" }
+local Sum = Func:class { name = "SUM", suffix = "_sum" }
+local Avg = Func:class { name = "AVG", suffix = "_avg" }
+local Max = Func:class { name = "MAX", suffix = "_max" }
+local Min = Func:class { name = "MIN", suffix = "_min" }
+
+-- https://docs.djangoproject.com/en/dev/ref/models/expressions/#django.db.models.F
+---@class FClass
+---@field column string
+---@field resolved_column string
+---@field operator string
+---@field left FClass
+---@field right FClass
+local F = setmetatable({ __IS_FIELD_BUILDER__ = true }, {
+  __call = function(self, column)
+    return setmetatable({ column = column }, self)
+  end
+})
+F.__index = F
+function F:new(args)
+  return setmetatable(args or {}, F)
+end
+
+F.__tostring = function(self)
+  if self.column then
+    return self.column
+  else
+    return string.format("(%s %s %s)", self.left, self.operator, self.right)
+  end
+end
+F.__add = function(self, other)
+  return setmetatable({ left = self, right = other, operator = "+" }, F)
+end
+F.__sub = function(self, other)
+  return setmetatable({ left = self, right = other, operator = "-" }, F)
+end
+F.__mul = function(self, other)
+  return setmetatable({ left = self, right = other, operator = "*" }, F)
+end
+F.__div = function(self, other)
+  return setmetatable({ left = self, right = other, operator = "/" }, F)
+end
+F.__mod = function(self, other)
+  return setmetatable({ left = self, right = other, operator = "%" }, F)
+end
+F.__pow = function(self, other)
+  return setmetatable({ left = self, right = other, operator = "^" }, F)
+end
+F.__concat = function(self, other)
+  return setmetatable({ left = self, right = other, operator = "||" }, F)
+end
+
+-- https://docs.djangoproject.com/en/dev/ref/models/querysets/#django.db.models.Q
+---@class QClass
+---@field cond table
+---@field logic string
+---@field left? QClass
+---@field right? QClass
+local Q = setmetatable({ __IS_LOGICAL_BUILDER__ = true }, {
+  __call = function(self, cond_table)
+    return setmetatable({ cond = cond_table, logic = "AND" }, self)
+  end
+})
+Q.__index = Q
+Q.__mul = function(self, other)
+  return setmetatable({ left = self, right = other, logic = "AND" }, Q)
+end
+Q.__div = function(self, other)
+  return setmetatable({ left = self, right = other, logic = "OR" }, Q)
+end
+Q.__unm = function(self)
+  return setmetatable({ left = self, logic = "NOT" }, Q)
+end
+
+
 local SqlMeta = {}
 
 ---@param self Sql
@@ -482,6 +576,7 @@ end
 ---@field private _intersect_all?  Sql | string
 ---@field private _join_type?  string
 ---@field private _join_args?  table[]
+---@field private _group_args? string[]
 ---@field private _join_models?  Xodel[]
 ---@field private _join_alias?  string[]
 ---@field private _prepend?  (Sql|string)[]
@@ -817,7 +912,7 @@ function Sql:_base_join(join_type, join_args, ...)
       error("invalid argument, it must be a pair: { model_class, condition_callback }")
     end
   else
-    local fk = self.model.foreign_keys[join_args]
+    local fk = self.model.foreignkey_fields[join_args]
     if fk then
       return self:_base_join("INNER", fk.reference, function(ctx)
         return format("%s = %s",
@@ -1158,20 +1253,21 @@ end
 
 ---get select token
 ---@private
+---@param suffix_as boolean whether to add AS suffix to the result
 ---@param a (fun(ctx:table):string|table)|DBValue
 ---@param b? DBValue
 ---@param ... DBValue
 ---@return string
-function Sql:_get_select_token(a, b, ...)
+function Sql:_get_column_tokens(suffix_as, a, b, ...)
   if b == nil then
     if type(a) == "table" then
       local tokens = {}
       for i = 1, #a do
-        tokens[i] = self:_get_select_column(a[i])
+        tokens[i] = self:_get_column_token(a[i], suffix_as)
       end
       return as_token(tokens)
     elseif type(a) == "string" then
-      return self:_get_select_column(a) --[[@as string]]
+      return self:_get_column_token(a, suffix_as) --[[@as string]]
     elseif type(a) == 'function' then
       ---@cast a -DBValue
       local select_args = a(self:_create_context())
@@ -1188,7 +1284,7 @@ function Sql:_get_select_token(a, b, ...)
   else
     local res = {}
     for i, name in ipairs { a, b, ... } do
-      res[#res + 1] = as_token(self:_get_select_column(name))
+      res[#res + 1] = as_token(self:_get_column_token(name, suffix_as))
     end
     return concat(res, ", ")
   end
@@ -1302,7 +1398,7 @@ function Sql:_get_upsert_token(row, key, columns)
   local insert_token = format("(%s) VALUES %s ON CONFLICT (%s)",
     as_token(insert_columns),
     as_literal(values_list),
-    get_list_tokens(key)) -- self:_get_select_token
+    get_list_tokens(key))
   if (type(key) == "table" and #key == #insert_columns) or #insert_columns == 1 then
     return format("%s DO NOTHING", insert_token)
   else
@@ -1379,7 +1475,7 @@ function Sql:align(rows, key, columns)
   upsert_query:returning(key)
   ---@diagnostic disable-next-line: param-type-mismatch
   Sql._base_upsert(upsert_query, rows, key, columns)
-  self:with("U", upsert_query):where_not_in(key, Sql:new { table_name = 'U' }:_base_select(key)):delete()
+  self:with("U", upsert_query):where(key, "NOT IN", Sql:new { table_name = 'U' }:_base_select(key)):delete()
   return self
 end
 
@@ -1389,11 +1485,11 @@ end
 ---@param columns string[]
 ---@return string
 function Sql:_get_upsert_query_token(rows, key, columns)
-  local columns_token = self:_get_select_token(columns)
+  local columns_token = self:_get_column_tokens(false, columns)
   local insert_token = format("(%s) %s ON CONFLICT (%s)",
     columns_token,
     rows:statement(),
-    self:_get_select_token(key))
+    self:_get_column_tokens(false, key))
   if (type(key) == "table" and #key == #columns) or #columns == 1 then
     return format("%s DO NOTHING", insert_token)
   else
@@ -1467,12 +1563,22 @@ end
 
 ---@private
 ---@param key DBValue
+---@param suffix_as? boolean whether to add AS suffix to the result
 ---@return DBValue
-function Sql:_get_select_column(key)
+function Sql:_get_column_token(key, suffix_as)
   if type(key) ~= 'string' then
     return key
+  elseif key == '*' then
+    return key
+  elseif self.model.fields[key] then
+    return (self._as or self.model.table_name) .. '.' .. key
   else
-    return (self:_parse_column(key, true))
+    local column = self:_parse_column(key)
+    if suffix_as then
+      return column .. ' AS ' .. key
+    else
+      return column
+    end
   end
 end
 
@@ -1508,6 +1614,22 @@ function Sql:_get_condition_token_from_table(kwargs, logic)
 end
 
 ---@private
+---@param kwargs {[string]:any}
+---@param logic? string
+---@return string
+function Sql:_get_having_condition_token_from_table(kwargs, logic)
+  local tokens = {}
+  for k, value in pairs(kwargs) do
+    tokens[#tokens + 1] = self:_get_expr_token(value, self:_parse_having_column(k))
+  end
+  if logic == nil then
+    return concat(tokens, " AND ")
+  else
+    return concat(tokens, " " .. logic .. " ")
+  end
+end
+
+---@private
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? DBValue
 ---@param dval? DBValue
@@ -1521,10 +1643,31 @@ function Sql:_get_condition_token(cond, op, dval)
     end
   elseif dval == nil then
     ---@cast cond string
-    return format("%s = %s", self:_get_column(cond), as_literal(op))
+    return format("%s = %s", self:_parse_column(cond), as_literal(op))
   else
     ---@cast cond string
-    return format("%s %s %s", self:_get_column(cond), op, as_literal(dval))
+    return format("%s %s %s", self:_parse_column(cond), op, as_literal(dval))
+  end
+end
+
+---@private
+---@param cond table|string|fun(ctx:table):string
+---@param op? DBValue
+---@param dval? DBValue
+---@return string
+function Sql:_get_having_condition_token(cond, op, dval)
+  if op == nil then
+    if type(cond) == 'table' then
+      return Sql._get_having_condition_token_from_table(self, cond)
+    else
+      return Sql._base_get_condition_token(self, cond)
+    end
+  elseif dval == nil then
+    ---@cast cond string
+    return format("%s = %s", self:_get_having_column(cond), as_literal(op))
+  else
+    ---@cast cond string
+    return format("%s %s %s", self:_get_having_column(cond), op, as_literal(dval))
   end
 end
 
@@ -1811,7 +1954,7 @@ end
 ---@param ...? DBValue
 ---@return self
 function Sql:select(a, b, ...)
-  local s = self:_get_select_token(a, b, ...)
+  local s = self:_get_column_tokens(true, a, b, ...)
   if s == "" then
   elseif not self._select then
     self._select = s
@@ -1826,7 +1969,7 @@ end
 ---@param alias string
 ---@return self
 function Sql:select_as(key, alias)
-  local col = self:_parse_column(key, true, true) .. ' AS ' .. alias
+  local col = self:_parse_column(key) .. ' AS ' .. alias
   if not self._select then
     self._select = col
   else
@@ -1871,7 +2014,7 @@ end
 ---@param ...? DBValue
 ---@return self
 function Sql:returning(a, b, ...)
-  local s = self:_get_select_token(a, b, ...)
+  local s = self:_get_column_tokens(true, a, b, ...)
   if s == "" then
   elseif not self._returning then
     self._returning = s
@@ -1897,6 +2040,23 @@ function Sql:returning_literal(a, b, ...)
   self:_keep_args("_returning_literal_args", a, b, ...)
   return self
 end
+
+---@param a string
+---@param ... string
+function Sql:group(a, ...)
+  local s = self:_get_column_tokens(false, a, ...)
+  if s == "" then
+  elseif not self._group then
+    self._group = s
+  else
+    self._group = self._group .. ", " .. s
+  end
+  self:select(a, ...)
+  self:_keep_args("_group_args", a, ...)
+  return self
+end
+
+function Sql:group_by(...) return self:group(...) end
 
 ---@param key DBValue
 ---@return DBValue
@@ -2061,258 +2221,47 @@ function Sql:offset(n)
   return self
 end
 
+---@param q QClass
+---@return string
+function Sql:_parse_Q(q)
+  if q.logic == "NOT" then
+    return format("NOT (%s)", self:_parse_Q(q.left))
+  elseif q.left and q.right then
+    local left_token = self:_parse_Q(q.left)
+    local right_token = self:_parse_Q(q.right)
+    return format("(%s) %s (%s)", left_token, q.logic, right_token)
+  else
+    return self:_get_condition_token_from_table(q.cond, q.logic)
+  end
+end
+
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
 ---@return self
 function Sql:where(cond, op, dval)
-  local where_token = self:_get_condition_token(cond, op, dval)
-  return self:_handle_where_token(where_token, "(%s) AND (%s)")
-end
-
-local logic_priority = { ['init'] = 0, ['or'] = 1, ['and'] = 2, ['not'] = 3, ['OR'] = 1, ['AND'] = 2, ['NOT'] = 3 }
-
----@private
----@param cond table
----@param father_op string
----@return string
-function Sql:_parse_where_exp(cond, father_op)
-  local logic_op = cond[1]
-  local tokens = {}
-  for i = 2, #cond do
-    local value = cond[i]
-    if value[1] then
-      tokens[#tokens + 1] = self:_parse_where_exp(value, logic_op)
+  if type(cond) == 'table' and cond.__IS_LOGICAL_BUILDER__ then
+    local where_token = self:_parse_Q(cond)
+    if self._where == nil then
+      self._where = where_token
     else
-      for k, v in pairs(value) do
-        tokens[#tokens + 1] = self:_get_expr_token(v, self:_parse_column(k))
-      end
+      self._where = format("(%s) AND (%s)", self._where, where_token)
     end
-  end
-  local where_token
-  if logic_op == 'not' or logic_op == 'NOT' then
-    where_token = 'NOT ' .. concat(tokens, " AND NOT ")
+    return self
   else
-    where_token = concat(tokens, format(" %s ", logic_op))
+    local where_token = self:_get_condition_token(cond, op, dval)
+    return self:_handle_where_token(where_token, "(%s) AND (%s)")
   end
-
-  if logic_priority[logic_op] < logic_priority[father_op] then
-    return "(" .. where_token .. ")"
-  else
-    return where_token
-  end
-end
-
----@param cond table
----@return self
-function Sql:where_exp(cond)
-  local where_token = self:_parse_where_exp(cond, 'init')
-  return self:_handle_where_token(where_token, "(%s) AND (%s)")
 end
 
 ---@param cond table|string|fun(ctx:table):string
----@param op? string
+---@param op? DBValue
 ---@param dval? DBValue
----@return self
-function Sql:where_or(cond, op, dval)
-  local where_token = self:_get_condition_token_or(cond, op, dval)
-  return self:_handle_where_token(where_token, "(%s) AND (%s)")
-end
-
----@param cond table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
----@return self
-function Sql:or_where_or(cond, op, dval)
-  local where_token = self:_get_condition_token_or(cond, op, dval)
-  return self:_handle_where_token(where_token, "%s OR %s")
-end
-
----@param cond table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
----@return self
-function Sql:where_not(cond, op, dval)
-  local where_token = self:_get_condition_token_not(cond, op, dval)
-  return self:_handle_where_token(where_token, "(%s) AND (%s)")
-end
-
----@param cond table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
----@return self
-function Sql:or_where(cond, op, dval)
-  local where_token = self:_get_condition_token(cond, op, dval)
-  return self:_handle_where_token(where_token, "%s OR %s")
-end
-
----@param cond table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
----@return self
-function Sql:or_where_not(cond, op, dval)
-  local where_token = self:_get_condition_token_not(cond, op, dval)
-  return self:_handle_where_token(where_token, "%s OR %s")
-end
-
----@param builder Sql|string
----@return self
-function Sql:where_exists(builder)
-  if self._where then
-    self._where = format("(%s) AND EXISTS (%s)", self._where, builder)
+function Sql:having(cond, op, dval)
+  if self._having then
+    self._having = format("(%s) AND (%s)", self._having, self:_get_condition_token(cond, op, dval))
   else
-    self._where = format("EXISTS (%s)", builder)
-  end
-  return self
-end
-
----@param builder Sql|string
----@return self
-function Sql:where_not_exists(builder)
-  if self._where then
-    self._where = format("(%s) AND NOT EXISTS (%s)", self._where, builder)
-  else
-    self._where = format("NOT EXISTS (%s)", builder)
-  end
-  return self
-end
-
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:where_in(cols, range)
-  if type(cols) == "string" then
-    return Sql._base_where_in(self, self:_get_column(cols), range)
-  else
-    local res = {}
-    for i = 1, #cols do
-      res[i] = self:_get_column(cols[i])
-    end
-    return Sql._base_where_in(self, res, range)
-  end
-end
-
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:where_not_in(cols, range)
-  if type(cols) == "string" then
-    return Sql._base_where_not_in(self, self:_get_column(cols), range)
-  else
-    local res = {}
-    for i = 1, #cols do
-      res[i] = self:_get_column(cols[i])
-    end
-    return Sql._base_where_not_in(self, res, range)
-  end
-end
-
----@param col string
----@return self
-function Sql:where_null(col)
-  return Sql._base_where_null(self, self:_get_column(col))
-end
-
----@param col string
----@return self
-function Sql:where_not_null(col)
-  return Sql._base_where_not_null(self, self:_get_column(col))
-end
-
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:where_between(col, low, high)
-  return Sql._base_where_between(self, self:_get_column(col), low, high)
-end
-
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:where_not_between(col, low, high)
-  return Sql._base_where_not_between(self, self:_get_column(col), low, high)
-end
-
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:or_where_in(cols, range)
-  if type(cols) == "string" then
-    cols = self:_get_column(cols)
-    return Sql._base_or_where_in(self, cols, range)
-  else
-    local res = {}
-    for i = 1, #cols do
-      res[i] = self:_get_column(cols[i])
-    end
-    return Sql._base_or_where_in(self, res, range)
-  end
-end
-
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:or_where_not_in(cols, range)
-  if type(cols) == "string" then
-    cols = self:_get_column(cols)
-    return Sql._base_or_where_not_in(self, cols, range)
-  else
-    local res = {}
-    for i = 1, #cols do
-      res[i] = self:_get_column(cols[i])
-    end
-    return Sql._base_or_where_not_in(self, res, range)
-  end
-end
-
----@param col string
----@return self
-function Sql:or_where_null(col)
-  return Sql._base_or_where_null(self, self:_get_column(col))
-end
-
----@param col string
----@return self
-function Sql:or_where_not_null(col)
-  return Sql._base_or_where_not_null(self, self:_get_column(col))
-end
-
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:or_where_between(col, low, high)
-  return Sql._base_or_where_between(self, self:_get_column(col), low, high)
-end
-
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:or_where_not_between(col, low, high)
-  return Sql._base_or_where_not_between(self, self:_get_column(col), low, high)
-end
-
----@param builder Sql
----@return self
-function Sql:or_where_exists(builder)
-  if self._where then
-    self._where = format("%s OR EXISTS (%s)", self._where, builder)
-  else
-    self._where = format("EXISTS (%s)", builder)
-  end
-  return self
-end
-
----@param builder Sql
----@return self
-function Sql:or_where_not_exists(builder)
-  if self._where then
-    self._where = format("%s OR NOT EXISTS (%s)", self._where, builder)
-  else
-    self._where = format("NOT EXISTS (%s)", builder)
+    self._having = self:_get_condition_token(cond, op, dval)
   end
   return self
 end
@@ -2322,7 +2271,7 @@ end
 ---@param ...? DBValue
 ---@return self
 function Sql:distinct_on(a, b, ...)
-  local s = self:_get_select_token(a, b, ...)
+  local s = self:_get_column_tokens(false, a, b, ...)
   self._distinct_on = s
   self._order = s
   return self
@@ -2370,7 +2319,7 @@ function Sql:_get_cte_values_literal(rows, columns, no_check)
   rows = self:_rows_to_array(rows, columns)
   local first_row = rows[1]
   for i, col in ipairs(columns) do
-    local field = self:_find_field_model(col)
+    local field = self.model.fields[col]
     if field then
       first_row[i] = format("%s::%s", as_literal(first_row[i]), field.db_type)
     elseif no_check then
@@ -2388,140 +2337,330 @@ function Sql:_get_cte_values_literal(rows, columns, no_check)
   return res, columns
 end
 
----@param col string
----@return AnyField?, Xodel?,string?
-function Sql:_find_field_model(col)
-  local field = self.model.fields[col]
-  if field then
-    return field, self.model, self._as or self.table_name
+function Sql:_resolve_reversed_column(key, is_aggregate)
+  -- Count('entry') or where {entry=1}
+  local reversed_fk = self.model.reversed_fields[key] -- entry
+  if not reversed_fk then
+    return
+  end
+  local ref_column = reversed_fk.reference_column -- blog_id
+  local join_type = is_aggregate and "LEFT" or self._join_type or "INNER"
+  local prefix = self:_handle_manual_join(
+    join_type,
+    { reversed_fk.reference }, -- Entry
+    function(ctx)
+      return format("%s = %s", ctx[1][self.model.primary_key], ctx[#ctx][ref_column])
+    end,
+    key)
+  return prefix .. "." .. reversed_fk.reference.primary_key
+  -- if not is_aggregate then
+  --   return prefix .. "." .. ref_column
+  -- else
+  --   return prefix .. "." .. reversed_fk.reference.primary_key
+  -- end
+end
+
+local _debug = 0
+local function debug(...)
+  if _debug == 1 then
+    loger(...)
   end
 end
 
----@param key string user input
----@param as_select? boolean return one string (column with prefix) if true, otherwise return column, operator and
----@param disable_alias? boolean whether disable alias token
----@return string, string?, string?, Xodel?
----@overload fun(self, key: string, as_select?: boolean, disable_alias?: boolean): string, string, string, Xodel
-function Sql:_parse_column(key, as_select, disable_alias)
-  --TODO: support json field searching like django:
-  -- https://docs.djangoproject.com/en/4.2/topics/db/queries/#querying-jsonfield
-  -- https://www.postgresql.org/docs/current/functions-json.html
-  local a, b = key:find("__", 1, true)
-  if not a then
-    if as_select then
-      return self:_get_column(key)
-    else
-      return self:_get_column(key), "eq", key, self.model
-    end
-  end
-  local token = key:sub(1, a - 1)
-  local field, model, prefix = self:_find_field_model(token)
-  if not field then
-    error(format("%s is not a valid field name for %s", token, self.table_name))
-  end
-  ---@cast model Xodel
-  local i, fk_model, join_key, op
-  local field_name = token
+-- https://docs.djangoproject.com/en/5.1/topics/db/queries/#containment-and-key-lookups
+local json_operators = {
+  eq = true,
+  has_key = true,
+  has_keys = true,
+  contains = true,
+  contained_by = true,
+  has_any_keys = true,
+}
+
+-- Blog.objects.filter(entry__headline='a')
+---@param key string column name
+---@param context? string context: select/group_by/F, where/Q, having, aggregate
+---@return string resolved_column
+---@return string operator
+function Sql:_parse_column(key, context)
+  local i = 1
+  local model = self.model
+  local op = 'eq'
+  local a, b, token, join_key, prefix, column, final_column, last_field, last_token, last_model, json_keys
   while true do
-    -- get next token seprated by __
-    i = b + 1
     a, b = key:find("__", i, true)
     if not a then
       token = key:sub(i)
     else
       token = key:sub(i, a - 1)
     end
-    if field.reference then
-      fk_model = field.reference
-      local fk_model_field = fk_model.fields[token]
-      if not fk_model_field then
-        -- fk__eq, compare on fk value directly
-        op = token
-        break
-      elseif token == field.reference_column then
-        -- fk__id, unnecessary suffix, ignore
-        break
-      else
-        -- fk__name, need inner join: field_name -> fk, name -> token
-        if not join_key then
-          -- prefix with field_name because fk_model can be referenced multiple times
-          join_key = field_name
+    debug('token', token, self.model.table_name)
+    -- column might be changed in the loop
+    local field = model.fields[token]
+    if field then
+      -- 1. fields from model itself, highest priority
+      if not last_field then
+        -- 1.1 first column, the most case
+        debug('1.1', model.class_name, token)
+        column = token
+        prefix = self._as or model.table_name
+      elseif json_keys then
+        -- 1.2 json field searh
+        -- https://docs.djangoproject.com/en/4.2/topics/db/queries/#querying-jsonfield
+        -- the json attribute happens to be included in fields, but we treat it as a json attribute
+        debug('1.2', model.class_name, token)
+        if json_operators[token] then
+          op = token
         else
-          join_key = join_key .. "__" .. field_name
+          json_keys[#json_keys + 1] = token
+        end
+      elseif last_model.reversed_fields[last_token] then
+        -- 1.3 field in a reversed model: Blog:where{entry__rating}
+        -- already join in previous loop, do nothing
+        debug('1.3', model.class_name, token)
+        column = token
+      elseif last_field.reference then
+        -- 1.3 foreignkey model's field, may need a join
+        if token == last_field.reference_column then
+          -- 1.3.1 blog_id__id => redundant foreignkey suffix , rollback to last_token
+          debug('1.3.1', model.class_name, token)
+          column = last_token
+          token = last_token -- in case of blog_id__id__gt
+        else
+          -- 1.3.2 blog_id__name => need a join
+          debug('1.3.2', model.class_name, last_token or '/', token)
+          column = token
+          if not join_key then
+            -- prefix with foreignkey name because a model can be referenced multiple times by the same model
+            -- such as: Entry:where{blog_id__name='Tom', reposted_blog_id__name='Kate'}
+            join_key = last_token
+          else
+            join_key = join_key .. "__" .. last_token
+          end
+          if not self._join_keys then
+            self._join_keys = {}
+          end
+          prefix = self._join_keys[join_key]
+          if not prefix then
+            local function join_cond_cb(ctx)
+              local left_model_index
+              if last_token == join_key then
+                -- first join, select first model
+                left_model_index = 1
+              else
+                -- otherwise the second from the last
+                left_model_index = #ctx - 1
+              end
+              return format("%s = %s", ctx[left_model_index][last_token], ctx[#ctx][last_field.reference_column])
+            end
+            prefix = self:_handle_manual_join(self._join_type or "INNER", { model }, join_cond_cb, join_key)
+          end
+        end
+      else
+        error("1.5 invalid field name: " .. token)
+      end
+      last_model = model
+      if field.reference then
+        model = field.reference
+      end
+      if field.model then
+        json_keys = {}
+      end
+    elseif self._annotate and self._annotate[token] then
+      -- 2. name that's registered in annotate:
+      -- Blog:annotate{cnt=Count('entry')}:where{cnt__lt=2}:group_by{'name'}
+      -- return expression like: Count('entry') or F('price') * 10
+      debug('2', model.class_name, token)
+      final_column = self._annotate[token]
+    elseif json_keys then
+      -- 3. attributes from a json field
+      -- Blog.where{data__a='x'} => WHERE ("example_blog"."data" -> a) = '"x"'
+      -- Blog.where{data__a__contains='x'} => WHERE ("example_blog"."data" -> a) @> '"x"'
+      debug('3', model.class_name, token)
+      if json_operators[token] then
+        op = token
+      else
+        json_keys[#json_keys + 1] = token
+      end
+    else
+      -- Blog:where{entry__rating=1}
+      local reversed_field = model.reversed_fields[token] -- Entry.blog_id, Blog:where{entry=1}
+      if reversed_field then
+        -- 4. reversed foreignkey, join from current loop
+        -- token = entry, reversed_name = blog_id
+        debug('4', model.class_name, token)
+        local reversed_model = reversed_field:get_model() -- Entry
+        -- loger(token, model.table_name, reversed_model.table_name, reversed_field.name)
+        if not join_key then
+          join_key = token
+        else
+          join_key = join_key .. "__" .. token
         end
         if not self._join_keys then
           self._join_keys = {}
         end
-        local alias = self._join_keys[join_key]
-        if not alias then
-          prefix = self:_handle_manual_join(
-            self._join_type or "INNER",
-            { fk_model },
-            function(ctx)
-              local left_model_index = field_name == join_key and 1 or #ctx - 1
-              return format("%s = %s", ctx[left_model_index][field_name], ctx[#ctx][field.reference_column])
-            end,
-            join_key)
-        else
-          prefix = alias
+        prefix = self._join_keys[join_key]
+        if not prefix then
+          local function join_cond_cb(ctx)
+            local left_model_index
+            if token == join_key then
+              left_model_index = 1
+            else
+              left_model_index = #ctx - 1
+            end
+            return format("%s = %s",
+              ctx[left_model_index][reversed_field.reference_column],
+              ctx[#ctx][reversed_field.name])
+          end
+          local join_type
+          if context == 'aggregate' then
+            join_type = "LEFT"
+          else
+            join_type = self._join_type or "INNER"
+          end
+          prefix = self:_handle_manual_join(join_type, { reversed_model }, join_cond_cb, join_key)
         end
-        field = fk_model_field
-        model = fk_model --[[@as Xodel]]
-        field_name = token
+        column = reversed_model.primary_key
+        field = reversed_field
+        last_model = model
+        model = reversed_model
+      elseif last_token then
+        -- 5. operator, write back
+        debug('5', model.class_name, token)
+        op = token
+        column = last_token
+        break
+      else
+        error("parse column error, invalid name: " .. token)
       end
-    elseif field.model then
-      -- jsonb field: persons__sfzh='xxx' => persons @> '[{"sfzh":"xxx"}]'
-      local table_field = field.model.fields[token]
-      if not table_field then
-        error(format("invalid table field name %s of %s", token, field.name))
-      end
-      op = function(value)
-        if type(value) == 'string' and value:find("'", 1, true) then
-          value = value:gsub("'", "''")
-        end
-        return format([[@> '[{"%s":%s}]']], token, encode(value))
-      end
-      break
-    else
-      -- non_fk__lt, non_fk__gt, etc
-      op = token
-      break
     end
     if not a then
       break
     end
+    last_token = token
+    last_field = field
+    i = b + 1
   end
-  local final_key = prefix .. "." .. field_name
-  if as_select and not disable_alias then
-    -- ensure select("fk__name") will return { fk__name= 'foo'}
-    -- in case of error like Profile:select('usr_id__eq')
-    assert(fk_model, format("should contains foreignkey field name: %s", key))
-    assert(op == nil, format("invalid field name: %s", op))
-    return final_key .. ' AS ' .. key
-  else
-    return final_key, op or 'eq', field_name, model
+  if json_keys then
+    if #json_keys > 0 then
+      final_column = format("%s #> [%s]", prefix .. '.' .. column, as_literal_without_brackets(json_keys))
+    end
+    if op == 'contains' then
+      op = 'json_contains'
+    elseif op == 'eq' then
+      op = 'json_eq'
+    end
   end
+  return final_column or (prefix .. '.' .. column), op
+end
+
+---@param key string column
+---@return string, string
+function Sql:_parse_having_column(key)
+  local a, b = key:find("__", 1, true)
+  if not a then
+    return self:_get_having_column(key), "eq"
+  end
+  local token = key:sub(1, a - 1)
+  local op = key:sub(b + 1)
+  return self:_get_having_column(token), op
 end
 
 ---@param key string
 ---@return string
-function Sql:_get_column(key)
-  if self.model.fields[key] then
-    if self._as then
-      return self._as .. '.' .. key
-    else
-      return self.model.column_cache[key]
+function Sql:_get_having_column(key)
+  if self._annotate then
+    local res = self._annotate[key]
+    if res ~= nil then
+      return res
     end
+  end
+  error(format("invalid field name for having: '%s'", key))
+end
+
+---@param key string single column name, exclude operator or foreign key
+---@param is_having? boolean whether the column is used in having clause
+---@return string?
+function Sql:_get_column(key, is_having)
+  if self.model.fields[key] then
+    return (self._as or self.table_name) .. '.' .. key
+    -- if self._as then
+    --   return self._as .. '.' .. key
+    -- else
+    --   return self.model.column_cache[key]
+    -- end
+  end
+  -- Book.objects.values('name').annotate(price_total=Sum('price')).filter(price_total=1)
+  if self._annotate and self._annotate[key] then
+    -- expression like: Count('entry') or F('price') * 10
+    return self._annotate[key]
+  end
+  local reversed_fk = self.model.reversed_fields[key] -- key: entry
+  if reversed_fk and self._join_keys then
+    local prefix = self._join_keys[key]
+    if not prefix then
+      return
+    end
+    -- TODO: 反向关联的column是不是只有这种情形
+    return prefix .. "." .. reversed_fk.reference.primary_key
+    -- local ref_column = reversed_fk.reference_column
+    -- if not is_having then
+    --   return prefix .. "." .. ref_column -- blog_id
+    -- else
+    --   -- Blog.objects.values('name').annotate(cnt=Count('entry')).filter(cnt=1)
+    --   return prefix .. "." .. reversed_fk.reference.primary_key
+    -- end
   end
   if key == '*' then
     return '*'
   end
   -- local matched = match(key, '^([\\w_]+)[.]([\\w_]+)$', 'josui')
-  local table_name = key:match('^([%w_]+)[.][%w_]+$')
-  if table_name then
-    return key
+  -- local table_name = key:match('^([%w_]+)[.][%w_]+$')
+  -- if table_name then
+  --   return key
+  -- end
+end
+
+---@param f FClass|DBValue
+---@return string
+function Sql:_resolve_field_builder(f)
+  if type(f) ~= 'table' then
+    return as_literal(f)
+  elseif f.column then
+    return (self:_parse_column(f.column))
+  else
+    return format("(%s %s %s)", self:_resolve_field_builder(f.left), f.operator, self:_resolve_field_builder(f.right))
   end
-  error(format("invalid field name: '%s'", key))
+end
+
+---@param kwargs {[string]:table}
+function Sql:annotate(kwargs)
+  if not self._annotate then
+    self._annotate = {}
+  end
+  for alias, func in pairs(kwargs) do
+    if type(alias) == 'number' then
+      alias = func.column .. func.suffix
+    end
+    if self.model.fields[alias] then
+      error(format("annotate name '%s' is conflict with model field", alias))
+    elseif func.__IS_FUNCTION__ then
+      local prefixed_column = self:_parse_column(func.column, "aggregate")
+      local func_token = format("%s(%s)", func.name, prefixed_column)
+      -- self._annotate[alias] = { func_token = func_token, func = func, reversed = reversed }
+      self._annotate[alias] = func_token
+      self:_base_select(format("%s AS %s", func_token, alias))
+    elseif func.__IS_FIELD_BUILDER__ then
+      local exp_token = self:_resolve_field_builder(func)
+      self._annotate[alias] = exp_token
+      -- if not self._computed_columns then
+      --   self._computed_columns = {}
+      -- end
+      -- self._computed_columns[alias] = exp_token
+      self:_base_select(format("%s AS %s", exp_token, alias))
+    end
+  end
+  return self
 end
 
 local string_db_types = {
@@ -2542,14 +2681,10 @@ local string_operators = {
 ---@param value DBValue
 ---@param key string
 ---@param op string
----@param raw_key string
----@param model? Xodel
 ---@return string
-function Sql:_get_expr_token(value, key, op, raw_key, model)
-  local field = (model or self.model).fields[raw_key]
-  if field and not string_db_types[field.db_type] and string_operators[op] then
-    key = key .. '::varchar'
-  end
+function Sql:_get_expr_token(value, key, op)
+  -- https://docs.djangoproject.com/en/5.1/ref/models/querysets/#field-lookups
+  value = self:_resolve_update_value(value)
   if op == "eq" then
     return format("%s = %s", key, as_literal(value))
   elseif op == "in" then
@@ -2561,24 +2696,60 @@ function Sql:_get_expr_token(value, key, op, raw_key, model)
   elseif op == "contains" then
     ---@cast value string
     return format("%s LIKE '%%%s%%'", key, value:gsub("'", "''"))
+  elseif op == "icontains" then
+    ---@cast value string
+    return format("%s ILIKE '%%%s%%'", key, value:gsub("'", "''"))
   elseif op == "startswith" then
     ---@cast value string
     return format("%s LIKE '%s%%'", key, value:gsub("'", "''"))
+  elseif op == "istartswith" then
+    ---@cast value string
+    return format("%s ILIKE '%s%%'", key, value:gsub("'", "''"))
   elseif op == "endswith" then
     ---@cast value string
     return format("%s LIKE '%%%s'", key, value:gsub("'", "''"))
-  elseif op == "regex" or op == "regex_sensitive" then
+  elseif op == "iendswith" then
+    ---@cast value string
+    return format("%s ILIKE '%%%s'", key, value:gsub("'", "''"))
+  elseif op == "range" then
+    ---@cast value table
+    return format("%s BETWEEN %s AND %s", key, as_literal(value[1]), as_literal(value[2]))
+  elseif op == 'year' then
+    return format("%s BETWEEN '%s-01-01' AND '%s-12-31'", key, value, value)
+  elseif op == 'month' then
+    return format("EXTRACT('month' FROM %s) = '%s'", key, value)
+  elseif op == 'day' then
+    return format("EXTRACT('day' FROM %s) = '%s'", key, value)
+  elseif op == "regex" then
     ---@cast value string
     return format("%s ~ '%%%s'", key, value:gsub("'", "''"))
-  elseif op == "regex_insensitive" then
+  elseif op == "iregex" then
     ---@cast value string
     return format("%s ~* '%%%s'", key, value:gsub("'", "''"))
-  elseif op == "null" then
+  elseif op == "null" or op == "isnull" then
     if value then
       return format("%s IS NULL", key)
     else
       return format("%s IS NOT NULL", key)
     end
+  elseif op == "has_key" then
+    ---@cast value string
+    return format("(%s) ? %s", key, value)
+  elseif op == "has_keys" then
+    ---@cast value string
+    return format("(%s) ?& [%s]", key, as_literal_without_brackets(value))
+  elseif op == "has_any_keys" then
+    ---@cast value string
+    return format("(%s) ?| [%s]", key, as_literal_without_brackets(value))
+  elseif op == "json_contains" then
+    ---@cast value string
+    return format("(%s) @> '%s'", key, encode(value))
+  elseif op == "json_eq" then
+    ---@cast value string
+    return format("(%s) = '%s'", key, encode(value))
+  elseif op == "contained_by" then
+    ---@cast value string
+    return format("(%s) <@ '%s'", key, encode(value))
   elseif type(op) == 'function' then
     return format("%s %s", key, op(value))
   else
@@ -2612,6 +2783,16 @@ function Sql:insert(rows, columns)
   end
 end
 
+function Sql:_resolve_update_value(value)
+  if type(value) == 'table' and value.__IS_FIELD_BUILDER__ then
+    local exp_token = self:_resolve_field_builder(value)
+    return function()
+      return exp_token
+    end
+  end
+  return value
+end
+
 ---@param row Record|Sql|string
 ---@param columns? string[]
 ---@return self
@@ -2621,6 +2802,9 @@ function Sql:update(row, columns)
   elseif not row.__SQL_BUILDER__ then
     local err
     ---@cast row Record
+    for k, v in pairs(row) do
+      row[k] = self:_resolve_update_value(v)
+    end
     if not self._skip_validate then
       ---@diagnostic disable-next-line: cast-local-type
       row, err = self.model:validate_update(row, columns)
@@ -3002,7 +3186,7 @@ function Sql:load_fk(fk_name, select_names, ...)
   -- psr:load_fk('parent_id', 'usr_id')
   -- psr:load_fk('parent_id', {'usr_id'})
   -- psr:load_fk('parent_id', 'usr_id__xm')
-  local fk = self.model.foreign_keys[fk_name]
+  local fk = self.model.foreignkey_fields[fk_name]
   if fk == nil then
     error(fk_name .. " is not a valid forein key name for " .. self.table_name)
   end
@@ -3068,7 +3252,7 @@ end
 ---@param select_names? string[]
 ---@return self
 function Sql:where_recursive(name, value, select_names)
-  local fk = self.model.foreign_keys[name]
+  local fk = self.model.foreignkey_fields[name]
   if fk == nil then
     error(name .. " is not a valid forein key name for " .. self.table_name)
   end
@@ -3090,6 +3274,8 @@ end
 local default_query = Query {}
 local normalize_field_shortcuts = Fields.basefield.normalize_field_shortcuts
 local DEFAULT_PRIMARY_KEY = 'id'
+local DEFAULT_CTIME_KEY = 'ctime'
+local DEFAULT_UTIME_KEY = 'utime'
 local DEFAULT_STRING_MAXLENGTH = 256
 local IS_PG_KEYWORDS = {
   -- operator reserve because _parse_column logic
@@ -3222,11 +3408,11 @@ local MODEL_MERGE_NAMES = {
 }
 local BaseModel = {
   abstract = true,
-  field_names = Array { DEFAULT_PRIMARY_KEY, "ctime", "utime" },
+  field_names = Array { DEFAULT_PRIMARY_KEY, DEFAULT_CTIME_KEY, DEFAULT_UTIME_KEY },
   fields = {
     [DEFAULT_PRIMARY_KEY] = { type = "integer", primary_key = true, serial = true },
-    ctime = { label = "创建时间", type = "datetime", auto_now_add = true },
-    utime = { label = "更新时间", type = "datetime", auto_now = true }
+    [DEFAULT_CTIME_KEY] = { label = "创建时间", type = "datetime", auto_now_add = true },
+    [DEFAULT_UTIME_KEY] = { label = "更新时间", type = "datetime", auto_now = true }
   }
 }
 
@@ -3375,6 +3561,7 @@ end
 ---@field db_options? QueryOpts
 ---@field as_token  fun(DBValue):string
 ---@field as_literal  fun(DBValue):string
+---@field default_related_name string The name that will be used by default for the relation from a related object back to this one. The default is <model_name>_set
 ---@field RecordClass table
 ---@field extends? table
 ---@field admin? table
@@ -3393,11 +3580,12 @@ end
 ---@field names Array
 ---@field auto_now_name string
 ---@field auto_now_add_name string
----@field foreign_keys table
+---@field foreignkey_fields {[string]:ForeignkeyField}
 ---@field column_cache {[string]:string}
 ---@field clean? function
 ---@field name_to_label {[string]:string}
 ---@field label_to_name {[string]:string}
+---@field reversed_fields {[string]:ForeignkeyField}
 local Xodel = {
   __SQL_BUILDER__ = true,
   query = default_query,
@@ -3407,10 +3595,17 @@ local Xodel = {
   token = make_token,
   as_token = as_token,
   as_literal = as_literal,
+  Q = Q,
+  F = F,
+  Count = Count,
+  Sum = Sum,
+  Avg = Avg,
+  Max = Max,
+  Min = Min,
 }
 setmetatable(Xodel, {
   __call = function(t, ...)
-    return t:mix_with_base(...)
+    return t:mix(BaseModel, ...)
   end
 })
 
@@ -3472,7 +3667,6 @@ function Xodel.make_field_from_json(cls, options)
     error("invalid field type:" .. tostring(options.type))
   end
   local res = fcls:create_field(options)
-  res.get_model = function() return cls end
   return res
 end
 
@@ -3531,6 +3725,9 @@ function Xodel._make_model_class(cls, opts)
     auto_primary_key = auto_primary_key,
     referenced_label_column = opts.referenced_label_column,
     preload = opts.preload,
+    names = Array {},
+    foreignkey_fields = {},
+    reversed_fields = {},
   })
   if ModelClass.preload == nil then
     ModelClass.preload = true
@@ -3544,10 +3741,9 @@ function Xodel._make_model_class(cls, opts)
   end
   ModelClass.__index = ModelClass
   local pk_defined = false
-  ModelClass.foreign_keys = {}
-  ModelClass.names = Array {}
   for _, name in ipairs(ModelClass.field_names) do
     local field = ModelClass.fields[name]
+    field.get_model = function() return ModelClass end
     if field.primary_key then
       local pk_name = field.name
       assert(not pk_defined, format('duplicated primary key: "%s" and "%s"', pk_name, pk_defined))
@@ -3564,7 +3760,7 @@ function Xodel._make_model_class(cls, opts)
       ModelClass.names:push(name)
     end
   end
-  -- move to resolve_self_foreignkey
+  -- move to resolve_foreignkey_self
   -- for _, field in pairs(model.fields) do
   --   if field.db_type == field.FK_TYPE_NOT_DEFIEND then
   --     local fk = model.fields[field.reference_column]
@@ -3590,18 +3786,22 @@ function Xodel._make_model_class(cls, opts)
   if ModelClass.auto_now_add_name then
     ModelClass:ensure_ctime_list_names(ModelClass.auto_now_add_name);
   end
+  Xodel.resolve_foreignkey_self(ModelClass)
+  if not opts.abstract then
+    Xodel.resolve_foreignkey_related(ModelClass)
+  end
   local proxy = create_model_proxy(ModelClass)
-  Xodel.resolve_self_foreignkey(proxy)
   return proxy
 end
 
-local EXTEND_ATTRS = { 'table_name', 'label', 'referenced_label_column', 'preload' }
+local EXTEND_ATTRS = { 'label', 'referenced_label_column', 'preload' }
 ---@param cls Xodel
 ---@param options ModelOpts
 ---@return ModelOpts
 function Xodel.normalize(cls, options)
   local extends = options.extends
   local model = {
+    table_name = options.table_name,
     admin = clone(options.admin or {}),
   }
   for _, extend_attr in ipairs(EXTEND_ATTRS) do
@@ -3754,7 +3954,7 @@ function Xodel.ensure_ctime_list_names(cls, ctime_name)
 end
 
 ---@param cls Xodel
-function Xodel.resolve_self_foreignkey(cls)
+function Xodel.resolve_foreignkey_self(cls)
   for _, name in ipairs(cls.field_names) do
     local field = cls.fields[name]
     local fk_model = field.reference
@@ -3765,7 +3965,35 @@ function Xodel.resolve_self_foreignkey(cls)
       field:setup_with_fk_model(cls)
     end
     if fk_model then
-      cls.foreign_keys[name] = field
+      cls.foreignkey_fields[name] = field --[[@as ForeignkeyField]]
+    end
+  end
+end
+
+---@param cls Xodel
+function Xodel.resolve_foreignkey_related(cls)
+  for _, name in ipairs(cls.field_names) do
+    local field = cls.fields[name] --[[@as ForeignkeyField]]
+    local fk_model = field.reference
+    if fk_model then
+      if field.related_name == nil then
+        field.related_name = format("%s_set", cls.table_name)
+      end
+      if field.related_query_name == nil then
+        field.related_query_name = cls.table_name
+      end
+      -- reversed foreignkey field
+      local rqn = field.related_query_name
+      assert(not cls.fields[rqn], format("related_query_name %s conflicts with field name", rqn))
+      fk_model.reversed_fields[rqn] = field
+      -- { -- Blog / Poll
+      --   is_reversed = true,
+      --   name = field.related_query_name,                     -- entry / poll_log
+      --   reference = cls,                                     -- Entry / PollLog
+      --   reference_column = name                              -- blog_id / poll_id
+      -- }
+      --define:   {name='blog_id',  reference=Blog,    related_query_name=entry, }
+      --reversed: {name='entry',    reference=Entry,   reference_column='blog_id'}
     end
   end
 end
@@ -3782,6 +4010,7 @@ function Xodel.materialize_with_table_name(cls, opts)
   end
   check_reserved(table_name)
   cls.table_name = table_name
+  cls.class_name = table_name:gsub("^%l", string.upper) -- camel case
   cls.label = cls.label or label or table_name
   cls.abstract = false
   if not cls.primary_key and cls.auto_primary_key then
@@ -3790,22 +4019,15 @@ function Xodel.materialize_with_table_name(cls, opts)
     cls.fields[pk_name] = Fields.integer:create_field { name = pk_name, primary_key = true, serial = true }
     insert(cls.field_names, 1, pk_name)
   end
-  cls.column_cache = {}
+  -- cls.column_cache = {}
   for name, field in pairs(cls.fields) do
-    cls.column_cache[name] = cls.table_name .. "." .. name
+    -- cls.column_cache[name] = cls.table_name .. "." .. name
     if field.reference then
       field.table_name = table_name
     end
   end
   cls.RecordClass = make_record_meta(cls)
   return cls
-end
-
----@param cls Xodel
----@param ... ModelOpts
----@return Xodel
-function Xodel.mix_with_base(cls, ...)
-  return cls:mix(BaseModel, ...)
 end
 
 ---@param cls Xodel
@@ -3887,6 +4109,16 @@ end
 ---@param names? string[]|string
 function Xodel.to_json(cls, names)
   if not names then
+    local reversed_fields = {}
+    for name, field in pairs(cls.reversed_fields) do
+      if field.reference then
+        reversed_fields[name] = {
+          name = field.name,
+          reference = field.reference.table_name,
+          reference_column = field.reference_column
+        }
+      end
+    end
     return {
       table_name = cls.table_name,
       class_name = cls.class_name,
@@ -3898,6 +4130,7 @@ function Xodel.to_json(cls, names)
       field_names = clone(cls.field_names),
       label_to_name = clone(cls.label_to_name),
       name_to_label = clone(cls.name_to_label),
+      reversed_fields = reversed_fields,
       fields = cls.field_names:map(function(name)
         return { name, cls.fields[name]:json() }
       end):reduce(function(acc, pair)
