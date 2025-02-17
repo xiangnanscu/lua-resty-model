@@ -7,14 +7,14 @@ DROP TABLE IF EXISTS org CASCADE
 DROP TABLE IF EXISTS usr_bak CASCADE
 DROP TABLE IF EXISTS usr CASCADE
 CREATE TABLE usr(
-  name varchar(5) NOT NULL UNIQUE,
   id SERIAL PRIMARY KEY NOT NULL,
-  permission integer DEFAULT 0
+  permission integer DEFAULT 0,
+  name varchar(5) NOT NULL UNIQUE
 )
 CREATE TABLE usr_bak(
-  name varchar(5) NOT NULL UNIQUE,
   id SERIAL PRIMARY KEY NOT NULL,
-  permission integer DEFAULT 0
+  permission integer DEFAULT 0,
+  name varchar(5) NOT NULL UNIQUE
 )
 CREATE TABLE org(
   id SERIAL PRIMARY KEY NOT NULL,
@@ -32,17 +32,17 @@ CREATE TABLE profile(
   child integer REFERENCES "profile" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
   age integer DEFAULT 1
 )
-INSERT INTO usr AS T (name, permission) VALUES ('u1', 1)
+INSERT INTO usr AS T (permission, name) VALUES (1, 'u1')
 ok 1 - test insert insert one user
-INSERT INTO usr AS T (name, permission) VALUES ('u2', 2) RETURNING *
+INSERT INTO usr AS T (permission, name) VALUES (2, 'u2') RETURNING *
 ok 2 - test insert insert one user returning all
-INSERT INTO usr AS T (name, permission) VALUES ('u3', 0) RETURNING T.permission
+INSERT INTO usr AS T (permission, name) VALUES (0, 'u3') RETURNING T.permission
 ok 3 - test insert insert one user using default
-INSERT INTO usr AS T (name, permission) VALUES ('u4', 0), ('u5', 0) RETURNING T.name, T.permission
+INSERT INTO usr AS T (permission, name) VALUES (0, 'u4'), (0, 'u5') RETURNING T.name, T.permission
 ok 4 - test insert insert two users
-INSERT INTO usr AS T (name, permission) VALUES ('u6', 2) RETURNING T.name
+INSERT INTO usr AS T (permission, name) VALUES (2, 'u6') RETURNING T.name
 ok 5 - test insert insert one user returning id in compact form
-INSERT INTO usr AS T (name, permission) VALUES ('u7', 0), ('u8', 0) RETURNING T.name
+INSERT INTO usr AS T (permission, name) VALUES (0, 'u7'), (0, 'u8') RETURNING T.name
 ok 6 - test insert insert two users returning id in compact form
 INSERT INTO usr_bak AS T (name, permission) SELECT T.name, T.permission FROM usr T WHERE T.permission = 2 RETURNING T.name, T.permission
 SELECT T.name, T.permission FROM usr T WHERE T.permission = 2
@@ -67,10 +67,10 @@ ok 18 - test insert update user skip validate
 ok 19 - test insert insert one user with invalid columns
 INSERT INTO profile AS T (usr, parent, child, age) VALUES (2, NULL, NULL, 82), (3, NULL, NULL, 62), (4, NULL, NULL, 42), (5, NULL, NULL, 52), (6, NULL, NULL, 32), (7, NULL, NULL, 12)
 UPDATE profile T SET child = 2 WHERE T.usr = 2
-UPDATE profile T SET child = 3, parent = 1 WHERE T.usr = 3
+UPDATE profile T SET parent = 1, child = 3 WHERE T.usr = 3
 UPDATE profile T SET parent = 2 WHERE T.usr = 4
 UPDATE profile T SET child = 5 WHERE T.usr = 5
-UPDATE profile T SET child = 6, parent = 4 WHERE T.usr = 6
+UPDATE profile T SET parent = 4, child = 6 WHERE T.usr = 6
 UPDATE profile T SET parent = 5 WHERE T.usr = 7
 INSERT INTO org AS T (name) VALUES ('o1'), ('o2'), ('o3')
 INSERT INTO org_admin AS T (usr, org) VALUES (2, 1), (3, 2), (4, 3)
@@ -592,7 +592,7 @@ profile{usr_id=1, dept_name='d1', age=20}:save()
 ```
 
 ```sql
-INSERT INTO profile AS T (age, usr_id, dept_name, sex, salary) VALUES (20, 1, 'd1', 'f', 1000) RETURNING *
+INSERT INTO profile AS T (sex, salary, usr_id, age, dept_name) VALUES ('f', 1000, 1, 20, 'd1') RETURNING *
 ```
 
 ```js
@@ -651,7 +651,7 @@ profile{id=5, age=55, usr_id=3, dept_name='d3',}:save_create()
 ```
 
 ```sql
-INSERT INTO profile AS T (age, usr_id, dept_name, sex, salary) VALUES (55, 3, 'd3', 'f', 1000) RETURNING *
+INSERT INTO profile AS T (sex, salary, usr_id, age, dept_name) VALUES ('f', 1000, 3, 55, 'd3') RETURNING *
 ```
 
 ```js
@@ -737,7 +737,7 @@ evaluate:merge({{usr_id=1, year=2021, rank='A'},{usr_id=1, year=2022, rank='B'}}
 ```
 
 ```sql
-WITH V(rank, year, usr_id) AS (VALUES ('A'::varchar, 2021::integer, 1::integer), ('B', 2022, 1)), U AS (UPDATE evaluate W SET rank = V.rank FROM V WHERE V.usr_id = W.usr_id AND V.year = W.year RETURNING V.rank, V.year, V.usr_id) INSERT INTO evaluate AS T (rank, year, usr_id) SELECT V.rank, V.year, V.usr_id FROM V LEFT JOIN U AS W ON (V.usr_id = W.usr_id AND V.year = W.year) WHERE W.usr_id IS NULL RETURNING T.rank
+WITH V(year, usr_id, rank) AS (VALUES (2021::integer, 1::integer, 'A'::varchar), (2022, 1, 'B')), U AS (UPDATE evaluate W SET rank = V.rank FROM V WHERE V.usr_id = W.usr_id AND V.year = W.year RETURNING V.year, V.usr_id, V.rank) INSERT INTO evaluate AS T (year, usr_id, rank) SELECT V.year, V.usr_id, V.rank FROM V LEFT JOIN U AS W ON (V.usr_id = W.usr_id AND V.year = W.year) WHERE W.usr_id IS NULL RETURNING T.rank
 ```
 
 ```js
@@ -814,7 +814,7 @@ evaluate:upsert({{usr_id=1, year=2021, rank='A'},{usr_id=1, year=2022, rank='B'}
 ```
 
 ```sql
-INSERT INTO evaluate AS T (rank, year, usr_id) VALUES ('A', 2021, 1), ('B', 2022, 1) ON CONFLICT (usr_id, year) DO UPDATE SET rank = EXCLUDED.rank RETURNING T.rank
+INSERT INTO evaluate AS T (year, usr_id, rank) VALUES (2021, 1, 'A'), (2022, 1, 'B') ON CONFLICT (usr_id, year) DO UPDATE SET rank = EXCLUDED.rank RETURNING T.rank
 ```
 
 ```js
@@ -1040,6 +1040,16 @@ SELECT T.id FROM usr T WHERE T.id < 3
 ```
 
 ok 76 - Xodel.where where condition by 3 args
+## where by arithmetic operator: __gte
+```lua
+usr:where{id__gte=2}:select('id')
+```
+
+```sql
+SELECT T.id FROM usr T WHERE T.id >= 2
+```
+
+ok 77 - Xodel.where where by arithmetic operator: __gte
 ## where by arithmetic operator: __ne
 ```lua
 usr:where{id__ne=2}:select('id')
@@ -1049,7 +1059,7 @@ usr:where{id__ne=2}:select('id')
 SELECT T.id FROM usr T WHERE T.id <> 2
 ```
 
-ok 77 - Xodel.where where by arithmetic operator: __ne
+ok 78 - Xodel.where where by arithmetic operator: __ne
 ## where by arithmetic operator: __lt
 ```lua
 usr:where{id__lt=2}:select('id')
@@ -1059,7 +1069,7 @@ usr:where{id__lt=2}:select('id')
 SELECT T.id FROM usr T WHERE T.id < 2
 ```
 
-ok 78 - Xodel.where where by arithmetic operator: __lt
+ok 79 - Xodel.where where by arithmetic operator: __lt
 ## where by arithmetic operator: __lte
 ```lua
 usr:where{id__lte=2}:select('id')
@@ -1069,17 +1079,7 @@ usr:where{id__lte=2}:select('id')
 SELECT T.id FROM usr T WHERE T.id <= 2
 ```
 
-ok 79 - Xodel.where where by arithmetic operator: __lte
-## where by arithmetic operator: __gt
-```lua
-usr:where{id__gt=2}:select('id')
-```
-
-```sql
-SELECT T.id FROM usr T WHERE T.id > 2
-```
-
-ok 80 - Xodel.where where by arithmetic operator: __gt
+ok 80 - Xodel.where where by arithmetic operator: __lte
 ## where by arithmetic operator: __eq
 ```lua
 usr:where{id__eq=2}:select('id')
@@ -1090,16 +1090,16 @@ SELECT T.id FROM usr T WHERE T.id = 2
 ```
 
 ok 81 - Xodel.where where by arithmetic operator: __eq
-## where by arithmetic operator: __gte
+## where by arithmetic operator: __gt
 ```lua
-usr:where{id__gte=2}:select('id')
+usr:where{id__gt=2}:select('id')
 ```
 
 ```sql
-SELECT T.id FROM usr T WHERE T.id >= 2
+SELECT T.id FROM usr T WHERE T.id > 2
 ```
 
-ok 82 - Xodel.where where by arithmetic operator: __gte
+ok 82 - Xodel.where where by arithmetic operator: __gt
 ## where in
 ```lua
 usr:where{username__in={'u1','u2'}}
@@ -1240,6 +1240,16 @@ SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.usernam
 ```
 
 ok 96 - Xodel.where where foreignkey null false
+## where foreignkey number operator gte
+```lua
+profile:where{usr_id__permission__gte=2}
+```
+
+```sql
+SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission >= 2
+```
+
+ok 97 - Xodel.where where foreignkey number operator gte
 ## where foreignkey number operator ne
 ```lua
 profile:where{usr_id__permission__ne=2}
@@ -1249,7 +1259,7 @@ profile:where{usr_id__permission__ne=2}
 SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission <> 2
 ```
 
-ok 97 - Xodel.where where foreignkey number operator ne
+ok 98 - Xodel.where where foreignkey number operator ne
 ## where foreignkey number operator lt
 ```lua
 profile:where{usr_id__permission__lt=2}
@@ -1259,7 +1269,7 @@ profile:where{usr_id__permission__lt=2}
 SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission < 2
 ```
 
-ok 98 - Xodel.where where foreignkey number operator lt
+ok 99 - Xodel.where where foreignkey number operator lt
 ## where foreignkey number operator lte
 ```lua
 profile:where{usr_id__permission__lte=2}
@@ -1269,17 +1279,7 @@ profile:where{usr_id__permission__lte=2}
 SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission <= 2
 ```
 
-ok 99 - Xodel.where where foreignkey number operator lte
-## where foreignkey number operator gt
-```lua
-profile:where{usr_id__permission__gt=2}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission > 2
-```
-
-ok 100 - Xodel.where where foreignkey number operator gt
+ok 100 - Xodel.where where foreignkey number operator lte
 ## where foreignkey number operator eq
 ```lua
 profile:where{usr_id__permission__eq=2}
@@ -1290,16 +1290,16 @@ SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permiss
 ```
 
 ok 101 - Xodel.where where foreignkey number operator eq
-## where foreignkey number operator gte
+## where foreignkey number operator gt
 ```lua
-profile:where{usr_id__permission__gte=2}
+profile:where{usr_id__permission__gt=2}
 ```
 
 ```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission >= 2
+SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission > 2
 ```
 
-ok 102 - Xodel.where where foreignkey number operator gte
+ok 102 - Xodel.where where foreignkey number operator gt
 # Xodel.select
 ## select fk column
 ```lua
@@ -1466,7 +1466,7 @@ usr:get_or_create({username='goc2'}, {permission = 5})
 ```
 
 ```sql
-WITH new_records(id, username, permission) AS (INSERT INTO "usr"(username, permission) SELECT 'goc2', 5 WHERE NOT EXISTS (SELECT 1 FROM usr T WHERE T.username = 'goc2') RETURNING id, username, permission) SELECT id, username, permission, TRUE AS __is_inserted__ FROM new_records new_records UNION ALL (SELECT id, username, permission, FALSE AS __is_inserted__ FROM usr T WHERE T.username = 'goc2')
+WITH new_records(id, permission, username) AS (INSERT INTO "usr"(permission, username) SELECT 5, 'goc2' WHERE NOT EXISTS (SELECT 1 FROM usr T WHERE T.username = 'goc2') RETURNING id, permission, username) SELECT id, permission, username, TRUE AS __is_inserted__ FROM new_records new_records UNION ALL (SELECT id, permission, username, FALSE AS __is_inserted__ FROM usr T WHERE T.username = 'goc2')
 ```
 
 ```js
@@ -1486,7 +1486,7 @@ INSERT INTO message AS T (creator, target, content) VALUES (1, 2, 'c121'), (1, 2
 ok 113 - Xodel api: test chat model
 ## go crazy with where clause with recursive join
 ```sql
-INSERT INTO message AS T (creator, target, content) VALUES (1, 2, 'crazy') RETURNING *
+INSERT INTO message AS T (target, content, creator) VALUES (2, 'crazy', 1) RETURNING *
 ```
 
 ```sql
@@ -1498,7 +1498,7 @@ SELECT * FROM usr T WHERE T.id = 1 LIMIT 2
 ```
 
 ```sql
-SELECT T.id, T1.age AS creator__age, T2.username AS creator__usr_id__username FROM message T INNER JOIN profile T1 ON (T.creator = T1.id) INNER JOIN usr T2 ON (T1.usr_id = T2.id) WHERE T1.age = 11 AND T.id = 9 AND T2.username LIKE '%1%'
+SELECT T.id, T1.age AS creator__age, T2.username AS creator__usr_id__username FROM message T INNER JOIN profile T1 ON (T.creator = T1.id) INNER JOIN usr T2 ON (T1.usr_id = T2.id) WHERE T.id = 9 AND T2.username LIKE '%1%' AND T1.age = 11
 ```
 
 ```sql
@@ -1724,4 +1724,4 @@ ok 130 - field stuff array field validate
 ## alioss_list
 ok 131 - field stuff alioss_list
 1..131
-Done in 0.35s.
+Done in 0.50s.
