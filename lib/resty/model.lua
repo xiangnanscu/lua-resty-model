@@ -57,6 +57,8 @@ local next = next
 local format = string.format
 local concat = table.concat
 
+--TODO: breaking change: select_as, select_literal_as
+
 ---@alias ColumnContext "select"|"returning"|"aggregate"|"group_by"|"order_by"|"distinct"|"where"|"having"|"F"|"Q"
 ---@alias Keys string|string[]
 ---@alias SqlSet "_union"|"_union_all"| "_except"| "_except_all"|"_intersect"|"_intersect_all"
@@ -163,6 +165,28 @@ local function flat(tbl)
   end
   return res
 end
+
+local function capitalize(s)
+  if s == "" then return s end
+  return s:sub(1, 1):upper() .. s:sub(2):lower()
+end
+
+local function to_camel_case(str)
+  local parts = {}
+  for part in str:gmatch("([^_]+)") do
+    if part ~= "" then
+      table.insert(parts, part)
+    end
+  end
+
+  local result = ""
+  for _, part in ipairs(parts) do
+    result = result .. capitalize(part)
+  end
+
+  return result
+end
+
 
 local function get_keys(rows)
   local columns = {}
@@ -836,20 +860,14 @@ function Sql:_ensure_context()
   if not self._join_proxy_models then
     local alias = self._as or self.table_name
     local main_proxy = self:_create_join_proxy(self.model, alias)
-    self._join_proxy_models = { main_proxy }
+    self._join_proxy_models = {
+      main_proxy,
+      [self.model.table_name] = main_proxy,
+      [self.model.class_name] = main_proxy
+    }
     self._join_alias = { alias }
     self._join_models = { self.model }
   end
-end
-
-function Sql:_create_context()
-  self:_ensure_context()
-  local context = { unpack(self._join_proxy_models) }
-  for i, proxy in ipairs(self._join_proxy_models) do
-    context[self._join_models[i].table_name] = proxy
-    context[self._join_models[i].class_name or ""] = proxy
-  end
-  return context
 end
 
 ---@param self Sql
@@ -871,12 +889,14 @@ function Sql:_handle_manual_join(join_type, fk_models, callback, join_key)
     local right_alias = 'T' .. #self._join_models
     local proxy = self:_create_join_proxy(fk_model, right_alias)
     self._join_proxy_models[#self._join_proxy_models + 1] = proxy
+    self._join_proxy_models[fk_model.table_name] = proxy
+    self._join_proxy_models[fk_model.class_name] = proxy
     self._join_alias[#self._join_alias + 1] = right_alias
     self._join_models[#self._join_models + 1] = fk_model
     self._join_keys[join_key or right_alias] = right_alias
     -- res[#res + 1] = { proxy = proxy, alias = right_alias, model = fk_model }
   end
-  local join_conds = callback(self:_create_context())
+  local join_conds = callback(self._join_proxy_models)
   if type(join_conds) == 'string' then
     join_conds = { join_conds }
   end
@@ -948,7 +968,7 @@ function Sql:_base_get_condition_token(cond, op, dval)
     elseif argtype == "string" then
       return cond
     elseif argtype == "function" then
-      return cond(self:_create_context())
+      return cond(self._join_proxy_models)
     else
       error("invalid condition type: " .. argtype)
     end
@@ -1270,7 +1290,7 @@ function Sql:_get_column_tokens(context, a, b, ...)
       return self:_get_column_token(a, context) --[[@as string]]
     elseif type(a) == 'function' then
       ---@cast a -DBValue
-      local select_args = a(self:_create_context())
+      local select_args = a(self._join_proxy_models)
       if type(select_args) == 'string' then
         return select_args
       elseif type(select_args) == 'table' then
@@ -1485,11 +1505,10 @@ end
 ---@param columns string[]
 ---@return string
 function Sql:_get_upsert_query_token(rows, key, columns)
-  local columns_token = self:_get_column_tokens(false, columns)
   local insert_token = format("(%s) %s ON CONFLICT (%s)",
-    columns_token,
+    as_token(columns),
     rows:statement(),
-    self:_get_column_tokens(false, key))
+    as_token(key))
   if (type(key) == "table" and #key == #columns) or #columns == 1 then
     return format("%s DO NOTHING", insert_token)
   else
@@ -1959,17 +1978,24 @@ function Sql:select(a, b, ...)
   return self
 end
 
----@param key string
----@param alias string
+---@param kwargs {string: string}
 ---@return self
-function Sql:select_as(key, alias)
-  local col = self:_parse_column(key) .. ' AS ' .. alias
-  if not self._select then
-    self._select = col
-  else
-    self._select = self._select .. ", " .. col
+function Sql:select_as(kwargs)
+  local cols = {}
+  local keys = {}
+  for key, alias in pairs(kwargs) do
+    local col = self:_parse_column(key) .. ' AS ' .. alias
+    cols[#cols + 1] = col
+    keys[#keys + 1] = key
   end
-  self:_keep_args("_select_args", key)
+  if #cols > 0 then
+    if not self._select then
+      self._select = concat(cols, ", ")
+    else
+      self._select = self._select .. ", " .. concat(cols, ", ")
+    end
+  end
+  self:_keep_args("_select_args", unpack(keys))
   return self
 end
 
@@ -1989,17 +2015,24 @@ function Sql:select_literal(a, b, ...)
   return self
 end
 
----@param key string
----@param alias string
+---@param kwargs {string: string}
 ---@return self
-function Sql:select_literal_as(key, alias)
-  local col = self:_get_select_literal(key) .. ' AS ' .. alias
-  if not self._select then
-    self._select = col
-  else
-    self._select = self._select .. ", " .. col
+function Sql:select_literal_as(kwargs)
+  local cols = {}
+  local keys = {}
+  for key, alias in pairs(kwargs) do
+    local col = as_literal(key) .. ' AS ' .. alias
+    cols[#cols + 1] = col
+    keys[#keys + 1] = key
   end
-  self:_keep_args("_select_literal_args", key)
+  if #cols > 0 then
+    if not self._select then
+      self._select = concat(cols, ", ")
+    else
+      self._select = self._select .. ", " .. concat(cols, ", ")
+    end
+  end
+  self:_keep_args("_select_literal_args", unpack(keys))
   return self
 end
 
@@ -2208,7 +2241,7 @@ function Sql:_get_order_token(a, b, ...)
       return self:_get_order_column(a) --[[@as string]]
     elseif type(a) == 'function' then
       ---@cast a -DBValue
-      local order_args = a(self:_create_context())
+      local order_args = a(self._join_proxy_models)
       if type(order_args) == 'string' then
         return order_args
       elseif type(order_args) == 'table' then
@@ -4009,7 +4042,7 @@ function Xodel.materialize_with_table_name(cls, opts)
   end
   check_reserved(table_name)
   cls.table_name = table_name
-  cls.class_name = table_name:gsub("^%l", string.upper) -- camel case
+  cls.class_name = to_camel_case(table_name)
   cls.label = cls.label or label or table_name
   cls.abstract = false
   if not cls.primary_key and cls.auto_primary_key then

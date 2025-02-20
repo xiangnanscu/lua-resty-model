@@ -629,11 +629,11 @@ mdesc("etc", function()
     assert.are.same(p.dept_name, { name = 'd1' })
   end)
   mit("sql select_as", function()
-    local res = eval [[usr:select_as('id', 'value'):select_as('username', 'label'):where { id = 2 }:exec()]]
+    local res = eval [[usr:select_as{id = 'value', username = 'label'}:where { id = 2 }:exec()]]
     assert.are.same(res, { { value = 2, label = 'u2' } })
   end)
   mit("sql select_as foreignkey", function()
-    local res = eval [[profile:select_as('usr_id__permission', 'uperm'):where { id = 2 }:exec()]]
+    local res = eval [[profile:select_as{usr_id__permission = 'uperm'}:where { id = 2 }:exec()]]
     assert.are.same(res, { { uperm = 3 } })
   end)
 end)
