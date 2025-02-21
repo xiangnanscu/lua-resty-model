@@ -622,12 +622,6 @@ function Sql:__tostring()
   return self:statement()
 end
 
----@param attrs? table
----@return self
-function Sql:new(attrs)
-  return setmetatable(attrs or {}, self)
-end
-
 ---keeping args passed to Sql
 ---@param method_name string
 ---@param ... any
@@ -640,6 +634,7 @@ function Sql:_keep_args(method_name, ...)
   return self
 end
 
+--TODO:
 ---@private
 ---@param rows Sql|Records|string
 ---@param columns? string[]
@@ -672,6 +667,7 @@ function Sql:_base_insert(rows, columns)
   return self
 end
 
+--TODO:
 ---@private
 ---@param row Record|string|Sql
 ---@param columns? string[]
@@ -691,6 +687,7 @@ function Sql:_base_update(row, columns)
   return self
 end
 
+--TODO:
 ---@private
 ---@param join_type string
 ---@param right_table string
@@ -704,6 +701,7 @@ function Sql:_base_join_raw(join_type, right_table, key, op, val)
   return self
 end
 
+--TODO:
 ---@private
 ---@param ... DBValue
 ---@return self
@@ -718,6 +716,7 @@ function Sql:_base_select(...)
   return self
 end
 
+--TODO:
 ---@private
 ---@param rows Record[]
 ---@param key Keys
@@ -729,11 +728,10 @@ function Sql:_base_merge(rows, key, columns)
   local cte_values = format("(VALUES %s)", as_token(rows))
   local join_cond = self:_get_join_condition_from_key(key, "V", "W")
   local vals_columns = map(columns, _prefix_with_V)
-  local insert_subquery = Sql:new { table_name = "V" }
+  local insert_subquery = Sql:new { table_name = "V", _where = format("W.%s IS NULL", key[1] or key) }
       :_base_select(vals_columns)
       :_keep_args("_select_args", vals_columns)
       :_base_join_raw("LEFT", "U AS W", join_cond)
-      :_base_where_null("W." .. (key[1] or key))
   local updated_subquery
   if (type(key) == "table" and #key == #columns) or #columns == 1 then
     -- https://github.com/xiangnanscu/lua-resty-model?tab=readme-ov-file#merge-multiple-rows-returning-inserted-rows-with-array-key-and-specific-columns
@@ -752,6 +750,7 @@ function Sql:_base_merge(rows, key, columns)
   return Sql._base_insert(self, insert_subquery, columns)
 end
 
+--TODO:
 ---@private
 ---@param rows Sql|Record[]
 ---@param key Keys
@@ -770,6 +769,7 @@ function Sql:_base_upsert(rows, key, columns)
   return self
 end
 
+--TODO:
 ---@private
 ---@param rows Record[]|Sql
 ---@param key Keys
@@ -798,6 +798,7 @@ function Sql:_base_updates(rows, key, columns)
   end
 end
 
+--TODO:
 ---@private
 ---@param ... DBValue
 ---@return self
@@ -813,6 +814,7 @@ function Sql:_base_returning(...)
   return self
 end
 
+--TODO:
 ---@private
 ---@param ... string
 ---@return self
@@ -827,6 +829,7 @@ function Sql:_base_from(...)
   return self
 end
 
+--TODO:
 ---@private
 ---@param ... string
 ---@return self
@@ -841,6 +844,8 @@ function Sql:_base_using(...)
   return self
 end
 
+--TODO:
+---@private
 ---@param model Xodel
 ---@param alias string
 ---@return table
@@ -856,6 +861,8 @@ function Sql:_create_join_proxy(model, alias)
   return proxy
 end
 
+--TODO:
+---@private
 function Sql:_ensure_context()
   if not self._join_proxy_models then
     local alias = self._as or self.table_name
@@ -870,7 +877,8 @@ function Sql:_ensure_context()
   end
 end
 
----@param self Sql
+--TODO:
+---@private
 ---@param join_type string
 ---@param fk_models Xodel[]
 ---@param callback function
@@ -907,6 +915,7 @@ function Sql:_handle_manual_join(join_type, fk_models, callback, join_key)
   return self._join_alias[#self._join_alias]
 end
 
+--TODO:
 ---@private
 ---@param join_type string
 ---@param join_args table|string
@@ -945,6 +954,7 @@ function Sql:_base_join(join_type, join_args, ...)
   end
 end
 
+--TODO:
 ---@private
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? string
@@ -955,6 +965,7 @@ function Sql:_base_where(cond, op, dval)
   return self:_handle_where_token(where_token, "(%s) AND (%s)")
 end
 
+--TODO:
 ---@private
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? DBValue
@@ -979,6 +990,7 @@ function Sql:_base_get_condition_token(cond, op, dval)
   end
 end
 
+--TODO:
 ---@private
 ---@param kwargs {[string]:any}
 ---@param logic? "AND"|"OR"
@@ -995,185 +1007,7 @@ function Sql:_base_get_condition_token_from_table(kwargs, logic)
   end
 end
 
----@private
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:_base_where_in(cols, range)
-  local in_token = self:_get_in_token(cols, range)
-  if self._where then
-    self._where = format("(%s) AND %s", self._where, in_token)
-  else
-    self._where = in_token
-  end
-  return self
-end
-
----@private
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:_base_where_not_in(cols, range)
-  local not_in_token = self:_get_in_token(cols, range, "NOT IN")
-  if self._where then
-    self._where = format("(%s) AND %s", self._where, not_in_token)
-  else
-    self._where = not_in_token
-  end
-  return self
-end
-
----@private
----@param col string
----@return self
-function Sql:_base_where_null(col)
-  if self._where then
-    self._where = format("(%s) AND %s IS NULL", self._where, col)
-  else
-    self._where = col .. " IS NULL"
-  end
-  return self
-end
-
----@private
----@param col string
----@return self
-function Sql:_base_where_not_null(col)
-  if self._where then
-    self._where = format("(%s) AND %s IS NOT NULL", self._where, col)
-  else
-    self._where = col .. " IS NOT NULL"
-  end
-  return self
-end
-
----@private
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:_base_where_between(col, low, high)
-  if self._where then
-    self._where = format("(%s) AND (%s BETWEEN %s AND %s)", self._where, col, low, high)
-  else
-    self._where = format("%s BETWEEN %s AND %s", col, low, high)
-  end
-  return self
-end
-
----@private
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:_base_where_not_between(col, low, high)
-  if self._where then
-    self._where = format("(%s) AND (%s NOT BETWEEN %s AND %s)", self._where, col, low, high)
-  else
-    self._where = format("%s NOT BETWEEN %s AND %s", col, low, high)
-  end
-  return self
-end
-
----@private
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:_base_or_where_in(cols, range)
-  local in_token = self:_get_in_token(cols, range)
-  if self._where then
-    self._where = format("%s OR %s", self._where, in_token)
-  else
-    self._where = in_token
-  end
-  return self
-end
-
----@private
----@param cols string|string[]
----@param range Sql|table|string
----@return self
-function Sql:_base_or_where_not_in(cols, range)
-  local not_in_token = self:_get_in_token(cols, range, "NOT IN")
-  if self._where then
-    self._where = format("%s OR %s", self._where, not_in_token)
-  else
-    self._where = not_in_token
-  end
-  return self
-end
-
----@private
----@param col string
----@return self
-function Sql:_base_or_where_null(col)
-  if self._where then
-    self._where = format("%s OR %s IS NULL", self._where, col)
-  else
-    self._where = col .. " IS NULL"
-  end
-  return self
-end
-
----@private
----@param col string
----@return self
-function Sql:_base_or_where_not_null(col)
-  if self._where then
-    self._where = format("%s OR %s IS NOT NULL", self._where, col)
-  else
-    self._where = col .. " IS NOT NULL"
-  end
-  return self
-end
-
----@private
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:_base_or_where_between(col, low, high)
-  if self._where then
-    self._where = format("%s OR (%s BETWEEN %s AND %s)", self._where, col, low, high)
-  else
-    self._where = format("%s BETWEEN %s AND %s", col, low, high)
-  end
-  return self
-end
-
----@private
----@param col string
----@param low number
----@param high number
----@return self
-function Sql:_base_or_where_not_between(col, low, high)
-  if self._where then
-    self._where = format("%s OR (%s NOT BETWEEN %s AND %s)", self._where, col, low, high)
-  else
-    self._where = format("%s NOT BETWEEN %s AND %s", col, low, high)
-  end
-  return self
-end
-
----@private
----@return self
-function Sql:pcall()
-  self._pcall = true
-  return self
-end
-
----@private
----@param err ValidateError
----@param level? integer
----@return nil, ValidateError?
-function Sql:error(err, level)
-  if self._pcall then
-    return nil, err
-  else
-    error(err, level)
-  end
-end
-
+--TODO:
 ---@private
 ---@param rows Record[]
 ---@param columns string[]
@@ -1207,6 +1041,7 @@ function Sql:_rows_to_array(rows, columns)
 end
 
 ---make single insert token
+--TODO:
 ---@private
 ---@param row Record
 ---@param columns? string[]
@@ -1233,6 +1068,7 @@ function Sql:_get_insert_values_token(row, columns)
 end
 
 ---make bulk insert token
+--TODO:
 ---@private
 ---@param rows Record[]
 ---@param columns? string[]
@@ -1244,6 +1080,7 @@ function Sql:_get_bulk_insert_values_token(rows, columns)
 end
 
 ---take `key` away from update `columns`, return set token for update
+--TODO:
 ---@private
 ---@param columns string[] columns that need to update
 ---@param key Keys name or names that need to be taken away from columns
@@ -1272,6 +1109,7 @@ function Sql:_get_update_token_with_prefix(columns, key, prefix)
 end
 
 ---get select token
+--TODO:
 ---@private
 ---@param context ColumnContext
 ---@param a (fun(ctx:table):string|table)|DBValue
@@ -1310,6 +1148,7 @@ function Sql:_get_column_tokens(context, a, b, ...)
   end
 end
 
+--TODO:
 ---@private
 ---@param a DBValue
 ---@param b? DBValue
@@ -1355,6 +1194,7 @@ function Sql:_get_update_token(row, columns)
   return concat(kv, ", ")
 end
 
+--TODO:
 ---@private
 ---@param name string
 ---@param token? Sql|DBValue
@@ -1370,6 +1210,7 @@ function Sql:_get_with_token(name, token)
   end
 end
 
+--TODO:
 ---@private
 ---@param row Record
 ---@param columns? string[]
@@ -1379,6 +1220,7 @@ function Sql:_get_insert_token(row, columns)
   return format("(%s) VALUES %s", as_token(insert_columns), as_literal(values_list))
 end
 
+--TODO:
 ---@private
 ---@param rows Record[]
 ---@param columns? string[]
@@ -1388,6 +1230,7 @@ function Sql:_get_bulk_insert_token(rows, columns)
   return format("(%s) VALUES %s", as_token(columns), as_token(rows))
 end
 
+--TODO:
 ---@private
 ---@param subsql Sql
 ---@param columns? string[]
@@ -1397,6 +1240,7 @@ function Sql:_set_select_subquery_insert_token(subsql, columns)
   self._insert = format("(%s) %s", columns_token, subsql:statement())
 end
 
+--TODO:
 ---@private
 ---@param subsql Sql
 ---@param columns? string[]
@@ -1408,6 +1252,7 @@ function Sql:_set_cud_subquery_insert_token(subsql, columns)
   self._insert = format("(%s) %s", columns_token, cudsql:statement())
 end
 
+--TODO:
 ---@private
 ---@param row Record
 ---@param key Keys
@@ -1427,6 +1272,7 @@ function Sql:_get_upsert_token(row, key, columns)
   end
 end
 
+--TODO:
 ---@private
 ---@param rows Record[]
 ---@param key Keys
@@ -1446,59 +1292,7 @@ function Sql:_get_bulk_upsert_token(rows, key, columns)
   end
 end
 
--- WITH
---   U AS (
---     INSERT INTO
---       inst_config AS T (name, inst_id, seq, status, position)
---     VALUES
---       ('tom', 1, 1, 'ok', 'ceo'),
---       ('kate', 2, 2, 'ok', 'cto') ON CONFLICT (inst_id, name)
---     DO
---     UPDATE
---     SET
---       seq = EXCLUDED.seq,
---       status = EXCLUDED.status,
---       position = EXCLUDED.position
---     RETURNING
---       T.inst_id,
---       T.name
---   )
--- DELETE FROM inst_config T
--- WHERE
---   (T.inst_id, T.name) NOT IN (
---     SELECT
---       inst_id,
---       name
---     FROM
---       U
---   )
--- RETURNING
---   *;
----@param rows Record[]
----@param key? Keys
----@param columns? string[]
-function Sql:align(rows, key, columns)
-  rows, key, columns = self:_clean_bulk_params(rows, key, columns)
-  local upsert_query = self.model:create_sql()
-  if not self._skip_validate then
-    ---@diagnostic disable-next-line: cast-local-type
-    rows, key, columns = self.model:validate_create_rows(rows, key, columns)
-    if rows == nil then
-      error(key)
-    end
-  end
-  ---@diagnostic disable-next-line: cast-local-type, param-type-mismatch
-  rows, columns = self.model:prepare_db_rows(rows, columns, false)
-  if rows == nil then
-    error(columns)
-  end
-  upsert_query:returning(key)
-  ---@diagnostic disable-next-line: param-type-mismatch
-  Sql._base_upsert(upsert_query, rows, key, columns)
-  self:with("U", upsert_query):where(key, "NOT IN", Sql:new { table_name = 'U' }:_base_select(key)):delete()
-  return self
-end
-
+--TODO:
 ---@private
 ---@param rows Sql
 ---@param key Keys
@@ -1517,6 +1311,7 @@ function Sql:_get_upsert_query_token(rows, key, columns)
   end
 end
 
+--TODO:
 ---@private
 ---@param cols Keys
 ---@param range Sql|table|string
@@ -1536,6 +1331,7 @@ function Sql:_get_in_token(cols, range, op)
   end
 end
 
+--TODO:
 ---@private
 ---@param subquery Sql
 ---@param columns? string[]
@@ -1546,6 +1342,7 @@ function Sql:_base_get_update_query_token(subquery, columns)
   return format("(%s) = (%s)", columns_token, subquery:statement())
 end
 
+--TODO:
 ---@private
 ---@param key Keys
 ---@param left_table string
@@ -1564,6 +1361,7 @@ function Sql:_get_join_condition_from_key(key, left_table, right_table)
   return concat(res, " AND ")
 end
 
+--TODO:
 ---@private
 ---@param join_type JOIN_TYPE
 ---@param join_table string
@@ -1580,6 +1378,7 @@ function Sql:_set_join_token(join_type, join_table, join_cond)
   end
 end
 
+--TODO:
 ---@private
 ---@param key DBValue
 ---@param context ColumnContext
@@ -1599,6 +1398,7 @@ function Sql:_get_column_token(key, context)
   end
 end
 
+--TODO:
 ---@private
 ---@param where_token string
 ---@param tpl string
@@ -1614,6 +1414,7 @@ function Sql:_handle_where_token(where_token, tpl)
   return self
 end
 
+--TODO:
 ---@private
 ---@param kwargs {[string]:any}
 ---@param logic? string
@@ -1630,6 +1431,7 @@ function Sql:_get_condition_token_from_table(kwargs, logic)
   end
 end
 
+--TODO:
 ---@private
 ---@param kwargs {[string]:any}
 ---@param logic? string
@@ -1646,6 +1448,7 @@ function Sql:_get_having_condition_token_from_table(kwargs, logic)
   end
 end
 
+--TODO:
 ---@private
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? DBValue
@@ -1669,6 +1472,7 @@ function Sql:_get_condition_token(cond, op, dval)
   end
 end
 
+--TODO:
 ---@private
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? DBValue
@@ -1690,6 +1494,7 @@ function Sql:_get_having_condition_token(cond, op, dval)
   end
 end
 
+--TODO:
 ---@private
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? DBValue
@@ -1703,6 +1508,7 @@ function Sql:_get_condition_token_or(cond, op, dval)
   end
 end
 
+--TODO:
 ---@private
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? DBValue
@@ -1718,6 +1524,7 @@ function Sql:_get_condition_token_not(cond, op, dval)
   return token ~= "" and format("NOT (%s)", token) or ""
 end
 
+--TODO:
 ---@private
 ---@param other_sql Sql
 ---@param set_operation_attr SqlSet
@@ -1737,6 +1544,7 @@ function Sql:_handle_set_option(other_sql, set_operation_attr)
   return self;
 end
 
+--TODO:
 ---@private
 ---@return string
 function Sql:_statement_for_set()
@@ -1757,333 +1565,80 @@ function Sql:_statement_for_set()
   return statement
 end
 
----@param ... Sql|string
----@return self
-function Sql:prepend(...)
-  if not self._prepend then
-    self._prepend = {}
+--TODO:
+---@private
+function Sql:_resolve_F(value)
+  if type(value) == 'table' and value.__IS_FIELD_BUILDER__ then
+    local exp_token = self:_resolve_field_builder(value)
+    return function()
+      return exp_token
+    end
   end
-  local n = select("#", ...)
-  for i = n, 1, -1 do
-    local e = select(i, ...)
-    insert(self._prepend, 1, e)
-  end
-  return self
+  return value
 end
 
----@param ... Sql|string
----@return self
-function Sql:append(...)
-  if not self._append then
-    self._append = {}
+--TODO:
+---@private
+function Sql:_get_bulk_key(columns)
+  if self.model.unique_together and self.model.unique_together[1] then
+    return clone(self.model.unique_together[1])
   end
-  for _, statement in ipairs({ ... }) do
-    self._append[#self._append + 1] = statement
+  for index, name in ipairs(columns) do
+    local f = self.model.fields[name]
+    if f and f.unique then
+      return name
+    end
   end
-  return self
+  local pk = self.model.primary_key
+  if pk and Array.includes(columns, pk) then
+    return pk
+  end
+  return pk
 end
 
----@return string
-function Sql:statement()
-  local statement = assemble_sql {
-    table_name = self.table_name,
-    as = self._as,
-    with = self._with,
-    with_recursive = self._with_recursive,
-    distinct = self._distinct,
-    distinct_on = self._distinct_on,
-    returning = self._returning,
-    insert = self._insert,
-    update = self._update,
-    delete = self._delete,
-    using = self._using,
-    select = self._select,
-    from = self._from,
-    join_args = self._join_args,
-    where = self._where,
-    group = self._group,
-    having = self._having,
-    order = self._order,
-    limit = self._limit,
-    offset = self._offset
-  }
-  if self._prepend then
-    local res = {}
-    for _, sql in ipairs(self._prepend) do
-      if type(sql) == 'string' then
-        res[#res + 1] = sql
-      else
-        res[#res + 1] = sql:statement()
+function Sql:_get_columns_from_row(row)
+  local columns = {}
+  for k, _ in pairs(row) do
+    if self.model.fields[k] then
+      columns[#columns + 1] = k
+    end
+  end
+  return columns
+end
+
+--TODO:
+---@private
+function Sql:_clean_bulk_params(rows, key, columns)
+  if isempty(rows) then
+    error("empty rows passed to merge")
+  end
+  if not rows[1] then
+    rows = { rows }
+  end
+  if columns == nil then
+    columns = self:_get_columns_from_row(rows[1])
+    if #columns == 0 then
+      error("no columns provided for bulk")
+    end
+  end
+  if key == nil then
+    key = self:_get_bulk_key(columns)
+  end
+  if type(key) == 'string' then
+    if not Array.includes(columns, key) then
+      columns = { key, unpack(columns) }
+    end
+  elseif type(key) == 'table' then
+    for _, k in ipairs(key) do
+      if not Array.includes(columns, k) then
+        columns = { k, unpack(columns) }
       end
     end
-    statement = concat(res, ';') .. ';' .. statement
-  end
-  if self._append then
-    local res = {}
-    for _, sql in ipairs(self._append) do
-      if type(sql) == 'string' then
-        res[#res + 1] = sql
-      else
-        res[#res + 1] = sql:statement()
-      end
-    end
-    statement = statement .. ';' .. concat(res, ';')
-  end
-  return statement
-end
-
----@param name string
----@param token? DBValue
----@return self
-function Sql:with(name, token)
-  local with_token = self:_get_with_token(name, token)
-  if self._with then
-    self._with = format("%s, %s", self._with, with_token)
   else
-    self._with = with_token
+    error("invalid key type for bulk:" .. type(key))
   end
-  return self
+  return rows, key, columns
 end
-
----@param name string
----@param token? DBValue
----@return self
-function Sql:with_recursive(name, token)
-  local with_token = self:_get_with_token(name, token)
-  if self._with_recursive then
-    self._with_recursive = format("%s, %s", self._with_recursive, with_token)
-  else
-    self._with_recursive = with_token
-  end
-  return self
-end
-
----@param other_sql Sql
----@return self
-function Sql:union(other_sql)
-  return self:_handle_set_option(other_sql, "_union");
-end
-
----@param other_sql Sql
----@return self
-function Sql:union_all(other_sql)
-  return self:_handle_set_option(other_sql, "_union_all");
-end
-
----@param other_sql Sql
----@return self
-function Sql:except(other_sql)
-  return self:_handle_set_option(other_sql, "_except");
-end
-
----@param other_sql Sql
----@return self
-function Sql:except_all(other_sql)
-  return self:_handle_set_option(other_sql, "_except_all");
-end
-
----@param other_sql Sql
----@return self
-function Sql:intersect(other_sql)
-  return self:_handle_set_option(other_sql, "_intersect");
-end
-
----@param other_sql Sql
----@return self
-function Sql:intersect_all(other_sql)
-  return self:_handle_set_option(other_sql, "_intersect_all");
-end
-
----@param table_alias string
----@return self
-function Sql:as(table_alias)
-  self._as = table_alias
-  return self
-end
-
----@param name string
----@param rows Record[]
----@return self
-function Sql:with_values(name, rows)
-  local columns = get_keys(rows)
-  rows, columns = self:_get_cte_values_literal(rows, columns, true)
-  local cte_name = format("%s(%s)", name, concat(columns, ", "))
-  local cte_values = format("(VALUES %s)", as_token(rows))
-  return self:with(cte_name, cte_values)
-end
-
----@param rows Record[]
----@param key Keys
----@return self|XodelInstance[]
-function Sql:get_merge(rows, key)
-  local columns = get_keys(rows)
-  rows, columns = self:_get_cte_values_literal(rows, columns, true)
-  local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
-  local cte_name = format("V(%s)", concat(columns, ", "))
-  local cte_values = format("(VALUES %s)", as_token(rows))
-  self:_base_select("V.*"):with(cte_name, cte_values):_base_join("RIGHT", "V", join_cond)
-  return self
-end
-
----@return self
-function Sql:copy()
-  local copy_sql = {}
-  for key, value in pairs(self) do
-    if type(value) == 'table' then
-      copy_sql[key] = clone(value)
-    else
-      copy_sql[key] = value
-    end
-  end
-  return setmetatable(copy_sql, getmetatable(self))
-end
-
----@return self
-function Sql:clear()
-  local model = self.model
-  local table_name = self.table_name
-  local as = self._as
-  table_clear(self)
-  self.model = model
-  self.table_name = table_name
-  self._as = as
-  return self
-end
-
----@param cond? table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
----@return self
-function Sql:delete(cond, op, dval)
-  self._delete = true
-  if cond ~= nil then
-    self:where(cond, op, dval)
-  end
-  return self
-end
-
----@param a (fun(ctx:table):string|table)|DBValue
----@param b? DBValue
----@param ...? DBValue
----@return self
-function Sql:select(a, b, ...)
-  local s = self:_get_column_tokens("select", a, b, ...)
-  if s == "" then
-  elseif not self._select then
-    self._select = s
-  else
-    self._select = self._select .. ", " .. s
-  end
-  self:_keep_args("_select_args", a, b, ...)
-  return self
-end
-
----@param kwargs {string: string}
----@return self
-function Sql:select_as(kwargs)
-  local cols = {}
-  local keys = {}
-  for key, alias in pairs(kwargs) do
-    local col = self:_parse_column(key) .. ' AS ' .. alias
-    cols[#cols + 1] = col
-    keys[#keys + 1] = key
-  end
-  if #cols > 0 then
-    if not self._select then
-      self._select = concat(cols, ", ")
-    else
-      self._select = self._select .. ", " .. concat(cols, ", ")
-    end
-  end
-  self:_keep_args("_select_args", unpack(keys))
-  return self
-end
-
----@param a DBValue
----@param b? DBValue
----@param ...? DBValue
----@return self
-function Sql:select_literal(a, b, ...)
-  local s = self:_get_select_literal(a, b, ...)
-  if s == "" then
-  elseif not self._select then
-    self._select = s
-  else
-    self._select = self._select .. ", " .. s
-  end
-  self:_keep_args("_select_literal_args", a, b, ...)
-  return self
-end
-
----@param kwargs {string: string}
----@return self
-function Sql:select_literal_as(kwargs)
-  local cols = {}
-  local keys = {}
-  for key, alias in pairs(kwargs) do
-    local col = as_literal(key) .. ' AS ' .. alias
-    cols[#cols + 1] = col
-    keys[#keys + 1] = key
-  end
-  if #cols > 0 then
-    if not self._select then
-      self._select = concat(cols, ", ")
-    else
-      self._select = self._select .. ", " .. concat(cols, ", ")
-    end
-  end
-  self:_keep_args("_select_literal_args", unpack(keys))
-  return self
-end
-
----@param a (fun(ctx:table):string)|DBValue
----@param b? DBValue
----@param ...? DBValue
----@return self
-function Sql:returning(a, b, ...)
-  local s = self:_get_column_tokens("returning", a, b, ...)
-  if s == "" then
-  elseif not self._returning then
-    self._returning = s
-  else
-    self._returning = self._returning .. ", " .. s
-  end
-  self:_keep_args("_returning_args", a, b, ...)
-  return self
-end
-
----@param a DBValue
----@param b? DBValue
----@param ...? DBValue
----@return self
-function Sql:returning_literal(a, b, ...)
-  local s = self:_get_select_literal(a, b, ...)
-  if s == "" then
-  elseif not self._returning then
-    self._returning = s
-  else
-    self._returning = self._returning .. ", " .. s
-  end
-  self:_keep_args("_returning_literal_args", a, b, ...)
-  return self
-end
-
----@param a string
----@param ... string
-function Sql:group(a, ...)
-  local s = self:_get_column_tokens("group_by", a, ...)
-  if s == "" then
-  elseif not self._group then
-    self._group = s
-  else
-    self._group = self._group .. ", " .. s
-  end
-  self:select(a, ...)
-  self:_keep_args("_group_args", a, ...)
-  return self
-end
-
-function Sql:group_by(...) return self:group(...) end
 
 local string_db_types = {
   varchar = true,
@@ -2195,6 +1750,7 @@ local EXPR_OPERATORS = {
   end,
 }
 
+---@private
 ---@param value DBValue
 ---@param key string
 ---@param op string
@@ -2209,6 +1765,8 @@ function Sql:_get_expr_token(value, key, op)
   return handler(key, value)
 end
 
+--TODO:
+---@private
 ---@param key DBValue
 ---@return DBValue
 function Sql:_get_order_column(key)
@@ -2225,6 +1783,8 @@ function Sql:_get_order_column(key)
   end
 end
 
+--TODO:
+---@private
 ---@param a (fun(ctx:table):string|table)|DBValue
 ---@param b? DBValue
 ---@param ...? DBValue
@@ -2261,117 +1821,8 @@ function Sql:_get_order_token(a, b, ...)
   end
 end
 
----@param a (fun(ctx:table):string|table)|DBValue
----@param ...? DBValue
----@return self
-function Sql:order(a, ...)
-  local s = self:_get_order_token(a, ...)
-  if s == "" then
-  elseif not self._order then
-    self._order = s
-  else
-    self._order = self._order .. ", " .. s
-  end
-  return self
-end
-
-function Sql:order_by(...) return self:order(...) end
-
----@param ... string
-function Sql:using(...)
-  return self:_base_using(...)
-end
-
----@param ... string
----@return self
-function Sql:from(...)
-  local s = get_list_tokens(...)
-  if s == "" then
-  elseif not self._from then
-    self._from = s
-  else
-    self._from = self._from .. ", " .. s
-  end
-  return self
-end
-
----@return string
-function Sql:get_table()
-  if self._as then
-    return self.table_name .. ' ' .. self._as
-  else
-    return self.table_name
-  end
-end
-
----@param join_args string|table
----@param key string
----@param op? string
----@param val? DBValue
----@return self
-function Sql:join(join_args, key, op, val)
-  return self:_base_join("INNER", join_args, key, op, val)
-end
-
----@param join_args string|table
----@param key string
----@param op? string
----@param val? DBValue
----@return self
-function Sql:inner_join(join_args, key, op, val)
-  return self:_base_join("INNER", join_args, key, op, val)
-end
-
----@param join_args string|table
----@param key string
----@param op? string
----@param val? DBValue
----@return self
-function Sql:left_join(join_args, key, op, val)
-  return self:_base_join("LEFT", join_args, key, op, val)
-end
-
----@param join_args string|table
----@param key string
----@param op? string
----@param val? DBValue
----@return self
-function Sql:right_join(join_args, key, op, val)
-  return self:_base_join("RIGHT", join_args, key, op, val)
-end
-
----@param join_args string|table
----@param key string
----@param op string
----@param val DBValue
----@return self
-function Sql:full_join(join_args, key, op, val)
-  return self:_base_join("FULL", join_args, key, op, val)
-end
-
----@param join_args string|table
----@param key string
----@param op string
----@param val DBValue
----@return self
-function Sql:cross_join(join_args, key, op, val)
-  return self:_base_join("CROSS", join_args, key, op, val)
-end
-
----@param n integer
----@return self
-function Sql:limit(n)
-  self._limit = n
-  return self
-end
-
----@param n integer
----@return self
-function Sql:offset(n)
-  self._offset = n
-  return self
-end
-
+--TODO:
+---@private
 ---@param q QClass
 ---@return string
 function Sql:_resolve_Q(q)
@@ -2386,68 +1837,10 @@ function Sql:_resolve_Q(q)
   end
 end
 
----@param cond table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
----@return self
-function Sql:where(cond, op, dval)
-  if type(cond) == 'table' and cond.__IS_LOGICAL_BUILDER__ then
-    local where_token = self:_resolve_Q(cond)
-    if self._where == nil then
-      self._where = where_token
-    else
-      self._where = format("(%s) AND (%s)", self._where, where_token)
-    end
-    return self
-  else
-    local where_token = self:_get_condition_token(cond, op, dval)
-    return self:_handle_where_token(where_token, "(%s) AND (%s)")
-  end
-end
-
----@param cond table|string|fun(ctx:table):string
----@param op? DBValue
----@param dval? DBValue
-function Sql:having(cond, op, dval)
-  if self._having then
-    self._having = format("(%s) AND (%s)", self._having, self:_get_condition_token(cond, op, dval))
-  else
-    self._having = self:_get_condition_token(cond, op, dval)
-  end
-  return self
-end
-
----@param ... string
----@return self
-function Sql:distinct(...)
-  -- PG requires: SELECT DISTINCT ON expressions must match initial ORDER BY expressions
-  -- so you'd better use order_by first
-  if select('#', ...) == 0 then
-    self._distinct = true
-  else
-    local distinct_token = self:_get_column_tokens("distinct", ...)
-    self._distinct_on = distinct_token
-  end
-  return self
-end
-
----@param name string
----@param amount? number
----@return self
-function Sql:increase(name, amount)
-  return self:update { [name] = F(name) + (amount or 1) }
-end
-
----@param name string
----@param amount? number
----@return self
-function Sql:decrease(name, amount)
-  return self:update { [name] = F(name) - (amount or 1) }
-end
-
 --- {{id=1}, {id=2}, {id=3}} => columns: {'id'}  keys: {{1},{2},{3}}
 --- each row of keys must be the same struct, so get columns from first row
-
+--TODO:
+---@private
 ---@param keys Record[]
 ---@param columns? string[]
 ---@return self
@@ -2463,6 +1856,8 @@ function Sql:_base_get_multiple(keys, columns)
   return self:with(cte_name, cte_values):right_join("V", join_cond)
 end
 
+--TODO:
+---@private
 ---@param rows Record[]
 ---@param columns? string[]
 ---@param no_check? boolean
@@ -2491,29 +1886,6 @@ function Sql:_get_cte_values_literal(rows, columns, no_check)
   return res, columns
 end
 
-function Sql:_resolve_reversed_column(key, is_aggregate)
-  -- Count('entry') or where {entry=1}
-  local reversed_fk = self.model.reversed_fields[key] -- entry
-  if not reversed_fk then
-    return
-  end
-  local ref_column = reversed_fk.reference_column -- blog_id
-  local join_type = is_aggregate and "LEFT" or self._join_type or "INNER"
-  local prefix = self:_handle_manual_join(
-    join_type,
-    { reversed_fk.reference }, -- Entry
-    function(ctx)
-      return format("%s = %s", ctx[1][self.model.primary_key], ctx[#ctx][ref_column])
-    end,
-    key)
-  return prefix .. "." .. reversed_fk.reference.primary_key
-  -- if not is_aggregate then
-  --   return prefix .. "." .. ref_column
-  -- else
-  --   return prefix .. "." .. reversed_fk.reference.primary_key
-  -- end
-end
-
 local _debug = 0
 local function debug(...)
   if _debug == 1 then
@@ -2539,7 +1911,11 @@ local NON_OPERATOR_CONTEXTS = {
   order_by = true,
   distinct = true,
 }
+
+
 -- Blog.objects.filter(entry__headline='a')
+--TODO:
+---@private
 ---@param key string column name
 ---@param context? ColumnContext
 ---@return string resolved_column
@@ -2723,6 +2099,8 @@ function Sql:_parse_column(key, context)
   return final_column or (prefix .. '.' .. column), op
 end
 
+--TODO:
+---@private
 ---@param key string column
 ---@return string, string
 function Sql:_parse_having_column(key)
@@ -2735,6 +2113,8 @@ function Sql:_parse_having_column(key)
   return self:_get_having_column(token), op
 end
 
+--TODO:
+---@private
 ---@param key string
 ---@return string
 function Sql:_get_having_column(key)
@@ -2747,6 +2127,8 @@ function Sql:_get_having_column(key)
   error(format("invalid field name for having: '%s'", key))
 end
 
+--TODO:
+---@private
 ---@param f FClass|DBValue
 ---@return string
 function Sql:_resolve_field_builder(f)
@@ -2757,6 +2139,524 @@ function Sql:_resolve_field_builder(f)
   else
     return format("(%s %s %s)", self:_resolve_field_builder(f.left), f.operator, self:_resolve_field_builder(f.right))
   end
+end
+
+---@param attrs? table
+---@return self
+function Sql:new(attrs)
+  return setmetatable(attrs or {}, self)
+end
+
+--TODO:
+---@param ... Sql|string
+---@return self
+function Sql:prepend(...)
+  if not self._prepend then
+    self._prepend = {}
+  end
+  local n = select("#", ...)
+  for i = n, 1, -1 do
+    local e = select(i, ...)
+    insert(self._prepend, 1, e)
+  end
+  return self
+end
+
+--TODO:
+---@param ... Sql|string
+---@return self
+function Sql:append(...)
+  if not self._append then
+    self._append = {}
+  end
+  for _, statement in ipairs({ ... }) do
+    self._append[#self._append + 1] = statement
+  end
+  return self
+end
+
+--TODO:
+---@return string
+function Sql:statement()
+  local statement = assemble_sql {
+    table_name = self.table_name,
+    as = self._as,
+    with = self._with,
+    with_recursive = self._with_recursive,
+    distinct = self._distinct,
+    distinct_on = self._distinct_on,
+    returning = self._returning,
+    insert = self._insert,
+    update = self._update,
+    delete = self._delete,
+    using = self._using,
+    select = self._select,
+    from = self._from,
+    join_args = self._join_args,
+    where = self._where,
+    group = self._group,
+    having = self._having,
+    order = self._order,
+    limit = self._limit,
+    offset = self._offset
+  }
+  if self._prepend then
+    local res = {}
+    for _, sql in ipairs(self._prepend) do
+      if type(sql) == 'string' then
+        res[#res + 1] = sql
+      else
+        res[#res + 1] = sql:statement()
+      end
+    end
+    statement = concat(res, ';') .. ';' .. statement
+  end
+  if self._append then
+    local res = {}
+    for _, sql in ipairs(self._append) do
+      if type(sql) == 'string' then
+        res[#res + 1] = sql
+      else
+        res[#res + 1] = sql:statement()
+      end
+    end
+    statement = statement .. ';' .. concat(res, ';')
+  end
+  return statement
+end
+
+--TODO:
+---@param name string
+---@param token? DBValue
+---@return self
+function Sql:with(name, token)
+  local with_token = self:_get_with_token(name, token)
+  if self._with then
+    self._with = format("%s, %s", self._with, with_token)
+  else
+    self._with = with_token
+  end
+  return self
+end
+
+--TODO:
+---@param name string
+---@param token? DBValue
+---@return self
+function Sql:with_recursive(name, token)
+  local with_token = self:_get_with_token(name, token)
+  if self._with_recursive then
+    self._with_recursive = format("%s, %s", self._with_recursive, with_token)
+  else
+    self._with_recursive = with_token
+  end
+  return self
+end
+
+---@param other_sql Sql
+---@return self
+function Sql:union(other_sql)
+  return self:_handle_set_option(other_sql, "_union");
+end
+
+---@param other_sql Sql
+---@return self
+function Sql:union_all(other_sql)
+  return self:_handle_set_option(other_sql, "_union_all");
+end
+
+---@param other_sql Sql
+---@return self
+function Sql:except(other_sql)
+  return self:_handle_set_option(other_sql, "_except");
+end
+
+---@param other_sql Sql
+---@return self
+function Sql:except_all(other_sql)
+  return self:_handle_set_option(other_sql, "_except_all");
+end
+
+---@param other_sql Sql
+---@return self
+function Sql:intersect(other_sql)
+  return self:_handle_set_option(other_sql, "_intersect");
+end
+
+---@param other_sql Sql
+---@return self
+function Sql:intersect_all(other_sql)
+  return self:_handle_set_option(other_sql, "_intersect_all");
+end
+
+---@param table_alias string
+---@return self
+function Sql:as(table_alias)
+  self._as = table_alias
+  return self
+end
+
+--TODO:
+---@param name string
+---@param rows Record[]
+---@return self
+function Sql:with_values(name, rows)
+  local columns = get_keys(rows)
+  rows, columns = self:_get_cte_values_literal(rows, columns, true)
+  local cte_name = format("%s(%s)", name, concat(columns, ", "))
+  local cte_values = format("(VALUES %s)", as_token(rows))
+  return self:with(cte_name, cte_values)
+end
+
+--TODO:
+---@param rows Record[]
+---@param key Keys
+---@return self|XodelInstance[]
+function Sql:get_merge(rows, key)
+  local columns = get_keys(rows)
+  rows, columns = self:_get_cte_values_literal(rows, columns, true)
+  local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
+  local cte_name = format("V(%s)", concat(columns, ", "))
+  local cte_values = format("(VALUES %s)", as_token(rows))
+  self:_base_select("V.*"):with(cte_name, cte_values):_base_join("RIGHT", "V", join_cond)
+  return self
+end
+
+---@return self
+function Sql:copy()
+  local copy_sql = {}
+  for key, value in pairs(self) do
+    if type(value) == 'table' then
+      copy_sql[key] = clone(value)
+    else
+      copy_sql[key] = value
+    end
+  end
+  return setmetatable(copy_sql, getmetatable(self))
+end
+
+--TODO:
+---@return self
+function Sql:clear()
+  local model = self.model
+  local table_name = self.table_name
+  local as = self._as
+  table_clear(self)
+  self.model = model
+  self.table_name = table_name
+  self._as = as
+  return self
+end
+
+--TODO:
+---@param cond? table|string|fun(ctx:table):string
+---@param op? string
+---@param dval? DBValue
+---@return self
+function Sql:delete(cond, op, dval)
+  self._delete = true
+  if cond ~= nil then
+    self:where(cond, op, dval)
+  end
+  return self
+end
+
+--TODO:
+---@param a (fun(ctx:table):string|table)|DBValue
+---@param b? DBValue
+---@param ...? DBValue
+---@return self
+function Sql:select(a, b, ...)
+  local s = self:_get_column_tokens("select", a, b, ...)
+  if s == "" then
+  elseif not self._select then
+    self._select = s
+  else
+    self._select = self._select .. ", " .. s
+  end
+  self:_keep_args("_select_args", a, b, ...)
+  return self
+end
+
+---@param kwargs {[string]: string}
+---@return self
+function Sql:select_as(kwargs)
+  local cols = {}
+  local keys = {}
+  for key, alias in pairs(kwargs) do
+    local col = self:_parse_column(key) .. ' AS ' .. alias
+    cols[#cols + 1] = col
+    keys[#keys + 1] = key
+  end
+  if #cols > 0 then
+    if not self._select then
+      self._select = concat(cols, ", ")
+    else
+      self._select = self._select .. ", " .. concat(cols, ", ")
+    end
+  end
+  self:_keep_args("_select_args", unpack(keys))
+  return self
+end
+
+---@param a DBValue
+---@param b? DBValue
+---@param ...? DBValue
+---@return self
+function Sql:select_literal(a, b, ...)
+  local s = self:_get_select_literal(a, b, ...)
+  if s == "" then
+  elseif not self._select then
+    self._select = s
+  else
+    self._select = self._select .. ", " .. s
+  end
+  self:_keep_args("_select_literal_args", a, b, ...)
+  return self
+end
+
+---@param kwargs {string: string}
+---@return self
+function Sql:select_literal_as(kwargs)
+  local cols = {}
+  local keys = {}
+  for key, alias in pairs(kwargs) do
+    local col = as_literal(key) .. ' AS ' .. alias
+    cols[#cols + 1] = col
+    keys[#keys + 1] = key
+  end
+  if #cols > 0 then
+    if not self._select then
+      self._select = concat(cols, ", ")
+    else
+      self._select = self._select .. ", " .. concat(cols, ", ")
+    end
+  end
+  self:_keep_args("_select_literal_args", unpack(keys))
+  return self
+end
+
+--TODO:
+---@param a (fun(ctx:table):string)|DBValue
+---@param b? DBValue
+---@param ...? DBValue
+---@return self
+function Sql:returning(a, b, ...)
+  local s = self:_get_column_tokens("returning", a, b, ...)
+  if s == "" then
+  elseif not self._returning then
+    self._returning = s
+  else
+    self._returning = self._returning .. ", " .. s
+  end
+  self:_keep_args("_returning_args", a, b, ...)
+  return self
+end
+
+--TODO:
+---@param a DBValue
+---@param b? DBValue
+---@param ...? DBValue
+---@return self
+function Sql:returning_literal(a, b, ...)
+  local s = self:_get_select_literal(a, b, ...)
+  if s == "" then
+  elseif not self._returning then
+    self._returning = s
+  else
+    self._returning = self._returning .. ", " .. s
+  end
+  self:_keep_args("_returning_literal_args", a, b, ...)
+  return self
+end
+
+--TODO:
+---@param a string
+---@param ... string
+function Sql:group(a, ...)
+  local s = self:_get_column_tokens("group_by", a, ...)
+  if s == "" then
+  elseif not self._group then
+    self._group = s
+  else
+    self._group = self._group .. ", " .. s
+  end
+  self:select(a, ...)
+  self:_keep_args("_group_args", a, ...)
+  return self
+end
+
+function Sql:group_by(...) return self:group(...) end
+
+--TODO:
+---@param a (fun(ctx:table):string|table)|DBValue
+---@param ...? DBValue
+---@return self
+function Sql:order(a, ...)
+  local s = self:_get_order_token(a, ...)
+  if s == "" then
+  elseif not self._order then
+    self._order = s
+  else
+    self._order = self._order .. ", " .. s
+  end
+  return self
+end
+
+function Sql:order_by(...) return self:order(...) end
+
+---@param ... string
+function Sql:using(...)
+  return self:_base_using(...)
+end
+
+---@param ... string
+---@return self
+function Sql:from(...)
+  local s = get_list_tokens(...)
+  if s == "" then
+  elseif not self._from then
+    self._from = s
+  else
+    self._from = self._from .. ", " .. s
+  end
+  return self
+end
+
+---@return string
+function Sql:get_table()
+  if self._as then
+    return self.table_name .. ' ' .. self._as
+  else
+    return self.table_name
+  end
+end
+
+---@param join_args string|table
+---@param key string
+---@param op? string
+---@param val? DBValue
+---@return self
+function Sql:join(join_args, key, op, val)
+  return self:_base_join("INNER", join_args, key, op, val)
+end
+
+---@param join_args string|table
+---@param key string
+---@param op? string
+---@param val? DBValue
+---@return self
+function Sql:inner_join(join_args, key, op, val)
+  return self:_base_join("INNER", join_args, key, op, val)
+end
+
+---@param join_args string|table
+---@param key string
+---@param op? string
+---@param val? DBValue
+---@return self
+function Sql:left_join(join_args, key, op, val)
+  return self:_base_join("LEFT", join_args, key, op, val)
+end
+
+---@param join_args string|table
+---@param key string
+---@param op? string
+---@param val? DBValue
+---@return self
+function Sql:right_join(join_args, key, op, val)
+  return self:_base_join("RIGHT", join_args, key, op, val)
+end
+
+---@param join_args string|table
+---@param key string
+---@param op string
+---@param val DBValue
+---@return self
+function Sql:full_join(join_args, key, op, val)
+  return self:_base_join("FULL", join_args, key, op, val)
+end
+
+---@param join_args string|table
+---@param key string
+---@param op string
+---@param val DBValue
+---@return self
+function Sql:cross_join(join_args, key, op, val)
+  return self:_base_join("CROSS", join_args, key, op, val)
+end
+
+---@param n integer
+---@return self
+function Sql:limit(n)
+  self._limit = n
+  return self
+end
+
+---@param n integer
+---@return self
+function Sql:offset(n)
+  self._offset = n
+  return self
+end
+
+---@param cond table|string|fun(ctx:table):string
+---@param op? string
+---@param dval? DBValue
+---@return self
+function Sql:where(cond, op, dval)
+  if type(cond) == 'table' and cond.__IS_LOGICAL_BUILDER__ then
+    local where_token = self:_resolve_Q(cond)
+    if self._where == nil then
+      self._where = where_token
+    else
+      self._where = format("(%s) AND (%s)", self._where, where_token)
+    end
+    return self
+  else
+    local where_token = self:_get_condition_token(cond, op, dval)
+    return self:_handle_where_token(where_token, "(%s) AND (%s)")
+  end
+end
+
+---@param cond table|string|fun(ctx:table):string
+---@param op? DBValue
+---@param dval? DBValue
+function Sql:having(cond, op, dval)
+  if self._having then
+    self._having = format("(%s) AND (%s)", self._having, self:_get_condition_token(cond, op, dval))
+  else
+    self._having = self:_get_condition_token(cond, op, dval)
+  end
+  return self
+end
+
+---@param ... string
+---@return self
+function Sql:distinct(...)
+  -- PG requires: SELECT DISTINCT ON expressions must match initial ORDER BY expressions
+  -- so you'd better use order_by first
+  if select('#', ...) == 0 then
+    self._distinct = true
+  else
+    local distinct_token = self:_get_column_tokens("distinct", ...)
+    self._distinct_on = distinct_token
+  end
+  return self
+end
+
+---@param name string
+---@param amount? number
+---@return self
+function Sql:increase(name, amount)
+  return self:update { [name] = F(name) + (amount or 1) }
+end
+
+---@param name string
+---@param amount? number
+---@return self
+function Sql:decrease(name, amount)
+  return self:update { [name] = F(name) - (amount or 1) }
 end
 
 ---@param kwargs {[string]:table}
@@ -2815,16 +2715,61 @@ function Sql:insert(rows, columns)
   end
 end
 
-function Sql:_resolve_F(value)
-  if type(value) == 'table' and value.__IS_FIELD_BUILDER__ then
-    local exp_token = self:_resolve_field_builder(value)
-    return function()
-      return exp_token
+-- WITH
+--   U AS (
+--     INSERT INTO
+--       inst_config AS T (name, inst_id, seq, status, position)
+--     VALUES
+--       ('tom', 1, 1, 'ok', 'ceo'),
+--       ('kate', 2, 2, 'ok', 'cto') ON CONFLICT (inst_id, name)
+--     DO
+--     UPDATE
+--     SET
+--       seq = EXCLUDED.seq,
+--       status = EXCLUDED.status,
+--       position = EXCLUDED.position
+--     RETURNING
+--       T.inst_id,
+--       T.name
+--   )
+-- DELETE FROM inst_config T
+-- WHERE
+--   (T.inst_id, T.name) NOT IN (
+--     SELECT
+--       inst_id,
+--       name
+--     FROM
+--       U
+--   )
+-- RETURNING
+--   *;
+--TODO:
+---@param rows Record[]
+---@param key? Keys
+---@param columns? string[]
+function Sql:align(rows, key, columns)
+  rows, key, columns = self:_clean_bulk_params(rows, key, columns)
+  local upsert_query = self.model:create_sql()
+  if not self._skip_validate then
+    ---@diagnostic disable-next-line: cast-local-type
+    rows, key, columns = self.model:validate_create_rows(rows, key, columns)
+    if rows == nil then
+      error(key)
     end
   end
-  return value
+  ---@diagnostic disable-next-line: cast-local-type, param-type-mismatch
+  rows, columns = self.model:prepare_db_rows(rows, columns)
+  if rows == nil then
+    error(columns)
+  end
+  upsert_query:returning(key)
+  ---@diagnostic disable-next-line: param-type-mismatch
+  Sql._base_upsert(upsert_query, rows, key, columns)
+  self:with("U", upsert_query):where(key, "NOT IN", Sql:new { table_name = 'U' }:_base_select(key)):delete()
+  return self
 end
 
+--TODO:
 ---@param row Record|Sql|string
 ---@param columns? string[]
 ---@return self
@@ -2857,65 +2802,7 @@ function Sql:update(row, columns)
   end
 end
 
-function Sql:_get_bulk_key(columns)
-  if self.model.unique_together and self.model.unique_together[1] then
-    return clone(self.model.unique_together[1])
-  end
-  for index, name in ipairs(columns) do
-    local f = self.model.fields[name]
-    if f and f.unique then
-      return name
-    end
-  end
-  local pk = self.model.primary_key
-  if pk and Array.includes(columns, pk) then
-    return pk
-  end
-  return pk
-end
-
-function Sql:_get_columns_from_row(row)
-  local columns = {}
-  for k, _ in pairs(row) do
-    if self.model.fields[k] then
-      columns[#columns + 1] = k
-    end
-  end
-  return columns
-end
-
-function Sql:_clean_bulk_params(rows, key, columns)
-  if isempty(rows) then
-    error("empty rows passed to merge")
-  end
-  if not rows[1] then
-    rows = { rows }
-  end
-  if columns == nil then
-    columns = self:_get_columns_from_row(rows[1])
-    if #columns == 0 then
-      error("no columns provided for bulk")
-    end
-  end
-  if key == nil then
-    key = self:_get_bulk_key(columns)
-  end
-  if type(key) == 'string' then
-    if not Array.includes(columns, key) then
-      columns = { key, unpack(columns) }
-    end
-  elseif type(key) == 'table' then
-    for _, k in ipairs(key) do
-      if not Array.includes(columns, k) then
-        columns = { k, unpack(columns) }
-      end
-    end
-  else
-    error("invalid key type for bulk:" .. type(key))
-  end
-  return rows, key, columns
-end
-
+--TODO:
 ---@param rows Record[]
 ---@param key? Keys
 ---@param columns? string[]
@@ -2938,6 +2825,7 @@ function Sql:merge(rows, key, columns)
   return Sql._base_merge(self, rows, key, columns)
 end
 
+--TODO:
 ---@param rows Record[]
 ---@param key? Keys
 ---@param columns? string[]
@@ -2960,6 +2848,7 @@ function Sql:upsert(rows, key, columns)
   return Sql._base_upsert(self, rows, key, columns)
 end
 
+--TODO:
 ---@param rows Record[]
 ---@param key? Keys
 ---@param columns? string[]
@@ -2982,6 +2871,7 @@ function Sql:updates(rows, key, columns)
   return Sql._base_updates(self, rows, key, columns)
 end
 
+--TODO:
 ---@param keys Record[]
 ---@param columns string[]
 ---@return self
@@ -2989,6 +2879,7 @@ function Sql:get_multiple(keys, columns)
   return Sql._base_get_multiple(self, keys, columns)
 end
 
+--TODO:
 ---@param statement string
 ---@return Array<XodelInstance>|Array<XodelInstance>[]
 function Sql:exec_statement(statement)
@@ -3060,6 +2951,7 @@ function Sql:exec()
   return self:exec_statement(self:statement())
 end
 
+--TODO:
 ---@param cond? table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
@@ -3135,6 +3027,7 @@ function Sql:skip_validate(bool)
   return self
 end
 
+--TODO:
 ---@param col? (fun(ctx:table):string)|string
 ---@return Record[]
 function Sql:flat(col)
@@ -3149,6 +3042,7 @@ function Sql:flat(col)
   end
 end
 
+--TODO:
 ---@param cond? table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
@@ -3173,6 +3067,7 @@ function Sql:try_get(cond, op, dval)
   end
 end
 
+--TODO:
 ---@param cond? table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
@@ -3209,6 +3104,7 @@ function Sql:execr()
   return self:raw():exec()
 end
 
+--TODO:
 ---@param fk_name string
 ---@param select_names string[]|string
 ---@param ... string
@@ -3278,7 +3174,7 @@ end
 -- FROM
 --   branch_recursive AS branch;
 
-
+--TODO:
 ---@param name string
 ---@param value any
 ---@param select_names? string[]
@@ -3643,6 +3539,7 @@ setmetatable(Xodel, {
 
 Xodel.__index = Xodel
 
+--TODO:
 ---@param cls Xodel
 ---@param attrs? table
 ---@return Xodel
@@ -3668,6 +3565,7 @@ end
 ---@field referenced_label_column? string
 ---@field preload? boolean
 
+--TODO:
 ---@param cls Xodel
 ---@param options ModelOpts
 ---@return Xodel
@@ -3675,6 +3573,7 @@ function Xodel.create_model(cls, options)
   return cls:_make_model_class(cls:normalize(options))
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param options {[string]:any}
 ---@return AnyField
@@ -3702,12 +3601,14 @@ function Xodel.make_field_from_json(cls, options)
   return res
 end
 
+--TODO:
 ---@param cls Xodel
 ---@return Sql
 function Xodel.create_sql(cls)
   return Sql:new { model = cls, table_name = cls.table_name }:as('T')
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param rows table[]
 ---@return Sql
@@ -3715,6 +3616,7 @@ function Xodel.create_sql_as(cls, table_name, rows)
   return Sql:new { model = cls, table_name = table_name }:as(table_name):with_values(table_name, rows)
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param model any
 ---@return boolean
@@ -3722,6 +3624,7 @@ function Xodel.is_model_class(cls, model)
   return type(model) == 'table' and model.__is_model_class__
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param name string
 function Xodel.check_field_name(cls, name)
@@ -3731,7 +3634,9 @@ function Xodel.check_field_name(cls, name)
   end
 end
 
+--TODO:
 ---@private
+--TODO:
 ---@param cls Xodel
 ---@param opts ModelOpts
 ---@return Xodel
@@ -3827,6 +3732,7 @@ function Xodel._make_model_class(cls, opts)
 end
 
 local EXTEND_ATTRS = { 'label', 'referenced_label_column', 'preload' }
+--TODO:
 ---@param cls Xodel
 ---@param options ModelOpts
 ---@return ModelOpts
@@ -3938,6 +3844,7 @@ function Xodel.normalize(cls, options)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 function Xodel.set_label_name_dict(cls)
   cls.label_to_name = {}
@@ -3969,6 +3876,7 @@ local function get_admin_list_names(model)
   return names
 end
 
+--TODO:
 ---@param cls Xodel
 function Xodel.ensure_admin_list_names(cls)
   cls.admin.list_names = Array(clone(cls.admin.list_names or {}));
@@ -3977,6 +3885,7 @@ function Xodel.ensure_admin_list_names(cls)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 function Xodel.ensure_ctime_list_names(cls, ctime_name)
   local admin = assert(cls.admin)
@@ -3985,6 +3894,7 @@ function Xodel.ensure_ctime_list_names(cls, ctime_name)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 function Xodel.resolve_foreignkey_self(cls)
   for _, name in ipairs(cls.field_names) do
@@ -4002,6 +3912,7 @@ function Xodel.resolve_foreignkey_self(cls)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 function Xodel.resolve_foreignkey_related(cls)
   for _, name in ipairs(cls.field_names) do
@@ -4030,6 +3941,7 @@ function Xodel.resolve_foreignkey_related(cls)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param opts {table_name:string, label?:string}
 ---@return Xodel
@@ -4062,6 +3974,7 @@ function Xodel.materialize_with_table_name(cls, opts)
   return cls
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param ... ModelOpts
 ---@return Xodel
@@ -4069,6 +3982,7 @@ function Xodel.mix(cls, ...)
   return cls:_make_model_class(cls:merge_models { ... })
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param models ModelOpts[]
 ---@return ModelOpts
@@ -4086,6 +4000,7 @@ function Xodel.merge_models(cls, models)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param a ModelOpts
 ---@param b ModelOpts
@@ -4123,6 +4038,7 @@ function Xodel.merge_model(cls, a, b)
   return cls:normalize(C)
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param a AnyField
 ---@param b AnyField
@@ -4137,6 +4053,7 @@ function Xodel.merge_field(cls, a, b)
   return cls:make_field_from_json(options)
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param names? string[]|string
 function Xodel.to_json(cls, names)
@@ -4197,6 +4114,7 @@ function Xodel.to_json(cls, names)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param input Record
 ---@param names? string[]
@@ -4211,6 +4129,7 @@ function Xodel.save(cls, input, names, key)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param key  string
 ---@return string
@@ -4225,6 +4144,7 @@ function Xodel.check_unique_key(cls, key)
   return key
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param input Record
 ---@param names? string[]
@@ -4240,6 +4160,7 @@ function Xodel.save_create(cls, input, names, key)
   return cls:create_record(data)
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param input Record
 ---@param names? string[]
@@ -4275,6 +4196,7 @@ function Xodel.save_update(cls, input, names, key)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param data Record
 ---@param columns? string[]
@@ -4306,6 +4228,7 @@ function Xodel.prepare_for_db(cls, data, columns, is_update)
   return prepared
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param input Record
 ---@param names? string[]
@@ -4319,6 +4242,8 @@ function Xodel.validate(cls, input, names, key)
   end
 end
 
+--done
+--TODO:
 ---@param cls Xodel
 ---@param input Record
 ---@param names? string[]
@@ -4357,6 +4282,8 @@ function Xodel.validate_create(cls, input, names)
   end
 end
 
+--done
+--TODO:
 ---@param cls Xodel
 ---@param input Record
 ---@param names? string[]
@@ -4397,6 +4324,7 @@ function Xodel.validate_update(cls, input, names)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param tf TableField like MegaDoc.dests
 ---@return ForeignkeyField? like Dest.doc_id
@@ -4416,6 +4344,7 @@ function Xodel._get_cascade_field(cls, tf)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param callback fun(tf:TableField, fk:ForeignkeyField)
 function Xodel._walk_cascade_fields(cls, callback)
@@ -4431,6 +4360,7 @@ function Xodel._walk_cascade_fields(cls, callback)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param input Record
 ---@param names? string[]
@@ -4452,6 +4382,7 @@ function Xodel.validate_cascade_update(cls, input, names)
   return data
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param input Record
 ---@param names? string[]
@@ -4488,6 +4419,7 @@ function Xodel.save_cascade_update(cls, input, names, key)
   return updated_sql:execr()
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param rows Records
 ---@param key Keys
@@ -4543,6 +4475,7 @@ function Xodel.make_field_error(cls, name, err, index)
   }
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param data Record
 ---@return XodelInstance
@@ -4561,7 +4494,9 @@ function Xodel.load(cls, data)
   return cls:create_record(data)
 end
 
+--done
 ---used in merge and upsert
+--TODO:
 ---@param cls Xodel
 ---@param rows Record|Record[]
 ---@param columns? string[]
@@ -4592,6 +4527,8 @@ function Xodel.validate_create_data(cls, rows, columns)
   return cleaned, columns
 end
 
+--done
+--TODO:
 ---@param cls Xodel
 ---@param rows Record|Record[]
 ---@param columns? string[]
@@ -4620,7 +4557,9 @@ function Xodel.validate_update_data(cls, rows, columns)
   return cleaned, columns
 end
 
+--done
 ---used in merge and upsert
+--TODO:
 ---@param cls Xodel
 ---@param rows Records
 ---@param key Keys
@@ -4639,6 +4578,8 @@ function Xodel.validate_create_rows(cls, rows, key, columns)
   return cleaned_rows, checked_key, cleaned_columns
 end
 
+--done
+--TODO:
 ---@param cls Xodel
 ---@param rows Records
 ---@param key Keys
@@ -4657,6 +4598,7 @@ function Xodel.validate_update_rows(cls, rows, key, columns)
   return cleaned_rows, checked_key, cleaned_columns
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param rows Records
 ---@param columns? string[]
@@ -4695,6 +4637,7 @@ function Xodel.prepare_db_rows(cls, rows, columns, is_update)
   end
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param row any
 ---@return boolean
@@ -4702,6 +4645,7 @@ function Xodel.is_instance(cls, row)
   return is_sql_instance(row)
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param kwargs table
 ---@return Array<XodelInstance>
@@ -4709,6 +4653,7 @@ function Xodel.filter(cls, kwargs)
   return cls:create_sql():where(kwargs):exec()
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param data table
 ---@return XodelInstance
@@ -4716,6 +4661,7 @@ function Xodel.create_record(cls, data)
   return setmetatable(data, cls.RecordClass)
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param names? string[] select names for load_fk_labels
 ---@return self
@@ -4730,6 +4676,7 @@ function Xodel.load_fk_labels(cls, names)
   return sql
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param params table
 ---@param defaults? table
@@ -4785,6 +4732,7 @@ local function ensure_array(o)
   return o
 end
 
+--TODO:
 ---@param cls Xodel
 ---@param data updateArgs|insertArgs|selectArgs
 ---@return table
