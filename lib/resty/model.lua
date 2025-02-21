@@ -636,33 +636,25 @@ end
 
 --TODO:
 ---@private
----@param rows Sql|Records|string
+---@param rows Sql|Records
 ---@param columns? string[]
 ---@return self
 function Sql:_base_insert(rows, columns)
-  if type(rows) == "table" then
-    if rows.__SQL_BUILDER__ then
-      ---@cast rows Sql
-      if rows._returning_args then
-        self:_set_cud_subquery_insert_token(rows, columns)
-      elseif rows._select_args then
-        self:_set_select_subquery_insert_token(rows, columns)
-      else
-        error("select or returning args should be provided when inserting from a sub query")
-      end
-    elseif rows[1] then
-      ---@cast rows Record[]
-      self._insert = self:_get_bulk_insert_token(rows, columns)
-    elseif next(rows) ~= nil then
-      ---@cast rows Record
-      self._insert = self:_get_insert_token(rows, columns)
+  if rows.__SQL_BUILDER__ then
+    ---@cast rows Sql
+    if rows._returning_args then
+      self:_set_cud_subquery_insert_token(rows, columns)
+    elseif rows._select_args then
+      self:_set_select_subquery_insert_token(rows, columns)
     else
-      error("empty table can't used as insert data")
+      error("select or returning args should be provided when inserting from a sub query")
     end
-  elseif type(rows) == 'string' then
-    self._insert = rows
+  elseif rows[1] then
+    ---@cast rows Record[]
+    self._insert = self:_get_bulk_insert_token(rows, columns)
   else
-    error("invalid rows type:" .. type(rows))
+    ---@cast rows Record
+    self._insert = self:_get_insert_token(rows, columns)
   end
   return self
 end
@@ -1041,7 +1033,6 @@ function Sql:_rows_to_array(rows, columns)
 end
 
 ---make single insert token
---TODO:
 ---@private
 ---@param row Record
 ---@param columns? string[]
@@ -1210,7 +1201,6 @@ function Sql:_get_with_token(name, token)
   end
 end
 
---TODO:
 ---@private
 ---@param row Record
 ---@param columns? string[]
