@@ -1,208 +1,834 @@
 yarn run v1.22.21
 $ yarn resty -I spec ngx_busted.lua -o TAP
 $ resty -I lib -I resty_modules/lualib -I resty_modules/site/lualib --main-conf 'env NODE_ENV;' --http-conf 'lua_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;' -I spec ngx_busted.lua -o TAP
-DROP TABLE IF EXISTS profile CASCADE
-DROP TABLE IF EXISTS org_admin CASCADE
-DROP TABLE IF EXISTS org CASCADE
-DROP TABLE IF EXISTS usr_bak CASCADE
-DROP TABLE IF EXISTS usr CASCADE
-CREATE TABLE usr(
+```sql
+DROP TABLE IF EXISTS store CASCADE
+```
+
+```sql
+DROP TABLE IF EXISTS book CASCADE
+```
+
+```sql
+DROP TABLE IF EXISTS publisher CASCADE
+```
+
+```sql
+DROP TABLE IF EXISTS view_log CASCADE
+```
+
+```sql
+DROP TABLE IF EXISTS entry CASCADE
+```
+
+```sql
+DROP TABLE IF EXISTS author CASCADE
+```
+
+```sql
+DROP TABLE IF EXISTS blog_bin CASCADE
+```
+
+```sql
+DROP TABLE IF EXISTS blog CASCADE
+```
+
+```sql
+CREATE TABLE blog(
   id SERIAL PRIMARY KEY NOT NULL,
-  permission integer DEFAULT 0,
-  name varchar(5) NOT NULL UNIQUE
-)
-CREATE TABLE usr_bak(
-  id SERIAL PRIMARY KEY NOT NULL,
-  permission integer DEFAULT 0,
-  name varchar(5) NOT NULL UNIQUE
-)
-CREATE TABLE org(
-  id SERIAL PRIMARY KEY NOT NULL,
-  name varchar(10) NOT NULL UNIQUE
-)
-CREATE TABLE org_admin(
-  id SERIAL PRIMARY KEY NOT NULL,
-  usr integer REFERENCES "usr" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  org integer REFERENCES "org" ("id") ON DELETE CASCADE ON UPDATE CASCADE 
-)
-CREATE TABLE profile(
-  id SERIAL PRIMARY KEY NOT NULL,
-  usr integer REFERENCES "usr" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  parent integer REFERENCES "profile" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  child integer REFERENCES "profile" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  age integer DEFAULT 1
-)
-INSERT INTO usr AS T (permission, name) VALUES (1, 'u1')
-ok 1 - test insert insert one user
-INSERT INTO usr AS T (permission, name) VALUES (2, 'u2') RETURNING *
-ok 2 - test insert insert one user returning all
-INSERT INTO usr AS T (permission, name) VALUES (0, 'u3') RETURNING T.permission
-ok 3 - test insert insert one user using default
-INSERT INTO usr AS T (permission, name) VALUES (0, 'u4'), (0, 'u5') RETURNING T.name, T.permission
-ok 4 - test insert insert two users
-INSERT INTO usr AS T (permission, name) VALUES (2, 'u6') RETURNING T.name
-ok 5 - test insert insert one user returning id in compact form
-INSERT INTO usr AS T (permission, name) VALUES (0, 'u7'), (0, 'u8') RETURNING T.name
-ok 6 - test insert insert two users returning id in compact form
-INSERT INTO usr_bak AS T (name, permission) SELECT T.name, T.permission FROM usr T WHERE T.permission = 2 RETURNING T.name, T.permission
-SELECT T.name, T.permission FROM usr T WHERE T.permission = 2
-ok 7 - test insert insert bak users from select subquery
-SELECT T.name, T.permission FROM usr T WHERE T.permission = 1
-WITH D(name, permission) AS (DELETE FROM usr T WHERE T.permission = 1 RETURNING T.name, T.permission) INSERT INTO usr_bak AS T (name, permission) SELECT name, permission FROM D RETURNING T.name, T.permission
-ok 8 - test insert insert bak users from delete subquery
-SELECT T.name, 3 AS permission FROM usr_bak T WHERE T.permission = 1
-WITH D(name, permission) AS (DELETE FROM usr_bak T WHERE T.permission = 1 RETURNING T.name, 3) INSERT INTO usr AS T (name, permission) SELECT name, permission FROM D RETURNING T.name, T.permission
-ok 9 - test insert insert users from delete subquery with specified columns
-WITH D(name, permission) AS (UPDATE usr T SET permission = 3 WHERE T.permission = 1 RETURNING T.name, T.permission) INSERT INTO usr_bak AS T (name, permission) SELECT name, permission FROM D RETURNING T.name, T.permission
-UPDATE usr T SET permission = 3 WHERE T.permission = 1 RETURNING T.name, T.permission
-ok 10 - test insert insert bak users from update subquery
-ok 11 - test insert insert one user validate required failed
-ok 12 - test insert insert one user validate choices failed
-ok 13 - test insert insert one user validate maxlength failed
-ok 14 - test insert insert two users validate required failed at 2nd row
-ok 15 - test insert insert two users validate maxlength failed at 2nd row
-ok 16 - test insert insert two users validate choices failed at 1st row
-ok 17 - test insert insert user skip validate
-ok 18 - test insert update user skip validate
-ok 19 - test insert insert one user with invalid columns
-INSERT INTO profile AS T (usr, parent, child, age) VALUES (2, NULL, NULL, 82), (3, NULL, NULL, 62), (4, NULL, NULL, 42), (5, NULL, NULL, 52), (6, NULL, NULL, 32), (7, NULL, NULL, 12)
-UPDATE profile T SET child = 2 WHERE T.usr = 2
-UPDATE profile T SET parent = 1, child = 3 WHERE T.usr = 3
-UPDATE profile T SET parent = 2 WHERE T.usr = 4
-UPDATE profile T SET child = 5 WHERE T.usr = 5
-UPDATE profile T SET parent = 4, child = 6 WHERE T.usr = 6
-UPDATE profile T SET parent = 5 WHERE T.usr = 7
-INSERT INTO org AS T (name) VALUES ('o1'), ('o2'), ('o3')
-INSERT INTO org_admin AS T (usr, org) VALUES (2, 1), (3, 2), (4, 3)
-SELECT T.id, T.permission FROM usr T
-SELECT T.id, T.permission FROM usr T
-ok 20 - test select where simple select
-SELECT T1.age AS parent__age FROM profile T INNER JOIN profile T1 ON (T.parent = T1.id) ORDER BY T1.age ASC
-ok 21 - test select where select auto join
-SELECT T2.age AS parent__parent__age FROM profile T INNER JOIN profile T1 ON (T.parent = T1.id) INNER JOIN profile T2 ON (T1.parent = T2.id) ORDER BY T2.age ASC
-ok 22 - test select where select auto join depth 2
-SELECT T.usr, T1.age AS parent__age, T2.age AS parent__parent__age FROM profile T INNER JOIN profile T1 ON (T.parent = T1.id) INNER JOIN profile T2 ON (T1.parent = T2.id) ORDER BY T.usr ASC
-ok 23 - test select where select auto join depth 2
-SELECT T.usr FROM profile T INNER JOIN profile T1 ON (T.parent = T1.id) WHERE T1.age = 32 LIMIT 2
-ok 24 - test select where where auto join
-SELECT T1.name AS usr__name FROM profile T INNER JOIN usr T1 ON (T.usr = T1.id) INNER JOIN profile T2 ON (T.parent = T2.id) INNER JOIN profile T3 ON (T2.parent = T3.id) WHERE T3.age = 82 LIMIT 2
-ok 25 - test select where where auto join depth 2 and diffent join tables
-SELECT T1.name AS usr__name, T2.name AS org__name FROM org_admin T INNER JOIN usr T1 ON (T.usr = T1.id) INNER JOIN org T2 ON (T.org = T2.id) WHERE T2.name = 'o3'
-ok 26 - test select where where auto join different tables
-```sql
-DROP TABLE IF EXISTS log3 CASCADE
-```
-
-```sql
-DROP TABLE IF EXISTS log2 CASCADE
-```
-
-```sql
-DROP TABLE IF EXISTS log CASCADE
-```
-
-```sql
-DROP TABLE IF EXISTS evaluate CASCADE
-```
-
-```sql
-DROP TABLE IF EXISTS message CASCADE
-```
-
-```sql
-DROP TABLE IF EXISTS profile CASCADE
-```
-
-```sql
-DROP TABLE IF EXISTS dept CASCADE
-```
-
-```sql
-DROP TABLE IF EXISTS usr CASCADE
-```
-
-```sql
-CREATE TABLE usr(
-  id SERIAL PRIMARY KEY NOT NULL,
-  username varchar(5) NOT NULL UNIQUE,
-  permission integer DEFAULT 0
+  name varchar(20) NOT NULL UNIQUE,
+  tagline text NOT NULL DEFAULT 'default tagline'
 )
 ```
 
 ```sql
-CREATE TABLE dept(
+CREATE TABLE blog_bin(
   id SERIAL PRIMARY KEY NOT NULL,
-  name varchar(10) NOT NULL UNIQUE
+  name varchar(256) NOT NULL DEFAULT '',
+  tagline text NOT NULL DEFAULT 'default tagline',
+  note text NOT NULL DEFAULT ''
 )
 ```
 
 ```sql
-CREATE TABLE profile(
+CREATE TABLE author(
   id SERIAL PRIMARY KEY NOT NULL,
-  usr_id integer REFERENCES "usr" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  dept_name varchar(10) REFERENCES "dept" ("name") ON DELETE CASCADE ON UPDATE CASCADE ,
-  age integer NOT NULL DEFAULT 0,
-  sex varchar(256) NOT NULL DEFAULT 'f',
-  salary float DEFAULT 1000
+  name varchar(200) NOT NULL DEFAULT '',
+  email varchar(255) NOT NULL DEFAULT '',
+  age integer ,
+  resume jsonb DEFAULT '{}'
 )
 ```
 
 ```sql
-CREATE TABLE message(
+CREATE TABLE entry(
+  id SERIAL PRIMARY KEY NOT NULL,
+  blog_id integer REFERENCES "blog" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
+  reposted_blog_id integer REFERENCES "blog" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
+  headline varchar(255) NOT NULL DEFAULT '',
+  body_text text NOT NULL DEFAULT '',
+  pub_date date ,
+  mod_date date ,
+  number_of_comments integer ,
+  number_of_pingbacks integer ,
+  rating integer 
+)
+```
+
+```sql
+CREATE TABLE view_log(
+  id SERIAL PRIMARY KEY NOT NULL,
+  entry_id integer REFERENCES "entry" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
+  ctime timestamp(0) WITH TIME ZONE 
+)
+```
+
+```sql
+CREATE TABLE publisher(
+  id SERIAL PRIMARY KEY NOT NULL,
+  name varchar(300) NOT NULL DEFAULT ''
+)
+```
+
+```sql
+CREATE TABLE book(
+  id SERIAL PRIMARY KEY NOT NULL,
+  name varchar(300) NOT NULL DEFAULT '',
+  pages integer ,
+  price float ,
+  rating float ,
+  author integer REFERENCES "author" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
+  publisher_id integer REFERENCES "publisher" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
+  pubdate date 
+)
+```
+
+```sql
+CREATE TABLE store(
   id SERIAL PRIMARY KEY NOT NULL,
   ctime timestamp(0) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   utime timestamp(0) WITH TIME ZONE ,
-  creator integer REFERENCES "profile" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  target integer REFERENCES "profile" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  content varchar(100) NOT NULL DEFAULT ''
+  name varchar(300) NOT NULL DEFAULT ''
 )
 ```
 
 ```sql
-CREATE TABLE evaluate(
-  id SERIAL PRIMARY KEY NOT NULL,
-  ctime timestamp(0) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  utime timestamp(0) WITH TIME ZONE ,
-  usr_id integer REFERENCES "usr" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  year integer ,
-  rank varchar(1) NOT NULL DEFAULT 'C',
-  UNIQUE(usr_id, year)
-)
+INSERT INTO blog AS T (name, tagline) VALUES ('My First Blog', 'Welcome to my blog')
 ```
 
 ```sql
-CREATE TABLE log(
-  id SERIAL PRIMARY KEY NOT NULL,
-  delete_id integer DEFAULT 0,
-  model_name varchar(20) NOT NULL DEFAULT '',
-  action varchar(10) NOT NULL DEFAULT ''
-)
+INSERT INTO blog AS T (name, tagline) VALUES ('Another Blog', 'Another interesting blog')
 ```
 
 ```sql
-CREATE TABLE log2(
-  id SERIAL PRIMARY KEY NOT NULL,
-  buyer integer REFERENCES "usr" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  seller integer REFERENCES "usr" ("id") ON DELETE CASCADE ON UPDATE CASCADE 
-)
+INSERT INTO author AS T (name, email, age, resume) VALUES ('John Doe', 'john@example.com', 30, '[{"end_date":"2020-01-01","company":"CompanyA","position":"Developer","description":"Workedonvariousprojects.","start_date":"2015-01-01"}]')
 ```
 
 ```sql
-CREATE TABLE log3(
-  id SERIAL PRIMARY KEY NOT NULL,
-  start_log integer REFERENCES "log2" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
-  end_log integer REFERENCES "log2" ("id") ON DELETE CASCADE ON UPDATE CASCADE 
-)
+INSERT INTO author AS T (name, email, age, resume) VALUES ('Jane Smith', 'jane@example.com', 28, '[{"end_date":"2021-01-01","company":"CompanyB","position":"Designer","description":"Designeduserinterfaces.","start_date":"2016-01-01"}]')
+```
+
+```sql
+INSERT INTO entry AS T (pub_date, blog_id, number_of_comments, number_of_pingbacks, rating, mod_date, headline, body_text) VALUES ('2023-01-01', 1, 5, 2, 4, '2023-01-02', 'First Entry', 'This is the first entry in my blog.')
+```
+
+```sql
+INSERT INTO entry AS T (pub_date, blog_id, number_of_comments, number_of_pingbacks, rating, mod_date, headline, body_text) VALUES ('2023-01-03', 2, 3, 1, 5, '2023-01-04', 'Second Entry', 'This is the second entry in another blog.')
+```
+
+```sql
+INSERT INTO entry AS T (pub_date, blog_id, number_of_comments, number_of_pingbacks, rating, mod_date, headline, body_text) VALUES ('2023-01-01', 1, 5, 2, 4, '2023-01-02', 'Third Entry', 'This is the third entry in my blog.')
+```
+
+```sql
+INSERT INTO view_log AS T (ctime, entry_id) VALUES ('2023-01-01 10:00:00', 1)
+```
+
+```sql
+INSERT INTO view_log AS T (ctime, entry_id) VALUES ('2023-01-03 12:00:00', 2)
+```
+
+```sql
+INSERT INTO publisher AS T (name) VALUES ('PublisherA')
+```
+
+```sql
+INSERT INTO publisher AS T (name) VALUES ('PublisherB')
+```
+
+```sql
+INSERT INTO book AS T (name, pubdate, publisher_id, rating, author, pages, price) VALUES ('Book One', '2022-01-01', 1, 4.5, 1, 300, 29.99)
+```
+
+```sql
+INSERT INTO book AS T (name, pubdate, publisher_id, rating, author, pages, price) VALUES ('Book Two', '2022-02-01', 2, 4, 2, 250, 19.99)
+```
+
+```sql
+INSERT INTO store AS T (name) VALUES ('BookStoreA'), ('BookStoreB')
+```
+
+# Model:create_model mixins: unique被混合的模型被覆盖
+# Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue)
+## select单个字段
+```lua
+      Blog:select('name'):where{id=1}:exec()
+    
+```
+
+```sql
+SELECT T.name FROM blog T WHERE T.id = 1
+```
+
+```js
+[
+  {
+    name: "My First Blog",
+  },
+]
+```
+
+ok 1 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select单个字段
+## select多个字段
+```lua
+      Blog:select('name', 'tagline'):where{id=1}:exec()
+    
+```
+
+```sql
+SELECT T.name, T.tagline FROM blog T WHERE T.id = 1
+```
+
+```js
+[
+  {
+    name   : "My First Blog",
+    tagline: "Welcome to my blog",
+  },
+]
+```
+
+ok 2 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select多个字段
+## select多个字段,使用table和vararg等效
+```lua
+      Blog:select{'name', 'tagline'}:where{id=1}:statement()
+    
+```
+
+```js
+"SELECT T.name, T.tagline FROM blog T WHERE T.id = 1"
+```
+
+```sql
+SELECT T.name, T.tagline FROM blog T WHERE T.id = 1
+```
+
+```lua
+      Blog:select('name', 'tagline'):where{id=1}:statement()
+    
+```
+
+```js
+"SELECT T.name, T.tagline FROM blog T WHERE T.id = 1"
+```
+
+```sql
+SELECT T.name, T.tagline FROM blog T WHERE T.id = 1
+```
+
+ok 3 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select多个字段,使用table和vararg等效
+## select literal without alias
+```lua
+      Blog:select_literal('XXX'):select{'name'}:where{id=1}:exec()
+    
+```
+
+```sql
+SELECT 'XXX', T.name FROM blog T WHERE T.id = 1
+```
+
+```js
+[
+  {
+    "?column?": "XXX",
+    name      : "My First Blog",
+  },
+]
+```
+
+ok 4 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select literal without alias
+## select literal as
+```lua
+      Blog:select_literal_as{['XXX YYY'] = 'blog_name'}:select{'id'}:where{id=1}:exec()
+    
+```
+
+```sql
+SELECT 'XXX YYY' AS blog_name, T.id FROM blog T WHERE T.id = 1
+```
+
+```js
+[
+  {
+    blog_name: "XXX YYY",
+    id       : 1,
+  },
+]
+```
+
+ok 5 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select literal as
+## select literal as
+```lua
+      Blog:select_literal_as{XXX_YYY = 'blog_name'}:select{'id'}:where{id=2}:exec()
+    
+```
+
+```sql
+SELECT 'XXX_YYY' AS blog_name, T.id FROM blog T WHERE T.id = 2
+```
+
+```js
+[
+  {
+    blog_name: "XXX_YYY",
+    id       : 2,
+  },
+]
+```
+
+ok 6 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select literal as
+## select外键
+```lua
+      Book:select('name', 'author__name'):where{id=1}:exec()
+    
+```
+
+```sql
+SELECT T.name, T1.name AS author__name FROM book T INNER JOIN author T1 ON (T.author = T1.id) WHERE T.id = 1
+```
+
+```js
+[
+  {
+    author__name: "John Doe",
+    name        : "Book One",
+  },
+]
+```
+
+ok 7 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select外键
+## select as外键
+```lua
+      Book:select_as{name = 'book_name', author__name = 'author_name'}:where{id=1}:exec()
+    
+```
+
+```sql
+SELECT T.name AS book_name, T1.name AS author_name FROM book T INNER JOIN author T1 ON (T.author = T1.id) WHERE T.id = 1
+```
+
+```js
+[
+  {
+    author_name: "John Doe",
+    book_name  : "Book One",
+  },
+]
+```
+
+ok 8 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select as外键
+## select嵌套外键
+```lua
+      ViewLog:select('entry_id__blog_id__name'):where{id=1}:exec()
+    
+```
+
+```sql
+SELECT T2.name AS entry_id__blog_id__name FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) INNER JOIN blog T2 ON (T1.blog_id = T2.id) WHERE T.id = 1
+```
+
+```js
+[
+  {
+    entry_id__blog_id__name: "My First Blog",
+  },
+]
+```
+
+ok 9 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select嵌套外键
+## select as嵌套外键
+```lua
+      ViewLog:select_as{entry_id__blog_id__name = 'blog_name'}:where{id=1}:exec()
+    
+```
+
+```sql
+SELECT T2.name AS blog_name FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) INNER JOIN blog T2 ON (T1.blog_id = T2.id) WHERE T.id = 1
+```
+
+```js
+[
+  {
+    blog_name: "My First Blog",
+  },
+]
+```
+
+ok 10 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select as嵌套外键
+## select reversed foreign key
+```lua
+      Blog:select("id","name","entry__rating"):where{name='Another Blog'}:exec()
+    
+```
+
+```sql
+SELECT T.id, T.name, T1.rating AS entry__rating FROM blog T INNER JOIN entry T1 ON (T.id = T1.blog_id) WHERE T.name = 'Another Blog'
+```
+
+```js
+[
+  {
+    entry__rating: 5,
+    id           : 2,
+    name         : "Another Blog",
+  },
+]
+```
+
+ok 11 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select reversed foreign key
+## select reversed foreign key with order_by
+```lua
+      Blog:select("id","name","entry__headline"):where{name='My First Blog'}:order_by{'entry__headline'}:exec()
+    
+```
+
+```sql
+SELECT T.id, T.name, T1.headline AS entry__headline FROM blog T INNER JOIN entry T1 ON (T.id = T1.blog_id) WHERE T.name = 'My First Blog' ORDER BY T1.headline ASC
+```
+
+```js
+[
+  {
+    entry__headline: "First Entry",
+    id             : 1,
+    name           : "My First Blog",
+  },
+  {
+    entry__headline: "Third Entry",
+    id             : 1,
+    name           : "My First Blog",
+  },
+]
+```
+
+ok 12 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select reversed foreign key with order_by
+## select reversed foreign key with order_by DESC
+```lua
+      Blog:select("id","name","entry__headline"):where{name='My First Blog'}:order_by{'-entry__headline'}:exec()
+    
+```
+
+```sql
+SELECT T.id, T.name, T1.headline AS entry__headline FROM blog T INNER JOIN entry T1 ON (T.id = T1.blog_id) WHERE T.name = 'My First Blog' ORDER BY T1.headline DESC
+```
+
+```js
+[
+  {
+    entry__headline: "Third Entry",
+    id             : 1,
+    name           : "My First Blog",
+  },
+  {
+    entry__headline: "First Entry",
+    id             : 1,
+    name           : "My First Blog",
+  },
+]
+```
+
+ok 13 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select reversed foreign key with order_by DESC
+# Xodel:where
+# where basic equal
+```lua
+ Book:where { price = 100 } 
+```
+
+```sql
+SELECT * FROM book T WHERE T.price = 100
+```
+
+# where greater than
+```lua
+ Book:where { price__gt = 100 } 
+```
+
+```sql
+SELECT * FROM book T WHERE T.price > 100
+```
+
+# where negative condition
+```lua
+ Book:where(-Q { price__gt = 100 }) 
+```
+
+```sql
+SELECT * FROM book T WHERE NOT (T.price > 100)
+```
+
+# where combined conditions
+```lua
+ Book:where(Q { price__gt = 100 } / Q { price__lt = 200 }) 
+```
+
+```sql
+SELECT * FROM book T WHERE (T.price > 100) OR (T.price < 200)
+```
+
+# where negated combined conditions
+```lua
+ Book:where(-(Q { price__gt = 100 } / Q { price__lt = 200 })) 
+```
+
+```sql
+SELECT * FROM book T WHERE NOT ((T.price > 100) OR (T.price < 200))
+```
+
+# where combined with AND
+```lua
+ Book:where(Q { id = 1 } * (Q { price__gt = 100 } / Q { price__lt = 200 })) 
+```
+
+```sql
+SELECT * FROM book T WHERE (T.id = 1) AND ((T.price > 100) OR (T.price < 200))
+```
+
+# where blog_id equals
+```lua
+ Entry:where { blog_id = 1 } 
+```
+
+```sql
+SELECT * FROM entry T WHERE T.blog_id = 1
+```
+
+# where blog_id reference id
+```lua
+ Entry:where { blog_id__id = 1 } 
+```
+
+```sql
+SELECT * FROM entry T WHERE T.blog_id = 1
+```
+
+# where blog_id greater than
+```lua
+ Entry:where { blog_id__gt = 1 } 
+```
+
+```sql
+SELECT * FROM entry T WHERE T.blog_id > 1
+```
+
+# where blog_id reference id greater than
+```lua
+ Entry:where { blog_id__id__gt = 1 } 
+```
+
+```sql
+SELECT * FROM entry T WHERE T.blog_id > 1
+```
+
+# where blog_id name equals
+```lua
+ Entry:where { blog_id__name = 'my blog name' } 
+```
+
+```sql
+SELECT * FROM entry T INNER JOIN blog T1 ON (T.blog_id = T1.id) WHERE T1.name = 'my blog name'
+```
+
+# where blog_id name contains
+```lua
+ Entry:where { blog_id__name__contains = 'my blog' } 
+```
+
+```sql
+SELECT * FROM entry T INNER JOIN blog T1 ON (T.blog_id = T1.id) WHERE T1.name LIKE '%my blog%'
+```
+
+# where view log entry_id blog_id equals
+```lua
+ ViewLog:where { entry_id__blog_id = 1 } 
+```
+
+```sql
+SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) WHERE T1.blog_id = 1
+```
+
+# where view log entry_id blog_id reference id
+```lua
+ ViewLog:where { entry_id__blog_id__id = 1 } 
+```
+
+```sql
+SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) WHERE T1.blog_id = 1
+```
+
+# where view log entry_id blog_id name equals
+```lua
+ ViewLog:where { entry_id__blog_id__name = 'my blog name' } 
+```
+
+```sql
+SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) INNER JOIN blog T2 ON (T1.blog_id = T2.id) WHERE T2.name = 'my blog name'
+```
+
+# where view log entry_id blog_id name starts with
+```lua
+ ViewLog:where { entry_id__blog_id__name__startswith = 'my' } 
+```
+
+```sql
+SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) INNER JOIN blog T2 ON (T1.blog_id = T2.id) WHERE T2.name LIKE 'my%'
+```
+
+# where view log entry_id blog_id name starts with and headline equals
+```lua
+ ViewLog:where { entry_id__blog_id__name__startswith = 'my' }:where { entry_id__headline = 'aa' } 
+```
+
+```sql
+SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) INNER JOIN blog T2 ON (T1.blog_id = T2.id) WHERE (T2.name LIKE 'my%') AND (T1.headline = 'aa')
+```
+
+# where blog entry equals
+```lua
+ Blog:where { entry = 1 } 
+```
+
+```sql
+SELECT * FROM blog T INNER JOIN entry T1 ON (T.id = T1.blog_id) WHERE T1.id = 1
+```
+
+```lua
+ Blog:where { entry__id = 1 } 
+```
+
+```sql
+SELECT * FROM blog T INNER JOIN entry T1 ON (T.id = T1.blog_id) WHERE T1.id = 1
+```
+
+# where blog entry rating equals
+```lua
+ Blog:where { entry__rating = 1 } 
+```
+
+```sql
+SELECT * FROM blog T INNER JOIN entry T1 ON (T.id = T1.blog_id) WHERE T1.rating = 1
+```
+
+# where blog entry view log equals
+```lua
+ Blog:where { entry__view_log = 1 } 
+```
+
+```sql
+SELECT * FROM blog T INNER JOIN entry T1 ON (T.id = T1.blog_id) INNER JOIN view_log T2 ON (T1.id = T2.entry_id) WHERE T2.id = 1
+```
+
+# where blog entry view log ctime year equals
+```lua
+ Blog:where { entry__view_log__ctime__year = 2025 } 
+```
+
+```sql
+SELECT * FROM blog T INNER JOIN entry T1 ON (T.id = T1.blog_id) INNER JOIN view_log T2 ON (T1.id = T2.entry_id) WHERE T2.ctime BETWEEN '2025-01-01' AND '2025-12-31'
+```
+
+# where blog entry view log combined conditions
+```lua
+ Blog:where(Q { entry__view_log = 1 } / Q { entry__view_log = 2 }) 
+```
+
+```sql
+SELECT * FROM blog T INNER JOIN entry T1 ON (T.id = T1.blog_id) INNER JOIN view_log T2 ON (T1.id = T2.entry_id) WHERE (T2.id = 1) OR (T2.id = 2)
+```
+
+# group by book name with total price
+```lua
+ Book:group_by { 'name' }:annotate { price_total = Sum('price') } 
+```
+
+```sql
+SELECT T.name, SUM(T.price) AS price_total FROM book T GROUP BY T.name
+```
+
+# annotate book with total price
+```lua
+ Book:annotate { price_total = Sum('price') } 
+```
+
+```sql
+SELECT SUM(T.price) AS price_total FROM book T
+```
+
+# annotate book with sum price
+```lua
+ Book:annotate { Sum('price') } 
+```
+
+```sql
+SELECT SUM(T.price) AS price_sum FROM book T
+```
+
+# group by book name with sum price
+```lua
+ Book:group_by { 'name' }:annotate { Sum('price') } 
+```
+
+```sql
+SELECT T.name, SUM(T.price) AS price_sum FROM book T GROUP BY T.name
+```
+
+# group by book name with having condition
+```lua
+ Book:group_by { 'name' }:annotate { Sum('price') }:having { price_sum__gt = 100 } 
+```
+
+```sql
+SELECT T.name, SUM(T.price) AS price_sum FROM book T GROUP BY T.name HAVING SUM(T.price) > 100
+```
+
+# group by book name with having total price condition
+```lua
+ Book:group_by { 'name' }:annotate { price_total = Sum('price') }:having { price_total__gt = 100 } 
+```
+
+```sql
+SELECT T.name, SUM(T.price) AS price_total FROM book T GROUP BY T.name HAVING SUM(T.price) > 100
+```
+
+# group by book name with having total price condition and order by
+```lua
+ Book:group_by { 'name' }:annotate { price_total = Sum('price') }:having { price_total__gt = 100 }:order_by { '-price_total' } 
+```
+
+```sql
+SELECT T.name, SUM(T.price) AS price_total FROM book T GROUP BY T.name HAVING SUM(T.price) > 100 ORDER BY SUM(T.price) DESC
+```
+
+# annotate book with double price
+```lua
+ Book:annotate { double_price = F('price') * 2 } 
+```
+
+```sql
+SELECT (T.price * 2) AS double_price FROM book T
+```
+
+# annotate book with price per page
+```lua
+ Book:annotate { price_per_page = F('price') / F('pages') } 
+```
+
+```sql
+SELECT (T.price / T.pages) AS price_per_page FROM book T
+```
+
+# annotate blog with entry count
+```lua
+ Blog:annotate { entry_count = Count('entry') } 
+```
+
+```sql
+SELECT COUNT(T1.id) AS entry_count FROM blog T LEFT JOIN entry T1 ON (T.id = T1.blog_id)
+```
+
+# where author resume has key
+```lua
+ Author:where { resume__has_key = 'start_date' } 
+```
+
+```sql
+SELECT * FROM author T WHERE (T.resume) ? start_date
+```
+
+# where author resume has keys
+```lua
+ Author:where { resume__0__has_keys = { 'a', 'b' } } 
+```
+
+```sql
+SELECT * FROM author T WHERE (T.resume #> ['0']) ?& ['a', 'b']
+```
+
+# where author resume has any keys
+```lua
+ Author:where { resume__has_any_keys = { 'a', 'b' } } 
+```
+
+```sql
+SELECT * FROM author T WHERE (T.resume) ?| ['a', 'b']
+```
+
+# where author resume start date time equals
+```lua
+ Author:where { resume__start_date__time = '12:00:00' } 
+```
+
+```sql
+SELECT * FROM author T WHERE (T.resume #> ['start_date', 'time']) = '"12:00:00"'
+```
+
+# where author resume contains
+```lua
+ Author:where { resume__contains = { start_date = '2025-01-01' } } 
+```
+
+```sql
+SELECT * FROM author T WHERE (T.resume) @> '{"start_date":"2025-01-01"}'
+```
+
+# where author resume contained by
+```lua
+ Author:where { resume__contained_by = { start_date = '2025-01-01' } } 
+```
+
+```sql
+SELECT * FROM author T WHERE (T.resume) <@ '{"start_date":"2025-01-01"}'
+```
+
+# where view log entry_id equals
+```lua
+ ViewLog:where('entry_id__blog_id', 1) 
+```
+
+```sql
+SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) WHERE T1.blog_id = 1
+```
+
+# where view log entry_id greater than
+```lua
+ ViewLog:where { entry_id__blog_id__gt = 1 } 
+```
+
+```sql
+SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) WHERE T1.blog_id > 1
 ```
 
 # Xodel:insert(rows:table|table[]|Sql, columns?:string[])
-## insert one user
+## 插入单行数据
 ```lua
- usr:insert{permission=1, username ='u1'}:exec() 
+      Blog:insert{
+        name = 'Test Blog',
+        tagline = 'Test tagline'
+      }:exec()
+    
 ```
 
 ```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u1', 1)
+INSERT INTO blog AS T (name, tagline) VALUES ('Test Blog', 'Test tagline')
 ```
 
 ```js
@@ -211,87 +837,75 @@ INSERT INTO usr AS T (username, permission) VALUES ('u1', 1)
 }
 ```
 
-ok 27 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user
-## insert one user returning one column
+ok 14 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入单行数据
+## 插入单行数据并返回特定字段
 ```lua
- usr:insert{permission=1, username ='u2'}:returning('permission'):exec() 
+      Blog:insert{
+        name = 'Return Test Blog',
+        tagline = 'Return test tagline'
+      }:returning{'id', 'name'}:exec()
+    
 ```
 
 ```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u2', 1) RETURNING T.permission
+INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name
 ```
 
 ```js
 [
   {
-    permission: 1,
+    id  : 4,
+    name: "Return Test Blog",
   },
 ]
 ```
 
-ok 28 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user returning one column
-## insert one user with default permission
+ok 15 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入单行数据并返回特定字段
+## returning使用vararg和table等效性
 ```lua
- usr:insert{username ='u3'}:returning('permission'):exec() 
-```
-
-```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u3', 0) RETURNING T.permission
+      Blog:insert{
+        name = 'Return Test Blog',
+        tagline = 'Return test tagline'
+      }:returning{'id', 'name'}:statement()
+    
 ```
 
 ```js
-[
-  {
-    permission: 0,
-  },
-]
-```
-
-ok 29 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user with default permission
-## insert one user returning two columns
-```lua
- usr:insert{permission=1, username ='u4'}:returning('permission','username'):exec() 
+"INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name"
 ```
 
 ```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u4', 1) RETURNING T.permission, T.username
+INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name
+```
+
+```lua
+      Blog:insert{
+        name = 'Return Test Blog',
+        tagline = 'Return test tagline'
+      }:returning('id', 'name'):statement()
+    
 ```
 
 ```js
-[
-  {
-    permission: 1,
-    username  : "u4",
-  },
-]
-```
-
-ok 30 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user returning two columns
-## insert one user returning one column in compact form
-```lua
- usr:insert{permission=1, username ='u5'}:returning('username'):compact():exec() 
+"INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name"
 ```
 
 ```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u5', 1) RETURNING T.username
+INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name
 ```
 
-```js
-[
-  [
-    "u5",
-  ],
-]
-```
-
-ok 31 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user returning one column in compact form
-## insert two users
+ok 16 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) returning使用vararg和table等效性
+## 批量插入多行数据
 ```lua
- usr:insert{{permission=1, username ='u6'}, {permission=1, username ='u7'}}:exec() 
+      Blog:insert{
+        { name = 'Bulk Blog 1', tagline = 'Bulk tagline 1' },
+        { name = 'Bulk Blog 2', tagline = 'Bulk tagline 2' }
+      }:exec()
+    
 ```
 
 ```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u6', 1), ('u7', 1)
+INSERT INTO blog AS T (name, tagline) VALUES ('Bulk Blog 1', 'Bulk tagline 1'), ('Bulk Blog 2', 'Bulk tagline 2')
 ```
 
 ```js
@@ -300,541 +914,44 @@ INSERT INTO usr AS T (username, permission) VALUES ('u6', 1), ('u7', 1)
 }
 ```
 
-ok 32 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users
-## insert two users returning one column
+ok 17 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 批量插入多行数据
+## 批量插入并返回所有字段
 ```lua
- usr:insert{{permission=1, username ='u8'}, {permission=1, username ='u9'}}:returning('username'):exec() 
+      Blog:insert{
+        { name = 'Return Bulk 1', tagline = 'Return bulk 1' },
+        { name = 'Return Bulk 2', tagline = 'Return bulk 2' }
+      }:returning('*'):exec()
+    
 ```
 
 ```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u8', 1), ('u9', 1) RETURNING T.username
+INSERT INTO blog AS T (name, tagline) VALUES ('Return Bulk 1', 'Return bulk 1'), ('Return Bulk 2', 'Return bulk 2') RETURNING *
 ```
 
 ```js
 [
   {
-    username: "u8",
+    id     : 7,
+    name   : "Return Bulk 1",
+    tagline: "Return bulk 1",
   },
   {
-    username: "u9",
+    id     : 8,
+    name   : "Return Bulk 2",
+    tagline: "Return bulk 2",
   },
 ]
 ```
 
-ok 33 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users returning one column
-## insert two users returning two columns
+ok 18 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 批量插入并返回所有字段
+## 从子查询select插入数据
 ```lua
- usr:insert{{permission=2, username ='u10'}, {permission=3, username ='u11'}}:returning('username','permission'):exec() 
+      BlogBin:insert(Blog:where{name='Another Blog'}:select{'name', 'tagline'}):exec()
+    
 ```
 
 ```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u10', 2), ('u11', 3) RETURNING T.username, T.permission
-```
-
-```js
-[
-  {
-    permission: 2,
-    username  : "u10",
-  },
-  {
-    permission: 3,
-    username  : "u11",
-  },
-]
-```
-
-ok 34 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users returning two columns
-## insert two users returning one column in flatten form
-```lua
- usr:insert{{permission=1, username ='u12'}, {permission=1, username ='u13'}}:returning('username'):flat() 
-```
-
-```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u12', 1), ('u13', 1) RETURNING T.username
-```
-
-```js
-[
-  "u12",
-  "u13",
-]
-```
-
-ok 35 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users returning one column in flatten form
-## insert two users returning two columns in flatten form
-```lua
- usr:insert{{permission=1, username ='u14'}, {permission=2, username ='u15'}}:returning('username','permission'):flat() 
-```
-
-```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u14', 1), ('u15', 2) RETURNING T.username, T.permission
-```
-
-```js
-[
-  "u14",
-  1,
-  "u15",
-  2,
-]
-```
-
-ok 36 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users returning two columns in flatten form
-## insert one user with specific columns (permission being ignored)
-```lua
- usr:insert({permission=4, username ='u16'}, {'username'}):returning('username','permission'):exec() 
-```
-
-```sql
-INSERT INTO usr AS T (username) VALUES ('u16') RETURNING T.username, T.permission
-```
-
-```js
-[
-  {
-    permission: 0,
-    username  : "u16",
-  },
-]
-```
-
-ok 37 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user with specific columns (permission being ignored)
-## insert one user with specific columns
-```lua
- usr:insert({permission=4, username ='u17'}, {'username', 'permission'}):returning('username','permission'):exec() 
-```
-
-```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u17', 4) RETURNING T.username, T.permission
-```
-
-```js
-[
-  {
-    permission: 4,
-    username  : "u17",
-  },
-]
-```
-
-ok 38 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user with specific columns
-## insert two users with specific columns (permission being ignored)
-```lua
- usr:insert({{permission=4, username ='u18'},{permission=5, username ='u19'}}, {'username'}):returning('username','permission'):exec() 
-```
-
-```sql
-INSERT INTO usr AS T (username) VALUES ('u18'), ('u19') RETURNING T.username, T.permission
-```
-
-```js
-[
-  {
-    permission: 0,
-    username  : "u18",
-  },
-  {
-    permission: 0,
-    username  : "u19",
-  },
-]
-```
-
-ok 39 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users with specific columns (permission being ignored)
-## insert two users with specific columns
-```lua
- usr:insert({{permission=4, username ='u20'},{permission=5, username ='u21'}}, {'username', 'permission'}):returning('username','permission'):exec() 
-```
-
-```sql
-INSERT INTO usr AS T (username, permission) VALUES ('u20', 4), ('u21', 5) RETURNING T.username, T.permission
-```
-
-```js
-[
-  {
-    permission: 4,
-    username  : "u20",
-  },
-  {
-    permission: 5,
-    username  : "u21",
-  },
-]
-```
-
-ok 40 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users with specific columns
-## insert users with default permission
-```lua
- usr:insert{{username ='f1'},{username ='f2'}}:flat('permission') 
-```
-
-```sql
-INSERT INTO usr AS T (username, permission) VALUES ('f1', 0), ('f2', 0) RETURNING T.permission
-```
-
-```js
-[
-  0,
-  0,
-]
-```
-
-ok 41 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert users with default permission
-## insert one user validate required failed
-ok 42 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user validate required failed
-## insert one user validate maxlength failed
-ok 43 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user validate maxlength failed
-## insert one user validate max failed
-ok 44 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user validate max failed
-## insert two users validate max failed
-ok 45 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users validate max failed
-# Xodel:insert
-## create
-```lua
-dept:insert{name ='d1'}:returning('*'):execr()
-```
-
-```sql
-INSERT INTO dept AS T (name) VALUES ('d1') RETURNING *
-```
-
-```js
-[
-  {
-    id  : 1,
-    name: "d1",
-  },
-]
-```
-
-ok 46 - Xodel:insert create
-## create multiple rows
-```lua
-dept:insert{{name ='d2'}, {name ='d3'}}:returning('name'):execr()
-```
-
-```sql
-INSERT INTO dept AS T (name) VALUES ('d2'), ('d3') RETURNING T.name
-```
-
-```js
-[
-  {
-    name: "d2",
-  },
-  {
-    name: "d3",
-  },
-]
-```
-
-ok 47 - Xodel:insert create multiple rows
-# Xodel:count(cond?, op?, dval?)
-## specify condition
-```lua
-usr:count{id__lt=3}
-```
-
-```sql
-SELECT count(*) FROM usr T WHERE T.id < 3
-```
-
-```js
-2
-```
-
-ok 48 - Xodel:count(cond?, op?, dval?) specify condition
-## test with Xodel:all
-```lua
-dept:execr()
-```
-
-```sql
-SELECT * FROM dept T
-```
-
-```js
-[
-  {
-    id  : 1,
-    name: "d1",
-  },
-  {
-    id  : 2,
-    name: "d2",
-  },
-  {
-    id  : 3,
-    name: "d3",
-  },
-]
-```
-
-```lua
-dept:count()
-```
-
-```sql
-SELECT count(*) FROM dept T
-```
-
-```js
-3
-```
-
-ok 49 - Xodel:count(cond?, op?, dval?) test with Xodel:all
-# XodelInstance:save(names?:string[], key?:string)
-## save basic
-```lua
-profile{usr_id=1, dept_name='d1', age=20}:save()
-```
-
-```sql
-INSERT INTO profile AS T (sex, salary, usr_id, age, dept_name) VALUES ('f', 1000, 1, 20, 'd1') RETURNING *
-```
-
-```js
-{
-  age      : 20,
-  dept_name: "d1",
-  id       : 1,
-  salary   : 1000,
-  sex      : "f",
-  usr_id   : 1,
-}
-```
-
-ok 50 - XodelInstance:save(names?:string[], key?:string) save basic
-## save with specific names
-```lua
-profile{usr_id=2, dept_name='d2', salary=500, sex='m', age=50}:save{'usr_id','dept_name'}
-```
-
-```sql
-INSERT INTO profile AS T (dept_name, usr_id) VALUES ('d2', 2) RETURNING *
-```
-
-```js
-{
-  age      : 0,
-  dept_name: "d2",
-  id       : 2,
-  salary   : 1000,
-  sex      : "f",
-  usr_id   : 2,
-}
-```
-
-ok 51 - XodelInstance:save(names?:string[], key?:string) save with specific names
-## save with primary key specified to update
-```lua
-profile{id=1, age=33}:save()
-```
-
-```sql
-UPDATE profile T SET age = 33 WHERE T.id = 1 RETURNING id
-```
-
-```js
-{
-  age: 33,
-  id : 1,
-}
-```
-
-ok 52 - XodelInstance:save(names?:string[], key?:string) save with primary key specified to update
-## save with primary key ignored and force create
-```lua
-profile{id=5, age=55, usr_id=3, dept_name='d3',}:save_create()
-```
-
-```sql
-INSERT INTO profile AS T (sex, salary, usr_id, age, dept_name) VALUES ('f', 1000, 3, 55, 'd3') RETURNING *
-```
-
-```js
-{
-  age      : 55,
-  dept_name: "d3",
-  id       : 3,
-  salary   : 1000,
-  sex      : "f",
-  usr_id   : 3,
-}
-```
-
-ok 53 - XodelInstance:save(names?:string[], key?:string) save with primary key ignored and force create
-## save with wrong name
-```lua
-profile{usr_id=1, dept_name='d1', age=20}:save{'xxxx'}
-```
-
-ok 54 - XodelInstance:save(names?:string[], key?:string) save with wrong name
-# Xodel:merge(rows:table[], key?:string|string[], columns?:string[])
-## merge multiple rows returning inserted rows with all columns
-```lua
-usr:merge({{permission=4, username ='u1'},{permission=2, username ='u22'}}, 'username'):returning('*'):exec()
-```
-
-```sql
-WITH V(permission, username) AS (VALUES (4::integer, 'u1'::varchar), (2, 'u22')), U AS (UPDATE usr W SET permission = V.permission FROM V WHERE V.username = W.username RETURNING V.permission, V.username) INSERT INTO usr AS T (permission, username) SELECT V.permission, V.username FROM V LEFT JOIN U AS W ON (V.username = W.username) WHERE W.username IS NULL RETURNING *
-```
-
-```js
-[
-  {
-    id        : 24,
-    permission: 2,
-    username  : "u22",
-  },
-]
-```
-
-ok 55 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with all columns
-## merge multiple rows returning inserted rows with specific columns
-```lua
-usr:merge({{username ='u23'},{username ='u24'}}, 'username'):returning('username'):exec()
-```
-
-```sql
-WITH V(username) AS (VALUES ('u23'::varchar), ('u24')), U AS (SELECT V.username FROM V INNER JOIN usr AS W ON (V.username = W.username)) INSERT INTO usr AS T (username) SELECT V.username FROM V LEFT JOIN U AS W ON (V.username = W.username) WHERE W.username IS NULL RETURNING T.username
-```
-
-```js
-[
-  {
-    username: "u23",
-  },
-  {
-    username: "u24",
-  },
-]
-```
-
-ok 56 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with specific columns
-## merge multiple rows returning inserted rows with specific columns in compact form
-```lua
-usr:merge({{username ='u25'},{username ='u26'}}, 'username'):returning('username'):flat()
-```
-
-```sql
-WITH V(username) AS (VALUES ('u25'::varchar), ('u26')), U AS (SELECT V.username FROM V INNER JOIN usr AS W ON (V.username = W.username)) INSERT INTO usr AS T (username) SELECT V.username FROM V LEFT JOIN U AS W ON (V.username = W.username) WHERE W.username IS NULL RETURNING T.username
-```
-
-```js
-[
-  "u25",
-  "u26",
-]
-```
-
-ok 57 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with specific columns in compact form
-## merge multiple rows returning inserted rows with array key
-```lua
-evaluate:merge({{usr_id=1, year=2021, rank='A'},{usr_id=1, year=2022, rank='B'}}, {'usr_id', 'year'}):returning('rank'):flat()
-```
-
-```sql
-WITH V(year, usr_id, rank) AS (VALUES (2021::integer, 1::integer, 'A'::varchar), (2022, 1, 'B')), U AS (UPDATE evaluate W SET rank = V.rank FROM V WHERE V.usr_id = W.usr_id AND V.year = W.year RETURNING V.year, V.usr_id, V.rank) INSERT INTO evaluate AS T (year, usr_id, rank) SELECT V.year, V.usr_id, V.rank FROM V LEFT JOIN U AS W ON (V.usr_id = W.usr_id AND V.year = W.year) WHERE W.usr_id IS NULL RETURNING T.rank
-```
-
-```js
-[
-  "A",
-  "B",
-]
-```
-
-ok 58 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with array key
-## merge multiple rows returning inserted rows with array key and specific columns
-```lua
-evaluate:merge({{usr_id=2, year=2021, rank='A'},{usr_id=2, year=2022, rank='B'}}, {'usr_id', 'year'}, {'usr_id', 'year'}):returning('rank'):flat()
-```
-
-```sql
-WITH V(usr_id, year) AS (VALUES (2::integer, 2021::integer), (2, 2022)), U AS (SELECT V.usr_id, V.year FROM V INNER JOIN evaluate AS W ON (V.usr_id = W.usr_id AND V.year = W.year)) INSERT INTO evaluate AS T (usr_id, year) SELECT V.usr_id, V.year FROM V LEFT JOIN U AS W ON (V.usr_id = W.usr_id AND V.year = W.year) WHERE W.usr_id IS NULL RETURNING T.rank
-```
-
-```js
-[
-  "C",
-  "C",
-]
-```
-
-ok 59 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with array key and specific columns
-## merge multiple rows validate max failed
-ok 60 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows validate max failed
-## merge multiple rows missing default unique value failed
-ok 61 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows missing default unique value failed
-# Xodel:upsert(rows:table[], key?:string|string[], columns?:string[])
-## upsert multiple rows returning inserted rows with all columns
-```lua
-usr:upsert({{permission=4, username ='u1'},{permission=2, username ='u27'}}, 'username'):returning('username'):exec()
-```
-
-```sql
-INSERT INTO usr AS T (permission, username) VALUES (4, 'u1'), (2, 'u27') ON CONFLICT (username) DO UPDATE SET permission = EXCLUDED.permission RETURNING T.username
-```
-
-```js
-[
-  {
-    username: "u1",
-  },
-  {
-    username: "u27",
-  },
-]
-```
-
-ok 62 - Xodel:upsert(rows:table[], key?:string|string[], columns?:string[]) upsert multiple rows returning inserted rows with all columns
-## upsert multiple rows returning inserted rows with specific columns in compact form
-```lua
-usr:upsert({{username ='u28'},{username ='u29'}}, 'username'):returning('username'):flat()
-```
-
-```sql
-INSERT INTO usr AS T (username) VALUES ('u28'), ('u29') ON CONFLICT (username) DO NOTHING RETURNING T.username
-```
-
-```js
-[
-  "u28",
-  "u29",
-]
-```
-
-ok 63 - Xodel:upsert(rows:table[], key?:string|string[], columns?:string[]) upsert multiple rows returning inserted rows with specific columns in compact form
-## upsert multiple rows returning inserted rows with array key
-```lua
-evaluate:upsert({{usr_id=1, year=2021, rank='A'},{usr_id=1, year=2022, rank='B'}}, {'usr_id', 'year'}):returning('rank'):flat()
-```
-
-```sql
-INSERT INTO evaluate AS T (year, usr_id, rank) VALUES (2021, 1, 'A'), (2022, 1, 'B') ON CONFLICT (usr_id, year) DO UPDATE SET rank = EXCLUDED.rank RETURNING T.rank
-```
-
-```js
-[
-  "A",
-  "B",
-]
-```
-
-ok 64 - Xodel:upsert(rows:table[], key?:string|string[], columns?:string[]) upsert multiple rows returning inserted rows with array key
-## upsert multiple rows validate max failed
-ok 65 - Xodel:upsert(rows:table[], key?:string|string[], columns?:string[]) upsert multiple rows validate max failed
-# Xodel.update
-## update one user
-```lua
- usr:update{permission=2}:where{id=1}:exec() 
-```
-
-```sql
-UPDATE usr T SET permission = 2 WHERE T.id = 1
+INSERT INTO blog_bin AS T (name, tagline) SELECT T.name, T.tagline FROM blog T WHERE T.name = 'Another Blog'
 ```
 
 ```js
@@ -843,885 +960,412 @@ UPDATE usr T SET permission = 2 WHERE T.id = 1
 }
 ```
 
-ok 66 - Xodel.update update one user
-## update one user returning one column
+ok 19 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 从子查询select插入数据
+## 检验上面插入的数据
 ```lua
- usr:update{permission=3}:where{id=1}:returning('permission'):exec() 
+      BlogBin:where{name='Another Blog'}:select{'tagline'}:get()
+    
 ```
 
 ```sql
-UPDATE usr T SET permission = 3 WHERE T.id = 1 RETURNING T.permission
+SELECT T.tagline FROM blog_bin T WHERE T.name = 'Another Blog' LIMIT 2
+```
+
+```js
+{
+  tagline: "Another interesting blog",
+}
+```
+
+ok 20 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 检验上面插入的数据
+## 从子查询select_literal插入数据
+```lua
+      BlogBin:insert(Blog:where{name='My First Blog'}:select{'name', 'tagline'}:select_literal('select from another blog'),{'name', 'tagline', 'note'}):exec()
+    
+```
+
+```sql
+INSERT INTO blog_bin AS T (name, tagline, note) SELECT T.name, T.tagline, 'select from another blog' FROM blog T WHERE T.name = 'My First Blog'
+```
+
+```js
+{
+  affected_rows: 1,
+}
+```
+
+ok 21 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 从子查询select_literal插入数据
+## 检验上面插入的数据select_literal
+```lua
+      BlogBin:where{name='My First Blog'}:select{'note'}:get()
+    
+```
+
+```sql
+SELECT T.note FROM blog_bin T WHERE T.name = 'My First Blog' LIMIT 2
+```
+
+```js
+{
+  note: "select from another blog",
+}
+```
+
+ok 22 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 检验上面插入的数据select_literal
+## 从子查询update+returning插入数据
+```sql
+INSERT INTO blog AS T (name) VALUES ('Update Returning')
+```
+
+```lua
+      BlogBin:insert(Blog:update{name='Update Returning 2'}:where{name='Update Returning'}:returning{'name', 'tagline'}:returning_literal('update from another blog'),{'name', 'tagline', 'note'}):returning{'name', 'tagline', 'note'}:exec()
+    
+```
+
+```sql
+WITH D(name, tagline, note) AS (UPDATE blog T SET name = 'Update Returning 2' WHERE T.name = 'Update Returning' RETURNING T.name, T.tagline, 'update from another blog') INSERT INTO blog_bin AS T (name, tagline, note) SELECT name, tagline, note FROM D RETURNING T.name, T.tagline, T.note
 ```
 
 ```js
 [
   {
-    permission: 3,
+    name   : "Update Returning 2",
+    note   : "update from another blog",
+    tagline: "default tagline",
   },
 ]
 ```
 
-ok 67 - Xodel.update update one user returning one column
-## update users returning two columns in table form
+ok 23 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 从子查询update+returning插入数据
+## 从子查询delete+returning插入数据
+```sql
+INSERT INTO blog AS T (name) VALUES ('Returning Test Blog')
+```
+
 ```lua
- usr:update{permission=3}:where{id__lt=3}:returning{'permission','id'}:exec() 
+      BlogBin:insert(Blog:delete{name='Returning Test Blog'}:returning{'name', 'tagline'}:returning_literal('deleted from another blog'),{'name', 'tagline', 'note'}):returning{'name', 'tagline', 'note'}:exec()
+    
 ```
 
 ```sql
-UPDATE usr T SET permission = 3 WHERE T.id < 3 RETURNING T.permission, T.id
+WITH D(name, tagline, note) AS (DELETE FROM blog T WHERE T.name = 'Returning Test Blog' RETURNING T.name, T.tagline, 'deleted from another blog') INSERT INTO blog_bin AS T (name, tagline, note) SELECT name, tagline, note FROM D RETURNING T.name, T.tagline, T.note
 ```
 
 ```js
 [
   {
-    id        : 1,
-    permission: 3,
-  },
-  {
-    id        : 2,
-    permission: 3,
-  },
-]
-```
-
-ok 68 - Xodel.update update users returning two columns in table form
-## update users returning one column in flatten form
-```lua
- usr:update{permission=3}:where{id__lt=3}:returning{'username'}:flat() 
-```
-
-```sql
-UPDATE usr T SET permission = 3 WHERE T.id < 3 RETURNING T.username
-```
-
-```js
-[
-  "u1",
-  "u2",
-]
-```
-
-ok 69 - Xodel.update update users returning one column in flatten form
-## update by where with foreignkey
-```lua
-profile:update{age=11}:where{usr_id__username__contains='1'}:returning('age'):exec()
-```
-
-```sql
-UPDATE profile T SET age = 11 FROM usr T1 WHERE (T1.username LIKE '%1%') AND (T.usr_id = T1.id) RETURNING T.age
-```
-
-```js
-[
-  {
-    age: 11,
+    name   : "Returning Test Blog",
+    note   : "deleted from another blog",
+    tagline: "default tagline",
   },
 ]
 ```
 
-ok 70 - Xodel.update update by where with foreignkey
-## update returning foreignkey
+ok 24 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 从子查询delete+returning插入数据
+## 从子查询delete+returning插入数据,未明确指定列
+```sql
+INSERT INTO blog AS T (name, tagline) VALUES ('Returning Test', 'no column')
+```
+
 ```lua
-profile:update { sex = 'm' }:where { id = 1 }:returning('id', 'usr_id__username'):exec()
+      BlogBin:insert(Blog:delete{name='Returning Test'}:returning{'name', 'tagline'}):returning{'name', 'tagline', 'note'}:exec()
+    
 ```
 
 ```sql
-UPDATE profile T SET sex = 'm' FROM usr T1 WHERE (T.id = 1) AND (T.usr_id = T1.id) RETURNING T.id, T1.username AS usr_id__username
+WITH D(name, tagline) AS (DELETE FROM blog T WHERE T.name = 'Returning Test' RETURNING T.name, T.tagline) INSERT INTO blog_bin AS T (name, tagline) SELECT name, tagline FROM D RETURNING T.name, T.tagline, T.note
 ```
 
 ```js
 [
   {
-    id              : 1,
-    usr_id__username: "u1",
+    name   : "Returning Test",
+    note   : "",
+    tagline: "no column",
   },
 ]
 ```
 
-ok 71 - Xodel.update update returning foreignkey
-# Xodel:updates(rows:table[], key?:string|string[], columns?:string[])
-## updates partial
+ok 25 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 从子查询delete+returning插入数据,未明确指定列
+## 指定列名插入数据
 ```lua
-usr:updates({{permission=2, username ='u1'},{permission=3, username ='??'}}, 'username'):returning("*"):exec()
+      Blog:insert({
+        name = 'Column Test Blog',
+        tagline = 'Column test tagline',
+        extra_field = 'should not be inserted'
+      }, {'name', 'tagline'}):exec()
+    
 ```
 
 ```sql
-WITH V(permission, username) AS (VALUES (2::integer, 'u1'::varchar), (3, '??')) UPDATE usr T SET permission = V.permission FROM V WHERE V.username = T.username RETURNING *
+INSERT INTO blog AS T (name, tagline) VALUES ('Column Test Blog', 'Column test tagline')
+```
+
+```js
+{
+  affected_rows: 1,
+}
+```
+
+ok 26 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 指定列名插入数据
+## 插入数据并使用默认值
+```lua
+      Blog:insert{
+        name = 'Default Test Blog'
+        -- tagline将使用默认值
+      }:returning{'name', 'tagline'}:exec()
+    
+```
+
+```sql
+INSERT INTO blog AS T (name) VALUES ('Default Test Blog') RETURNING T.name, T.tagline
 ```
 
 ```js
 [
   {
-    id        : 1,
-    permission: 2,
-    username  : "u1",
+    name   : "Default Test Blog",
+    tagline: "default tagline",
   },
 ]
 ```
 
-ok 72 - Xodel:updates(rows:table[], key?:string|string[], columns?:string[]) updates partial
-## updates all
+ok 27 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入数据并使用默认值
+# Xodel:insert抛出异常的情况
+## 唯一性错误
 ```lua
-usr:updates({{permission=1, username ='u1'},{permission=3, username ='u3'}}, 'username'):returning("*"):exec()
+ Blog:insert{name='My First Blog'}:exec() 
 ```
 
 ```sql
-WITH V(permission, username) AS (VALUES (1::integer, 'u1'::varchar), (3, 'u3')) UPDATE usr T SET permission = V.permission FROM V WHERE V.username = T.username RETURNING *
+INSERT INTO blog AS T (name) VALUES ('My First Blog')
+```
+
+ok 28 - Xodel:insert抛出异常的情况 唯一性错误
+## 传入非法字段
+```lua
+        Blog:insert{
+          illegal_field = 'Test Blog',
+          tagline = 'Test tagline'
+        }:exec()
+      
+```
+
+ok 29 - Xodel:insert抛出异常的情况 传入非法字段
+## 传入名称过长
+```lua
+        Blog:insert{
+          name = 'This name is way too long and exceeds the maximum length',
+          tagline = 'Test tagline'
+        }:exec()
+      
+```
+
+ok 30 - Xodel:insert抛出异常的情况 传入名称过长
+## 插入多行时其中某行名称过长
+```lua
+        Blog:insert{
+          { name = 'Valid Blog', tagline = 'Valid tagline' },
+          { name = 'This name is way too long and exceeds the maximum length', tagline = 'Another tagline' }
+        }:exec()
+      
+```
+
+ok 31 - Xodel:insert抛出异常的情况 插入多行时其中某行名称过长
+## 插入复合字段出错(Author的resume字段)
+```lua
+        Author:insert{resume={{company='123456789012345678901234567890'}}}:exec()
+      
+```
+
+ok 32 - Xodel:insert抛出异常的情况 插入复合字段出错(Author的resume字段)
+## 插入多行复合字段出错(Author的resume字段)
+```lua
+        Author:insert{{resume={{company='123456789012345678901234567890'}}}}:exec()
+      
+```
+
+ok 33 - Xodel:insert抛出异常的情况 插入多行复合字段出错(Author的resume字段)
+## 从子查询插入数据列数不一致而出错1
+```lua
+        BlogBin:insert(Blog:where{name='My First Blog'}:select{'name', 'tagline'},{'name'}):exec()
+      
+```
+
+```sql
+INSERT INTO blog_bin AS T (name) SELECT T.name, T.tagline FROM blog T WHERE T.name = 'My First Blog'
+```
+
+ok 34 - Xodel:insert抛出异常的情况 从子查询插入数据列数不一致而出错1
+## 从子查询插入数据列数不一致而出错2
+```lua
+        BlogBin:insert(Blog:where{name='My First Blog'}:select{'name', 'tagline'},{'name', 'tagline', 'note'}):exec()
+      
+```
+
+```sql
+INSERT INTO blog_bin AS T (name, tagline, note) SELECT T.name, T.tagline FROM blog T WHERE T.name = 'My First Blog'
+```
+
+ok 35 - Xodel:insert抛出异常的情况 从子查询插入数据列数不一致而出错2
+# Xodel:update
+# update basic
+```lua
+ Blog:where{name='My First Blog'}:update{tagline='changed tagline'}:returning('*'):exec() 
+```
+
+```sql
+UPDATE blog T SET tagline = 'changed tagline' WHERE T.name = 'My First Blog' RETURNING *
 ```
 
 ```js
 [
   {
-    id        : 1,
-    permission: 1,
-    username  : "u1",
-  },
-  {
-    id        : 3,
-    permission: 3,
-    username  : "u3",
+    id     : 1,
+    name   : "My First Blog",
+    tagline: "changed tagline",
   },
 ]
 ```
 
-ok 73 - Xodel:updates(rows:table[], key?:string|string[], columns?:string[]) updates all
-# Xodel.where
-## where basic
+# update with join
 ```lua
- usr:select('username','id'):where{id=1}:exec() 
+ Entry:update { headline = F('blog_id__name') }:where{id=1}:returning('headline'):exec() 
 ```
 
 ```sql
-SELECT T.username, T.id FROM usr T WHERE T.id = 1
+UPDATE entry T SET headline = T1.name FROM blog T1 WHERE (T.id = 1) AND (T.blog_id = T1.id) RETURNING T.headline
 ```
 
 ```js
 [
   {
+    headline: "My First Blog",
+  },
+]
+```
+
+```sql
+SELECT T.headline FROM entry T WHERE T.id = 1 LIMIT 2
+```
+
+# update with function
+```lua
+ Entry:update { headline = F('headline')..' suffix by function' }:where{id=1}:returning('headline'):exec() 
+```
+
+```sql
+UPDATE entry T SET headline = (T.headline || ' suffix by function') WHERE T.id = 1 RETURNING T.headline
+```
+
+```js
+[
+  {
+    headline: "My First Blog suffix by function",
+  },
+]
+```
+
+```sql
+SELECT T.headline FROM entry T WHERE T.id = 1 LIMIT 2
+```
+
+# increase
+```sql
+SELECT T.rating FROM entry T WHERE T.id = 1 LIMIT 2
+```
+
+```lua
+ Entry:increase { rating = 1 }:where{id=1}:returning('rating'):exec() 
+```
+
+```sql
+UPDATE entry T SET rating = (T.rating + 1) WHERE T.id = 1 RETURNING T.rating
+```
+
+```js
+[
+  {
+    rating: 5,
+  },
+]
+```
+
+# increase two fields
+```sql
+SELECT * FROM entry T WHERE T.id = 1 LIMIT 2
+```
+
+```lua
+ Entry:increase { number_of_comments = 1, number_of_pingbacks=2 }:where{id=1}:returning('*'):exec() 
+```
+
+```sql
+UPDATE entry T SET number_of_comments = (T.number_of_comments + 1), number_of_pingbacks = (T.number_of_pingbacks + 2) WHERE T.id = 1 RETURNING *
+```
+
+```js
+[
+  {
+    blog_id            : 1,
+    body_text          : "This is the first entry in my blog.",
+    headline           : "My First Blog suffix by function",
+    id                 : 1,
+    mod_date           : "2023-01-02",
+    number_of_comments : 6,
+    number_of_pingbacks: 4,
+    pub_date           : "2023-01-01",
+    rating             : 5,
+  },
+]
+```
+
+# increase string args
+```sql
+SELECT T.rating FROM entry T WHERE T.id = 1 LIMIT 2
+```
+
+```lua
+ Entry:increase('rating', 2):where{id=1}:returning('rating'):exec() 
+```
+
+```sql
+UPDATE entry T SET rating = (T.rating + 2) WHERE T.id = 1 RETURNING T.rating
+```
+
+```js
+[
+  {
+    rating: 7,
+  },
+]
+```
+
+# update with where join
+```lua
+ Entry:update { headline = F('headline')..' from first blog' }:where{blog_id__name='My First Blog'}:returning('id','headline'):exec() 
+```
+
+```sql
+UPDATE entry T SET headline = (T.headline || ' from first blog') FROM blog T1 WHERE (T1.name = 'My First Blog') AND (T.blog_id = T1.id) RETURNING T.id, T.headline
+```
+
+```js
+[
+  {
+    headline: "Third Entry from first blog",
+    id      : 3,
+  },
+  {
+    headline: "My First Blog suffix by function from first blog",
     id      : 1,
-    username: "u1",
   },
 ]
 ```
 
-ok 74 - Xodel.where where basic
-## where condition by 2 args
-```lua
- usr:select('id'):where('id', 3):exec() 
-```
-
 ```sql
-SELECT T.id FROM usr T WHERE T.id = 3
+SELECT T.id, T.headline FROM entry T WHERE T.headline LIKE '% from first blog'
 ```
 
-```js
-[
-  {
-    id: 3,
-  },
-]
-```
-
-ok 75 - Xodel.where where condition by 2 args
-## where condition by 3 args
-```lua
- usr:select('id'):where('id', '<',  3):flat() 
-```
-
-```sql
-SELECT T.id FROM usr T WHERE T.id < 3
-```
-
-```js
-[
-  1,
-  2,
-]
-```
-
-ok 76 - Xodel.where where condition by 3 args
-## where by arithmetic operator: __gte
-```lua
-usr:where{id__gte=2}:select('id')
-```
-
-```sql
-SELECT T.id FROM usr T WHERE T.id >= 2
-```
-
-ok 77 - Xodel.where where by arithmetic operator: __gte
-## where by arithmetic operator: __ne
-```lua
-usr:where{id__ne=2}:select('id')
-```
-
-```sql
-SELECT T.id FROM usr T WHERE T.id <> 2
-```
-
-ok 78 - Xodel.where where by arithmetic operator: __ne
-## where by arithmetic operator: __lt
-```lua
-usr:where{id__lt=2}:select('id')
-```
-
-```sql
-SELECT T.id FROM usr T WHERE T.id < 2
-```
-
-ok 79 - Xodel.where where by arithmetic operator: __lt
-## where by arithmetic operator: __lte
-```lua
-usr:where{id__lte=2}:select('id')
-```
-
-```sql
-SELECT T.id FROM usr T WHERE T.id <= 2
-```
-
-ok 80 - Xodel.where where by arithmetic operator: __lte
-## where by arithmetic operator: __eq
-```lua
-usr:where{id__eq=2}:select('id')
-```
-
-```sql
-SELECT T.id FROM usr T WHERE T.id = 2
-```
-
-ok 81 - Xodel.where where by arithmetic operator: __eq
-## where by arithmetic operator: __gt
-```lua
-usr:where{id__gt=2}:select('id')
-```
-
-```sql
-SELECT T.id FROM usr T WHERE T.id > 2
-```
-
-ok 82 - Xodel.where where by arithmetic operator: __gt
-## where in
-```lua
-usr:where{username__in={'u1','u2'}}
-```
-
-```sql
-SELECT * FROM usr T WHERE T.username IN ('u1', 'u2')
-```
-
-ok 83 - Xodel.where where in
-## where contains
-```lua
-usr:where{username__contains='u'}
-```
-
-```sql
-SELECT * FROM usr T WHERE T.username LIKE '%u%'
-```
-
-ok 84 - Xodel.where where contains
-## where startswith
-```lua
-usr:where{username__startswith='u'}
-```
-
-```sql
-SELECT * FROM usr T WHERE T.username LIKE 'u%'
-```
-
-ok 85 - Xodel.where where startswith
-## where endswith
-```lua
-usr:where{username__endswith='u'}
-```
-
-```sql
-SELECT * FROM usr T WHERE T.username LIKE '%u'
-```
-
-ok 86 - Xodel.where where endswith
-## where null true
-```lua
-usr:where{username__null=true}
-```
-
-```sql
-SELECT * FROM usr T WHERE T.username IS NULL
-```
-
-ok 87 - Xodel.where where null true
-## where null false
-```lua
-usr:where{username__null=false}
-```
-
-```sql
-SELECT * FROM usr T WHERE T.username IS NOT NULL
-```
-
-ok 88 - Xodel.where where null false
-## where notin
-```lua
-usr:where{username__notin={'u1','u2'}}
-```
-
-```sql
-SELECT * FROM usr T WHERE T.username NOT IN ('u1', 'u2')
-```
-
-ok 89 - Xodel.where where notin
-## where foreignkey eq
-```lua
-profile:where{usr_id__username__eq='u1'}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username = 'u1'
-```
-
-ok 90 - Xodel.where where foreignkey eq
-## where foreignkey in
-```lua
-profile:where{usr_id__username__in={'u1','u2'}}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username IN ('u1', 'u2')
-```
-
-ok 91 - Xodel.where where foreignkey in
-## where foreignkey contains
-```lua
-profile:where{usr_id__username__contains='u'}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username LIKE '%u%'
-```
-
-ok 92 - Xodel.where where foreignkey contains
-## where foreignkey startswith
-```lua
-profile:where{usr_id__username__startswith='u'}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username LIKE 'u%'
-```
-
-ok 93 - Xodel.where where foreignkey startswith
-## where foreignkey endswith
-```lua
-profile:where{usr_id__username__endswith='u'}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username LIKE '%u'
-```
-
-ok 94 - Xodel.where where foreignkey endswith
-## where foreignkey null true
-```lua
-profile:where{usr_id__username__null=true}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username IS NULL
-```
-
-ok 95 - Xodel.where where foreignkey null true
-## where foreignkey null false
-```lua
-profile:where{usr_id__username__null=false}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.username IS NOT NULL
-```
-
-ok 96 - Xodel.where where foreignkey null false
-## where foreignkey number operator gte
-```lua
-profile:where{usr_id__permission__gte=2}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission >= 2
-```
-
-ok 97 - Xodel.where where foreignkey number operator gte
-## where foreignkey number operator ne
-```lua
-profile:where{usr_id__permission__ne=2}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission <> 2
-```
-
-ok 98 - Xodel.where where foreignkey number operator ne
-## where foreignkey number operator lt
-```lua
-profile:where{usr_id__permission__lt=2}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission < 2
-```
-
-ok 99 - Xodel.where where foreignkey number operator lt
-## where foreignkey number operator lte
-```lua
-profile:where{usr_id__permission__lte=2}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission <= 2
-```
-
-ok 100 - Xodel.where where foreignkey number operator lte
-## where foreignkey number operator eq
-```lua
-profile:where{usr_id__permission__eq=2}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission = 2
-```
-
-ok 101 - Xodel.where where foreignkey number operator eq
-## where foreignkey number operator gt
-```lua
-profile:where{usr_id__permission__gt=2}
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T1.permission > 2
-```
-
-ok 102 - Xodel.where where foreignkey number operator gt
-# Xodel.select
-## select fk column
-```lua
-profile:select('id', 'usr_id__username'):where { id = 1 }:exec()
-```
-
-```sql
-SELECT T.id, T1.username AS usr_id__username FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T.id = 1
-```
-
-```js
-[
-  {
-    id              : 1,
-    usr_id__username: "u1",
-  },
-]
-```
-
-ok 103 - Xodel.select select fk column
-# Xodel:get(cond?, op?, dval?)
-## basic
-```lua
-usr:get{id=3}
-```
-
-```sql
-SELECT * FROM usr T WHERE T.id = 3 LIMIT 2
-```
-
-```js
-{
-  id        : 3,
-  permission: 3,
-  username  : "u3",
-}
-```
-
-ok 104 - Xodel:get(cond?, op?, dval?) basic
-## model load foreign row
-```sql
-SELECT * FROM profile T WHERE T.id = 1 LIMIT 2
-```
-
-ok 105 - Xodel:get(cond?, op?, dval?) model load foreign row
-## fetch extra foreignkey field from database on demand
-```sql
-SELECT * FROM usr T WHERE T.id = 1 LIMIT 2
-```
-
-ok 106 - Xodel:get(cond?, op?, dval?) fetch extra foreignkey field from database on demand
-## model load foreign row with specified columns
-```lua
-profile:load_fk('usr_id', 'username', 'permission'):get{id=1}
-```
-
-```sql
-SELECT T.usr_id, T1.username AS usr_id__username, T1.permission AS usr_id__permission FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T.id = 1 LIMIT 2
-```
-
-```js
-{
-  usr_id: {
-    permission: 1,
-    username  : "u1",
-  },
-}
-```
-
-ok 107 - Xodel:get(cond?, op?, dval?) model load foreign row with specified columns
-## model load foreign row with all columns by *
-```lua
-profile:load_fk('usr_id', '*'):get{id=1}
-```
-
-```sql
-SELECT T.usr_id, T.usr_id AS usr_id__id, T1.username AS usr_id__username, T1.permission AS usr_id__permission FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T.id = 1 LIMIT 2
-```
-
-```js
-{
-  usr_id: {
-    id        : 1,
-    permission: 1,
-    username  : "u1",
-  },
-}
-```
-
-```sql
-SELECT * FROM usr T WHERE T.id = 1 LIMIT 2
-```
-
-ok 108 - Xodel:get(cond?, op?, dval?) model load foreign row with all columns by *
-## model load foreign row with specified columns two api are the same
-```lua
-profile:select("sex"):load_fk('usr_id', 'username', 'permission'):get{id=1}
-```
-
-```sql
-SELECT T.sex, T.usr_id, T1.username AS usr_id__username, T1.permission AS usr_id__permission FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T.id = 1 LIMIT 2
-```
-
-```js
-{
-  sex   : "m",
-  usr_id: {
-    permission: 1,
-    username  : "u1",
-  },
-}
-```
-
-```lua
-profile:select("sex"):load_fk('usr_id', {'username', 'permission'}):get{id=1}
-```
-
-```sql
-SELECT T.sex, T.usr_id, T1.username AS usr_id__username, T1.permission AS usr_id__permission FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T.id = 1 LIMIT 2
-```
-
-```js
-{
-  sex   : "m",
-  usr_id: {
-    permission: 1,
-    username  : "u1",
-  },
-}
-```
-
-ok 109 - Xodel:get(cond?, op?, dval?) model load foreign row with specified columns two api are the same
-## Xodel:get(cond?, op?, dval?)
-```lua
-usr:get{id__lt=3}
-```
-
-```sql
-SELECT * FROM usr T WHERE T.id < 3 LIMIT 2
-```
-
-ok 110 - Xodel:get(cond?, op?, dval?) Xodel:get(cond?, op?, dval?)
-# Xodel:get_or_create(params:table, defaults?:table, columns?:string[])
-## basic
-```lua
-usr:get_or_create{username='goc'}
-```
-
-```sql
-WITH new_records(id, username) AS (INSERT INTO "usr"(username) SELECT 'goc' WHERE NOT EXISTS (SELECT 1 FROM usr T WHERE T.username = 'goc') RETURNING id, username) SELECT id, username, TRUE AS __is_inserted__ FROM new_records new_records UNION ALL (SELECT id, username, FALSE AS __is_inserted__ FROM usr T WHERE T.username = 'goc')
-```
-
-```js
-{
-  id      : 33,
-  username: "goc",
-}
-```
-
-ok 111 - Xodel:get_or_create(params:table, defaults?:table, columns?:string[]) basic
-## model get_or_create with defaults
-```lua
-usr:get_or_create({username='goc2'}, {permission = 5})
-```
-
-```sql
-WITH new_records(id, permission, username) AS (INSERT INTO "usr"(permission, username) SELECT 5, 'goc2' WHERE NOT EXISTS (SELECT 1 FROM usr T WHERE T.username = 'goc2') RETURNING id, permission, username) SELECT id, permission, username, TRUE AS __is_inserted__ FROM new_records new_records UNION ALL (SELECT id, permission, username, FALSE AS __is_inserted__ FROM usr T WHERE T.username = 'goc2')
-```
-
-```js
-{
-  id        : 34,
-  permission: 5,
-  username  : "goc2",
-}
-```
-
-ok 112 - Xodel:get_or_create(params:table, defaults?:table, columns?:string[]) model get_or_create with defaults
-## test chat model
-```sql
-INSERT INTO message AS T (creator, target, content) VALUES (1, 2, 'c121'), (1, 2, 'c122'), (2, 1, 'c123'), (1, 3, 'c131'), (1, 3, 'c132'), (3, 1, 'c133'), (1, 3, 'c134'), (2, 3, 'c231') RETURNING *
-```
-
-ok 113 - Xodel api: test chat model
-## go crazy with where clause with recursive join
-```sql
-INSERT INTO message AS T (target, content, creator) VALUES (2, 'crazy', 1) RETURNING *
-```
-
-```sql
-SELECT * FROM profile T WHERE T.id = 1 LIMIT 2
-```
-
-```sql
-SELECT * FROM usr T WHERE T.id = 1 LIMIT 2
-```
-
-```sql
-SELECT T.id, T1.age AS creator__age, T2.username AS creator__usr_id__username FROM message T INNER JOIN profile T1 ON (T.creator = T1.id) INNER JOIN usr T2 ON (T1.usr_id = T2.id) WHERE T.id = 9 AND T2.username LIKE '%1%' AND T1.age = 11
-```
-
-```sql
-SELECT T.id, T1.age AS creator__age, T2.username AS creator__usr_id__username FROM message T INNER JOIN profile T1 ON (T.creator = T1.id) INNER JOIN usr T2 ON (T1.usr_id = T2.id) WHERE T.id = 9
-```
-
-ok 114 - Xodel api: go crazy with where clause with recursive join
-# etc
-## wrong fk name
-```lua
-models.message:where {creator__usr_id__views=0}:exec()
-```
-
-ok 115 - etc wrong fk name
-## wrong fk name3
-```lua
-models.message:select('creator__usr_id__views'):exec()
-```
-
-ok 116 - etc wrong fk name3
-## test shortcuts join
-```lua
-profile:join('dept_name'):get { id = 1 }
-```
-
-```sql
-SELECT * FROM profile T INNER JOIN dept T1 ON (T.dept_name = T1.name) WHERE T.id = 1 LIMIT 2
-```
-
-```js
-{
-  age      : 11,
-  dept_name: {
-    name: "d1",
-  },
-  id       : 1,
-  name     : "d1",
-  salary   : 1000,
-  sex      : "m",
-  usr_id   : {
-    id: 1,
-  },
-}
-```
-
-ok 117 - etc test shortcuts join
-## sql select_as
-```lua
-usr:select_as('id', 'value'):select_as('username', 'label'):where { id = 2 }:exec()
-```
-
-```sql
-SELECT T.id AS value, T.username AS label FROM usr T WHERE T.id = 2
-```
-
-```js
-[
-  {
-    label: "u2",
-    value: 2,
-  },
-]
-```
-
-ok 118 - etc sql select_as
-## sql select_as foreignkey
-```lua
-profile:select_as('usr_id__permission', 'uperm'):where { id = 2 }:exec()
-```
-
-```sql
-SELECT T1.permission AS uperm FROM profile T INNER JOIN usr T1 ON (T.usr_id = T1.id) WHERE T.id = 2
-```
-
-```js
-[
-  {
-    uperm: 3,
-  },
-]
-```
-
-ok 119 - etc sql select_as foreignkey
-# sql injection
-## where key
-ok 120 - sql injection where key
-## where value
-```sql
-SELECT * FROM usr T WHERE T.id = '1 or 1=1'
-```
-
-ok 121 - sql injection where value
-## order
-ok 122 - sql injection order
-## select
-ok 123 - sql injection select
-# Xodel:delete(cond?, op?, dval?)
-## model class delete all
-```lua
-evaluate:delete{}:exec()
-```
-
-```sql
-DELETE FROM evaluate T
-```
-
-```js
-{
-  affected_rows: 4,
-}
-```
-
-ok 124 - Xodel:delete(cond?, op?, dval?) model class delete all
-## model instance delete
-```sql
-DELETE FROM message T
-```
-
-```sql
-DELETE FROM message T
-```
-
-```sql
-SELECT * FROM profile T WHERE T.id = 1 LIMIT 2
-```
-
-```lua
-du:delete()
-```
-
-```sql
-DELETE FROM profile T WHERE T.id = 1 RETURNING T.id
-```
-
-```js
-[
-  {
-    id: 1,
-  },
-]
-```
-
-ok 125 - Xodel:delete(cond?, op?, dval?) model instance delete
-## model instance delete use non primary key
-```sql
-SELECT * FROM usr T WHERE T.id = 1 LIMIT 2
-```
-
-```lua
-du:delete('username')
-```
-
-```sql
-DELETE FROM usr T WHERE T.username = 'u1' RETURNING T.username
-```
-
-```js
-[
-  {
-    username: "u1",
-  },
-]
-```
-
-ok 126 - Xodel:delete(cond?, op?, dval?) model instance delete use non primary key
-## create with foreign model returning all
-```sql
-SELECT * FROM usr T WHERE T.id = 3 LIMIT 2
-```
-
-```lua
-profile:insert{usr_id=u, age=12}:returning("*"):execr()
-```
-
-```sql
-INSERT INTO profile AS T (usr_id, dept_name, age, sex, salary) VALUES (3, DEFAULT, 12, 'f', 1000) RETURNING *
-```
-
-```js
-[
-  {
-    age   : 12,
-    id    : 4,
-    salary: 1000,
-    sex   : "f",
-    usr_id: 3,
-  },
-]
-```
-
-ok 127 - Xodel:delete(cond?, op?, dval?) create with foreign model returning all
-## insert from delete returning
-```sql
-SELECT * FROM usr T WHERE T.id = 2 LIMIT 2
-```
-
-```lua
-log:insert(profile:delete { id = 2 }:returning('id'):returning_literal("usr", "delete"),
-      { 'delete_id', 'model_name', "action" }):returning("*"):execr()
-```
-
-```sql
-WITH D(delete_id, model_name, action) AS (DELETE FROM profile T WHERE T.id = 2 RETURNING T.id, 'usr', 'delete') INSERT INTO log AS T (delete_id, model_name, action) SELECT delete_id, model_name, action FROM D RETURNING *
-```
-
-```js
-[
-  {
-    action    : "delete",
-    delete_id : 2,
-    id        : 1,
-    model_name: "usr",
-  },
-]
-```
-
-ok 128 - Xodel:delete(cond?, op?, dval?) insert from delete returning
-# field stuff
-## table field validate
-ok 129 - field stuff table field validate
-## array field validate
-ok 130 - field stuff array field validate
-## alioss_list
-ok 131 - field stuff alioss_list
-1..131
-Done in 0.50s.
+1..35
+Done in 0.28s.

@@ -67,10 +67,16 @@ local concat = table.concat
 ---@alias DBValue DBLoadValue|Token
 ---@alias Record {[string]:DBValue|Record[]}
 ---@alias Records Record|Record[]
----@alias ValidateErrorObject {[string]: any}
----@alias ValidateError string|ValidateErrorObject
 ---@alias JOIN_TYPE "INNER"|"LEFT"|"RIGHT"|"FULL"
 
+---@class ValidateError
+---@field name string
+---@field message string
+---@field label string
+---@field type string
+---@field index? integer returned by TableField's validate function, indicates the error row index
+---@field batch_index? integer set by insert, upsert
+--
 ---@class SqlOptions
 ---@field table_name string
 ---@field as? string
@@ -188,8 +194,8 @@ local function to_camel_case(str)
 end
 
 
-local function get_keys(rows)
-  local columns = {}
+local function get_keys(rows, columns)
+  columns = columns or {}
   for k, _ in pairs(rows[1] or rows) do
     insert(columns, k)
   end
@@ -634,9 +640,8 @@ function Sql:_keep_args(method_name, ...)
   return self
 end
 
---TODO:
 ---@private
----@param rows Sql|Records
+---@param rows Sql|Record|Record[]
 ---@param columns? string[]
 ---@return self
 function Sql:_base_insert(rows, columns)
@@ -659,19 +664,19 @@ function Sql:_base_insert(rows, columns)
   return self
 end
 
---TODO:
 ---@private
 ---@param row Record|string|Sql
 ---@param columns? string[]
 ---@return self
 function Sql:_base_update(row, columns)
   if type(row) == "table" then
-    if row.__SQL_BUILDER__ then
-      ---@cast row Sql
-      self._update = self:_base_get_update_query_token(row, columns)
-    else
-      self._update = self:_get_update_token(row, columns)
-    end
+    -- if row.__SQL_BUILDER__ then
+    --   ---@cast row Sql
+    --   self._update = self:_base_get_update_query_token(row, columns)
+    -- else
+    --   self._update = self:_get_update_token(row, columns)
+    -- end
+    self._update = self:_get_update_token(row, columns)
   else
     ---@cast row string
     self._update = row
@@ -999,7 +1004,6 @@ function Sql:_base_get_condition_token_from_table(kwargs, logic)
   end
 end
 
---TODO:
 ---@private
 ---@param rows Record[]
 ---@param columns string[]
@@ -1059,7 +1063,6 @@ function Sql:_get_insert_values_token(row, columns)
 end
 
 ---make bulk insert token
---TODO:
 ---@private
 ---@param rows Record[]
 ---@param columns? string[]
@@ -1185,7 +1188,6 @@ function Sql:_get_update_token(row, columns)
   return concat(kv, ", ")
 end
 
---TODO:
 ---@private
 ---@param name string
 ---@param token? Sql|DBValue
@@ -1193,7 +1195,7 @@ end
 function Sql:_get_with_token(name, token)
   if token == nil then
     return name
-  elseif getmetatable(token) and token.__SQL_BUILDER__ then
+  elseif token.__SQL_BUILDER__ then
     ---@cast token Sql
     return format("%s AS (%s)", name, token:statement())
   else
@@ -1210,7 +1212,6 @@ function Sql:_get_insert_token(row, columns)
   return format("(%s) VALUES %s", as_token(insert_columns), as_literal(values_list))
 end
 
---TODO:
 ---@private
 ---@param rows Record[]
 ---@param columns? string[]
@@ -1220,17 +1221,16 @@ function Sql:_get_bulk_insert_token(rows, columns)
   return format("(%s) VALUES %s", as_token(columns), as_token(rows))
 end
 
---TODO:
 ---@private
 ---@param subsql Sql
 ---@param columns? string[]
 function Sql:_set_select_subquery_insert_token(subsql, columns)
   -- INSERT INTO T1(a,b,c) SELECT a,b,c FROM T2
-  local columns_token = as_token(columns or flat(subsql._select_args))
+  local insert_columns = columns or flat(subsql._select_args)
+  local columns_token = as_token(insert_columns)
   self._insert = format("(%s) %s", columns_token, subsql:statement())
 end
 
---TODO:
 ---@private
 ---@param subsql Sql
 ---@param columns? string[]
@@ -1321,14 +1321,14 @@ function Sql:_get_in_token(cols, range, op)
   end
 end
 
---TODO:
+--TODO: seems not necessary
 ---@private
 ---@param subquery Sql
 ---@param columns? string[]
 ---@return string
 function Sql:_base_get_update_query_token(subquery, columns)
   -- UPDATE T1 SET (a, b) = (SELECT a1, b1 FROM T2 WHERE T1.tid = T2.id);
-  local columns_token = get_list_tokens(columns or flat(subquery._select_args))
+  local columns_token = as_token(columns or flat(subquery._select_args))
   return format("(%s) = (%s)", columns_token, subquery:statement())
 end
 
@@ -1573,7 +1573,7 @@ function Sql:_get_bulk_key(columns)
   if self.model.unique_together and self.model.unique_together[1] then
     return clone(self.model.unique_together[1])
   end
-  for index, name in ipairs(columns) do
+  for _, name in ipairs(columns) do
     local f = self.model.fields[name]
     if f and f.unique then
       return name
@@ -1586,19 +1586,13 @@ function Sql:_get_bulk_key(columns)
   return pk
 end
 
-function Sql:_get_columns_from_row(row)
-  local columns = {}
-  for k, _ in pairs(row) do
-    if self.model.fields[k] then
-      columns[#columns + 1] = k
-    end
-  end
-  return columns
-end
-
---TODO:
 ---@private
-function Sql:_clean_bulk_params(rows, key, columns)
+---@param rows Record|Record[]
+---@param key? string|string[]
+---@param columns? string[]
+---@param is_update? boolean whether used in update clause
+---@return Record[], string|string[], string[]
+function Sql:_clean_bulk_params(rows, key, columns, is_update)
   if isempty(rows) then
     error("empty rows passed to merge")
   end
@@ -1606,7 +1600,7 @@ function Sql:_clean_bulk_params(rows, key, columns)
     rows = { rows }
   end
   if columns == nil then
-    columns = self:_get_columns_from_row(rows[1])
+    columns = get_keys(rows, is_update and { self.model.auto_now_name } or {})
     if #columns == 0 then
       error("no columns provided for bulk")
     end
@@ -2338,7 +2332,6 @@ function Sql:clear()
   return self
 end
 
---TODO:
 ---@param cond? table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
@@ -2351,7 +2344,6 @@ function Sql:delete(cond, op, dval)
   return self
 end
 
---TODO:
 ---@param a (fun(ctx:table):string|table)|DBValue
 ---@param b? DBValue
 ---@param ...? DBValue
@@ -2635,17 +2627,31 @@ function Sql:distinct(...)
   return self
 end
 
----@param name string
+---@param name string|table
 ---@param amount? number
 ---@return self
 function Sql:increase(name, amount)
+  if type(name) == 'table' then
+    local update_pairs = {}
+    for k, v in pairs(name) do
+      update_pairs[k] = F(k) + (v or 1)
+    end
+    return self:update(update_pairs)
+  end
   return self:update { [name] = F(name) + (amount or 1) }
 end
 
----@param name string
+---@param name string|table
 ---@param amount? number
 ---@return self
 function Sql:decrease(name, amount)
+  if type(name) == 'table' then
+    local update_pairs = {}
+    for k, v in pairs(name) do
+      update_pairs[k] = F(k) - (v or 1)
+    end
+    return self:update(update_pairs)
+  end
   return self:update { [name] = F(name) - (amount or 1) }
 end
 
@@ -2679,25 +2685,19 @@ function Sql:annotate(kwargs)
   return self
 end
 
----@param rows Records|Sql
+---@param rows Record|Record[]|Sql
 ---@param columns? string[]
 ---@return self
 function Sql:insert(rows, columns)
   if not rows.__SQL_BUILDER__ then
-    ---@cast rows Records
+    ---@cast rows Record|Record[]
+    if not columns then
+      columns = get_keys(rows)
+    end
     if not self._skip_validate then
-      ---@diagnostic disable-next-line: cast-local-type
-      rows, columns = self.model:validate_create_data(rows, columns)
-      if rows == nil then
-        error(columns)
-      end
+      rows = assert(self.model:_validate_create_data(rows, columns))
     end
-    ---@diagnostic disable-next-line: cast-local-type, param-type-mismatch
-    rows, columns = self.model:prepare_db_rows(rows, columns)
-    if rows == nil then
-      error(columns)
-    end
-    ---@diagnostic disable-next-line: param-type-mismatch
+    rows = assert(self.model:_prepare_db_rows(rows, columns))
     return Sql._base_insert(self, rows, columns)
   else
     ---@cast rows Sql
@@ -2733,7 +2733,6 @@ end
 --   )
 -- RETURNING
 --   *;
---TODO:
 ---@param rows Record[]
 ---@param key? Keys
 ---@param columns? string[]
@@ -2741,50 +2740,31 @@ function Sql:align(rows, key, columns)
   rows, key, columns = self:_clean_bulk_params(rows, key, columns)
   local upsert_query = self.model:create_sql()
   if not self._skip_validate then
-    ---@diagnostic disable-next-line: cast-local-type
-    rows, key, columns = self.model:validate_create_rows(rows, key, columns)
-    if rows == nil then
-      error(key)
-    end
+    rows = assert(self.model:_validate_create_rows(rows, key, columns))
   end
-  ---@diagnostic disable-next-line: cast-local-type, param-type-mismatch
-  rows, columns = self.model:prepare_db_rows(rows, columns)
-  if rows == nil then
-    error(columns)
-  end
+  rows = assert(self.model:_prepare_db_rows(rows, columns))
   upsert_query:returning(key)
-  ---@diagnostic disable-next-line: param-type-mismatch
   Sql._base_upsert(upsert_query, rows, key, columns)
   self:with("U", upsert_query):where(key, "NOT IN", Sql:new { table_name = 'U' }:_base_select(key)):delete()
   return self
 end
 
---TODO:
----@param row Record|Sql|string
+---@param row Record|Sql
 ---@param columns? string[]
 ---@return self
 function Sql:update(row, columns)
-  if type(row) == 'string' then
-    return Sql._base_update(self, row)
-  elseif not row.__SQL_BUILDER__ then
-    local err
+  if not row.__SQL_BUILDER__ then
     ---@cast row Record
+    if not columns then
+      columns = get_keys(row, { self.model.auto_now_name })
+    end
     for k, v in pairs(row) do
       row[k] = self:_resolve_F(v)
     end
     if not self._skip_validate then
-      ---@diagnostic disable-next-line: cast-local-type
-      row, err = self.model:validate_update(row, columns)
-      if row == nil then
-        error(err)
-      end
+      row = assert(self.model:validate_update(row, columns))
     end
-    ---@diagnostic disable-next-line: cast-local-type
-    row, columns = self.model:prepare_db_rows(row, columns, true)
-    if row == nil then
-      error(columns)
-    end
-    ---@diagnostic disable-next-line: param-type-mismatch
+    row = assert(self.model:_prepare_db_rows(row, columns))
     return Sql._base_update(self, row, columns)
   else
     ---@cast row Sql
@@ -2792,7 +2772,6 @@ function Sql:update(row, columns)
   end
 end
 
---TODO:
 ---@param rows Record[]
 ---@param key? Keys
 ---@param columns? string[]
@@ -2800,22 +2779,12 @@ end
 function Sql:merge(rows, key, columns)
   rows, key, columns = self:_clean_bulk_params(rows, key, columns)
   if not self._skip_validate then
-    ---@diagnostic disable-next-line: cast-local-type
-    rows, key, columns = self.model:validate_create_rows(rows, key, columns)
-    if rows == nil then
-      error(key)
-    end
+    rows = assert(self.model:_validate_create_rows(rows, key, columns))
   end
-  ---@diagnostic disable-next-line: cast-local-type, param-type-mismatch
-  rows, columns = self.model:prepare_db_rows(rows, columns, false)
-  if rows == nil then
-    error(columns)
-  end
-  ---@diagnostic disable-next-line: param-type-mismatch
+  rows = assert(self.model:_prepare_db_rows(rows, columns))
   return Sql._base_merge(self, rows, key, columns)
 end
 
---TODO:
 ---@param rows Record[]
 ---@param key? Keys
 ---@param columns? string[]
@@ -2823,41 +2792,22 @@ end
 function Sql:upsert(rows, key, columns)
   rows, key, columns = self:_clean_bulk_params(rows, key, columns)
   if not self._skip_validate then
-    ---@diagnostic disable-next-line: cast-local-type
-    rows, key, columns = self.model:validate_create_rows(rows, key, columns)
-    if rows == nil then
-      error(key)
-    end
+    rows = assert(self.model:_validate_create_rows(rows, key, columns))
   end
-  ---@diagnostic disable-next-line: cast-local-type, param-type-mismatch
-  rows, columns = self.model:prepare_db_rows(rows, columns, false)
-  if rows == nil then
-    error(columns)
-  end
-  ---@diagnostic disable-next-line: param-type-mismatch
+  rows = assert(self.model:_prepare_db_rows(rows, columns))
   return Sql._base_upsert(self, rows, key, columns)
 end
 
---TODO:
 ---@param rows Record[]
 ---@param key? Keys
 ---@param columns? string[]
 ---@return self
 function Sql:updates(rows, key, columns)
-  rows, key, columns = self:_clean_bulk_params(rows, key, columns)
+  rows, key, columns = self:_clean_bulk_params(rows, key, columns, true)
   if not self._skip_validate then
-    ---@diagnostic disable-next-line: cast-local-type
-    rows, key, columns = self.model:validate_update_rows(rows, key, columns)
-    if rows == nil then
-      error(key)
-    end
+    rows = assert(self.model:_validate_update_rows(rows, key, columns))
   end
-  ---@diagnostic disable-next-line: cast-local-type, param-type-mismatch
-  rows, columns = self.model:prepare_db_rows(rows, columns, true)
-  if rows == nil then
-    error(columns)
-  end
-  ---@diagnostic disable-next-line: param-type-mismatch
+  rows = assert(self.model:_prepare_db_rows(rows, columns))
   return Sql._base_updates(self, rows, key, columns)
 end
 
@@ -3489,13 +3439,13 @@ end
 ---@field preload? boolean
 ---@field label string
 ---@field fields {[string]:AnyField}
----@field field_names Array
+---@field field_names Array<string>
 ---@field mixins? table[]
 ---@field abstract? boolean
 ---@field auto_primary_key? boolean
 ---@field primary_key string
 ---@field unique_together? string[]|string[][]
----@field names Array
+---@field names Array<string>
 ---@field auto_now_name string
 ---@field auto_now_add_name string
 ---@field foreignkey_fields {[string]:ForeignkeyField}
@@ -4167,7 +4117,7 @@ function Xodel.save_update(cls, input, names, key)
   if look_value == nil then
     error("no primary or unique key value for save_update")
   end
-  local prepared = assert(cls:prepare_for_db(data, names, true))
+  local prepared = assert(cls:prepare_for_db(data, names))
   local updated = cls:create_sql():_base_update(prepared):where { [key] = look_value }
       :_base_returning(key):execr()
   ---@cast updated Record
@@ -4186,34 +4136,28 @@ function Xodel.save_update(cls, input, names, key)
   end
 end
 
---TODO:
----@param cls Xodel
 ---@param data Record
 ---@param columns? string[]
----@param is_update? boolean
 ---@return Record
----@overload fun(cls:Xodel, data:Record, columns?:string[],is_update?:boolean):nil, ValidateError
-function Xodel.prepare_for_db(cls, data, columns, is_update)
+---@overload fun(self:Xodel, data:Record, columns?:string[]):nil, ValidateError
+function Xodel:prepare_for_db(data, columns)
   local prepared = {}
-  for _, name in ipairs(columns or cls.names) do
-    local field = cls.fields[name]
+  for _, name in ipairs(columns or self.names) do
+    local field = self.fields[name]
     if not field then
-      error(format("invalid field name '%s' for model '%s'", name, cls.table_name))
+      error(format("invalid field name '%s' for model '%s'", name, self.table_name))
     end
     local value = data[name]
-    if field.prepare_for_db and value ~= nil then
+    if field.prepare_for_db and (value ~= nil or field.auto_now) then
       local val, err = field:prepare_for_db(value)
       if val == nil and err then
-        return nil, cls:make_field_error(name, err)
+        return nil, self:make_field_error(name, err)
       else
         prepared[name] = val
       end
     else
       prepared[name] = value
     end
-  end
-  if is_update and cls.auto_now_name then
-    prepared[cls.auto_now_name] = ngx_localtime()
   end
   return prepared
 end
@@ -4232,86 +4176,69 @@ function Xodel.validate(cls, input, names, key)
   end
 end
 
---done
---TODO:
----@param cls Xodel
+local function throw_field_error(name, table_name)
+  error(format("invalid field name '%s' for model '%s'", name, table_name))
+end
+
 ---@param input Record
 ---@param names? string[]
----@return Record?, ValidateError?
-function Xodel.validate_create(cls, input, names)
+---@return Record
+---@overload fun(cls:Xodel, input:Record, names?:string[]):nil, ValidateError
+function Xodel:validate_create(input, names)
+  ---@type Record
   local data = {}
-  for _, name in ipairs(names or cls.names) do
-    local field = cls.fields[name]
+  for _, name in ipairs(names or self.names) do
+    local field = self.fields[name]
     if not field then
-      error(format("invalid field name '%s' for model '%s'", name, cls.table_name))
+      throw_field_error(name, self.table_name)
     end
     local value, err, index = field:validate(rawget(input, name))
     if err ~= nil then
-      return nil, cls:make_field_error(name, err, index)
+      return nil, self:make_field_error(name, err, index)
     elseif field.default and (value == nil or value == "") then
       if type(field.default) ~= "function" then
         value = field.default
       else
         value, err = field.default()
         if value == nil then
-          return nil, cls:make_field_error(name, err, index)
+          ---@cast err string
+          return nil, self:make_field_error(name, tostring(err), index)
         end
       end
     end
     data[name] = value
   end
-  if not cls.clean then
-    return data
-  else
-    local res, clean_err = cls:clean(data)
-    if res == nil then
-      return nil, clean_err
-    else
-      return res
-    end
-  end
+  return data
 end
 
---done
---TODO:
----@param cls Xodel
 ---@param input Record
 ---@param names? string[]
 ---@return Record
 ---@overload fun(cls:Xodel, input:Record, names?:string[]):nil, ValidateError
-function Xodel.validate_update(cls, input, names)
+function Xodel:validate_update(input, names)
+  ---@type Record
   local data = {}
-  for _, name in ipairs(names or cls.names) do
-    local field = cls.fields[name]
+  for _, name in ipairs(names or self.names) do
+    local field = self.fields[name]
     if not field then
-      error(format("invalid field name '%s' for model '%s'", name, cls.table_name))
+      throw_field_error(name, self.table_name)
     end
     local err, index
     local value = rawget(input, name)
     if value ~= nil then
       value, err, index = field:validate(value)
       if err ~= nil then
-        return nil, cls:make_field_error(name, err, index)
+        return nil, self:make_field_error(name, err, index)
       elseif value == nil then
         -- value is nil again after validate,its a non-required field whose value is empty string.
-        -- data[name] = field.get_empty_value_to_update(input)
-        -- 这里统一用空白字符串占位,以便prepare_for_db处pairs能处理该name
+        -- assign empty string to make prepare_for_db work.
         data[name] = ""
       else
         data[name] = value
       end
     end
   end
-  if not cls.clean then
-    return data
-  else
-    local res, clean_err = cls:clean(data)
-    if res == nil then
-      return nil, clean_err
-    else
-      return res
-    end
-  end
+  return data
 end
 
 --TODO:
@@ -4393,7 +4320,7 @@ function Xodel.save_cascade_update(cls, input, names, key)
   local names_without_tablefield = names:filter(function(name)
     return cls.fields[name].type ~= 'table'
   end)
-  local prepared = assert(cls:prepare_for_db(data, names_without_tablefield, true))
+  local prepared = assert(cls:prepare_for_db(data, names_without_tablefield))
   local updated_sql = cls:create_sql():_base_update(prepared):where { [key] = look_value }
       :_base_returning(key)
   cls:_walk_cascade_fields(function(tf, fk)
@@ -4409,31 +4336,28 @@ function Xodel.save_cascade_update(cls, input, names, key)
   return updated_sql:execr()
 end
 
---TODO:
----@param cls Xodel
----@param rows Records
+---@param rows Record|Record[]
 ---@param key Keys
----@return Records, Keys
----@overload fun(rows:Records, key:Keys):nil, ValidateError
-function Xodel.check_upsert_key(cls, rows, key)
+---@return ValidateError?
+function Xodel:_find_upsert_key_error(rows, key)
   assert(key, "no key for upsert")
   if rows[1] then
     ---@cast rows Record[]
     if type(key) == "string" then
       for i, row in ipairs(rows) do
         if row[key] == nil or row[key] == '' then
-          local err = cls:make_field_error(key, key .. "不能为空")
+          local err = self:make_field_error(key, key .. "不能为空")
           err.batch_index = i
-          return nil, err
+          return err
         end
       end
     else
       for i, row in ipairs(rows) do
         for _, k in ipairs(key) do
           if row[k] == nil or row[k] == '' then
-            local err = cls:make_field_error(k, k .. "不能为空")
+            local err = self:make_field_error(k, k .. "不能为空")
             err.batch_index = i
-            return nil, err
+            return err
           end
         end
       end
@@ -4441,19 +4365,23 @@ function Xodel.check_upsert_key(cls, rows, key)
   elseif type(key) == "string" then
     ---@cast rows Record
     if rows[key] == nil or rows[key] == '' then
-      return nil, cls:make_field_error(key, key .. "不能为空")
+      return self:make_field_error(key, key .. "不能为空")
     end
   else
     ---@cast rows Record
     for _, k in ipairs(key) do
       if rows[k] == nil or rows[k] == '' then
-        return nil, cls:make_field_error(k, k .. "不能为空")
+        return self:make_field_error(k, k .. "不能为空")
       end
     end
   end
-  return rows, key
 end
 
+---@param cls Xodel
+---@param name string field name
+---@param err string error message
+---@param index? integer error row index returned by TableField's validate function
+---@return ValidateError
 function Xodel.make_field_error(cls, name, err, index)
   local field = assert(cls.fields[name], "invalid feild name: " .. name)
   return {
@@ -4484,146 +4412,129 @@ function Xodel.load(cls, data)
   return cls:create_record(data)
 end
 
---done
 ---used in merge and upsert
---TODO:
----@param cls Xodel
 ---@param rows Record|Record[]
----@param columns? string[]
----@return Records?, string[]|ValidateError
-function Xodel.validate_create_data(cls, rows, columns)
-  local err_obj, cleaned
-  columns = columns or cls.names
+---@param columns string[]
+---@return Records
+---@overload fun(self:Xodel, rows:Records, columns: string[]):nil, ValidateError
+function Xodel:_validate_create_data(rows, columns)
   if rows[1] then
     ---@cast rows Record[]
-    cleaned = {}
+    ---@type Record[]
+    local cleaned = {}
     for index, row in ipairs(rows) do
-      ---@diagnostic disable-next-line: cast-local-type
-      row, err_obj = cls:validate_create(row, columns)
-      if row == nil then
-        err_obj.batch_index = index
+      local validated_row, err_obj = self:validate_create(row, columns)
+      if validated_row == nil then
         ---@cast err_obj ValidateError
+        err_obj.batch_index = index
         return nil, err_obj
       end
-      cleaned[index] = row
+      cleaned[index] = validated_row
     end
+    return cleaned
   else
     ---@cast rows Record
-    cleaned, err_obj = cls:validate_create(rows, columns)
+    local cleaned, err_obj = self:validate_create(rows, columns)
     if err_obj then
       return nil, err_obj
     end
+    return cleaned
   end
-  return cleaned, columns
 end
 
---done
---TODO:
----@param cls Xodel
 ---@param rows Record|Record[]
----@param columns? string[]
----@return Records?, string[]|ValidateError
-function Xodel.validate_update_data(cls, rows, columns)
-  local err_obj, cleaned
-  columns = columns or cls.names
-  if rows[1] then
-    cleaned = {}
-    for index, row in ipairs(rows) do
-      ---@diagnostic disable-next-line: cast-local-type
-      row, err_obj = cls:validate_update(row, columns)
-      if row == nil then
-        err_obj.batch_index = index
-        ---@cast err_obj ValidateError
-        return nil, err_obj
-      end
-      cleaned[index] = row
-    end
-  else
-    cleaned, err_obj = cls:validate_update(rows, columns)
-    if err_obj then
-      return nil, err_obj
-    end
-  end
-  return cleaned, columns
-end
-
---done
----used in merge and upsert
---TODO:
----@param cls Xodel
----@param rows Records
----@param key Keys
----@param columns? string[]
----@return Records, Keys, Keys
----@overload fun(cls:Xodel, rows:Records, key:Keys, columns?: string[]):nil, ValidateError
-function Xodel.validate_create_rows(cls, rows, key, columns)
-  local checked_rows, checked_key = cls:check_upsert_key(rows, key)
-  if checked_rows == nil then
-    return nil, checked_key
-  end
-  local cleaned_rows, cleaned_columns = cls:validate_create_data(checked_rows, columns)
-  if cleaned_rows == nil then
-    return nil, cleaned_columns
-  end
-  return cleaned_rows, checked_key, cleaned_columns
-end
-
---done
---TODO:
----@param cls Xodel
----@param rows Records
----@param key Keys
----@param columns? string[]
----@return Records, Keys, Keys
----@overload fun(cls:Xodel, rows:Records, key:Keys, columns?: string[]):nil, ValidateError
-function Xodel.validate_update_rows(cls, rows, key, columns)
-  local checked_rows, checked_key = cls:check_upsert_key(rows, key)
-  if checked_rows == nil then
-    return nil, checked_key
-  end
-  local cleaned_rows, cleaned_columns = cls:validate_update_data(checked_rows, columns)
-  if cleaned_rows == nil then
-    return nil, cleaned_columns
-  end
-  return cleaned_rows, checked_key, cleaned_columns
-end
-
---TODO:
----@param cls Xodel
----@param rows Records
----@param columns? string[]
----@param is_update? boolean
----@return Records?, string[]|ValidateError
-function Xodel.prepare_db_rows(cls, rows, columns, is_update)
-  local err, cleaned
-  columns = columns or get_keys(rows)
+---@param columns string[]
+---@return Records
+---@overload fun(self:Xodel, rows:Records, columns: string[]):nil, ValidateError
+function Xodel:_validate_update_data(rows, columns)
   if rows[1] then
     ---@cast rows Record[]
-    cleaned = {}
+    ---@type Record[]
+    local cleaned = {}
+    for index, row in ipairs(rows) do
+      local validated_row, err_obj = self:validate_update(row, columns)
+      if validated_row == nil then
+        ---@cast err_obj ValidateError
+        err_obj.batch_index = index
+        return nil, err_obj
+      end
+      cleaned[index] = validated_row
+    end
+    return cleaned
+  else
+    ---@cast rows Record
+    local cleaned, err_obj = self:validate_update(rows, columns)
+    if err_obj then
+      return nil, err_obj
+    end
+    return cleaned
+  end
+end
+
+---used in merge and upsert
+---@param rows Record|Record[]
+---@param key Keys
+---@param columns string[]
+---@return Records
+---@overload fun(cls:Xodel, rows:Records, key:Keys, columns: string[]):nil, ValidateError
+function Xodel:_validate_create_rows(rows, key, columns)
+  local err, cleaned_rows
+  err = self:_find_upsert_key_error(rows, key)
+  if err ~= nil then
+    return nil, err
+  end
+  cleaned_rows, err = self:_validate_create_data(rows, columns)
+  if err ~= nil then
+    return nil, err
+  end
+  return cleaned_rows
+end
+
+---@param rows Record|Record[]
+---@param key Keys
+---@param columns string[]
+---@return Records
+---@overload fun(self:Xodel, rows:Records, key:Keys, columns: string[]):nil, ValidateError
+function Xodel:_validate_update_rows(rows, key, columns)
+  local err, cleaned_rows
+  err = self:_find_upsert_key_error(rows, key)
+  if err ~= nil then
+    return nil, err
+  end
+  cleaned_rows, err = self:_validate_update_data(rows, columns)
+  if err ~= nil then
+    return nil, err
+  end
+  return cleaned_rows
+end
+
+---@param rows Record|Record[]
+---@param columns string[]
+---@return Records
+---@overload fun(self:Xodel, rows:Records, columns: string[]):nil, ValidateError
+function Xodel:_prepare_db_rows(rows, columns)
+  if rows[1] then
+    ---@cast rows Record[]
+    ---@type Record[]
+    local cleaned = {}
     for i, row in ipairs(rows) do
-      ---@diagnostic disable-next-line: cast-local-type
-      row, err = cls:prepare_for_db(row, columns, is_update)
+      local prow, err = self:prepare_for_db(row, columns)
       if err ~= nil then
         err.batch_index = i
         return nil, err
+      else
+        cleaned[i] = prow
       end
-      cleaned[i] = row
     end
+    return cleaned
   else
     ---@cast rows Record
-    cleaned, err = cls:prepare_for_db(rows, columns, is_update)
+    local prow, err = self:prepare_for_db(rows, columns)
     if err ~= nil then
       return nil, err
+    else
+      return prow
     end
-  end
-  if is_update then
-    local utime = cls.auto_now_name
-    if utime and not Array(columns):includes(utime) then
-      columns[#columns + 1] = utime
-    end
-    return cleaned, columns
-  else
-    return cleaned, columns
   end
 end
 
