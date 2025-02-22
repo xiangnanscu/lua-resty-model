@@ -1190,16 +1190,13 @@ end
 
 ---@private
 ---@param name string
----@param token? Sql|DBValue
+---@param token string|Sql
 ---@return string
 function Sql:_get_with_token(name, token)
-  if token == nil then
-    return name
-  elseif token.__SQL_BUILDER__ then
-    ---@cast token Sql
-    return format("%s AS (%s)", name, token:statement())
-  else
+  if type(token) == 'string' then
     return format("%s AS %s", name, token)
+  else
+    return format("%s AS (%s)", name, token:statement())
   end
 end
 
@@ -2209,9 +2206,8 @@ function Sql:statement()
   return statement
 end
 
---TODO:
 ---@param name string
----@param token? DBValue
+---@param token string|Sql
 ---@return self
 function Sql:with(name, token)
   local with_token = self:_get_with_token(name, token)
@@ -2223,9 +2219,8 @@ function Sql:with(name, token)
   return self
 end
 
---TODO:
 ---@param name string
----@param token? DBValue
+---@param token string|Sql
 ---@return self
 function Sql:with_recursive(name, token)
   local with_token = self:_get_with_token(name, token)
