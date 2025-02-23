@@ -76,7 +76,7 @@ local Author = Model:create_model {
   fields = {
     { "name",   maxlength = 200,  unique = true },
     { "email",  type = 'email' },
-    { "age",    type = 'integer', max = 100 },
+    { "age",    type = 'integer', max = 100,    min = 10 },
     { "resume", model = Resume },
   }
 }
@@ -165,8 +165,8 @@ local models = crate_table_from_models()
 
 
 -- 初始化 Blog 数据
-Blog:insert { name = 'My First Blog', tagline = 'Welcome to my blog' }:exec()
-Blog:insert { name = 'Another Blog', tagline = 'Another interesting blog' }:exec()
+Blog:insert { name = 'First Blog', tagline = 'Welcome to my blog' }:exec()
+Blog:insert { name = 'Second Blog', tagline = 'Another interesting blog' }:exec()
 
 -- 初始化 Author 数据
 Author:insert { name = 'John Doe', email = 'john@example.com', age = 30,
@@ -248,14 +248,14 @@ mdesc("Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBV
     local res = eval [[
       Blog:select('name'):where{id=1}:exec()
     ]]
-    assert.are.same(res, { { name = 'My First Blog' } })
+    assert.are.same(res, { { name = 'First Blog' } })
   end)
 
   mit("select多个字段", function()
     local res = eval [[
       Blog:select('name', 'tagline'):where{id=1}:exec()
     ]]
-    assert.are.same(res, { { name = 'My First Blog', tagline = 'Welcome to my blog' } })
+    assert.are.same(res, { { name = 'First Blog', tagline = 'Welcome to my blog' } })
   end)
 
   mit("select多个字段,使用table和vararg等效", function()
@@ -272,7 +272,7 @@ mdesc("Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBV
     local res = eval [[
       Blog:select_literal('XXX'):select{'name'}:where{id=1}:exec()
     ]]
-    assert.are.same(res, { { name = 'My First Blog', ['?column?'] = 'XXX' } })
+    assert.are.same(res, { { name = 'First Blog', ['?column?'] = 'XXX' } })
   end)
 
   mit("select literal as", function()
@@ -307,21 +307,21 @@ mdesc("Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBV
     local res = eval [[
       ViewLog:select('entry_id__blog_id__name'):where{id=1}:exec()
     ]]
-    assert.are.same(res, { { entry_id__blog_id__name = 'My First Blog' } })
+    assert.are.same(res, { { entry_id__blog_id__name = 'First Blog' } })
   end)
 
   mit("select as嵌套外键", function()
     local res = eval [[
       ViewLog:select_as{entry_id__blog_id__name = 'blog_name'}:where{id=1}:exec()
     ]]
-    assert.are.same(res, { { blog_name = 'My First Blog' } })
+    assert.are.same(res, { { blog_name = 'First Blog' } })
   end)
 
   mit("select reversed foreign key", function()
     local res = eval [[
-      Blog:select("id","name","entry__rating"):where{name='Another Blog'}:exec()
+      Blog:select("id","name","entry__rating"):where{name='Second Blog'}:exec()
     ]]
-    assert.are.same(res, { { id = 2, name = 'Another Blog', entry__rating = 5 } })
+    assert.are.same(res, { { id = 2, name = 'Second Blog', entry__rating = 5 } })
   end)
 
   mit("select reversed foreign key with order_by", function()
@@ -331,12 +331,12 @@ mdesc("Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBV
         "name",
         "entry__headline"
       ):where{
-        name = 'My First Blog'
+        name = 'First Blog'
       }:order_by{'entry__headline'}:exec()
     ]]
     assert.are.same(res, {
-      { id = 1, name = 'My First Blog', entry__headline = 'First Entry' },
-      { id = 1, name = 'My First Blog', entry__headline = 'Third Entry' } })
+      { id = 1, name = 'First Blog', entry__headline = 'First Entry' },
+      { id = 1, name = 'First Blog', entry__headline = 'Third Entry' } })
   end)
 
   mit("select reversed foreign key with order_by DESC", function()
@@ -346,12 +346,12 @@ mdesc("Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBV
         "name",
         "entry__headline"
       ):where{
-        name = 'My First Blog'
+        name = 'First Blog'
       }:order_by{'-entry__headline'}:exec()
     ]]
     assert.are.same(res, {
-      { id = 1, name = 'My First Blog', entry__headline = 'Third Entry' },
-      { id = 1, name = 'My First Blog', entry__headline = 'First Entry' },
+      { id = 1, name = 'First Blog', entry__headline = 'Third Entry' },
+      { id = 1, name = 'First Blog', entry__headline = 'First Entry' },
     })
   end)
 end)
@@ -570,10 +570,10 @@ end)
 mdesc("Xodel:insert(rows:table|table[]|Sql, columns?:string[])", function()
   mit("插入单行数据", function()
     local res = eval [[
-      Blog:insert{
-        name = 'insert one row',
-        tagline = 'insert one row'
-      }:exec()
+Blog:insert{
+  name = 'insert one row',
+  tagline = 'insert one row'
+}:exec()
     ]]
     assert.are.same(res, { affected_rows = 1 })
     Blog:delete { name = 'insert one row' }:exec()
@@ -581,10 +581,10 @@ mdesc("Xodel:insert(rows:table|table[]|Sql, columns?:string[])", function()
 
   mit("插入单行数据并返回特定字段", function()
     local res = eval [[
-      Blog:insert{
-        name = 'Return Test Blog',
-        tagline = 'Return test tagline'
-      }:returning{'id', 'name'}:exec()
+Blog:insert{
+  name = 'Return Test Blog',
+  tagline = 'Return test tagline'
+}:returning{'id', 'name'}:exec()
     ]]
     assert.are.same(type(res[1].id), 'number')
     assert.are.same(res[1].name, 'Return Test Blog')
@@ -593,26 +593,26 @@ mdesc("Xodel:insert(rows:table|table[]|Sql, columns?:string[])", function()
 
   mit("returning使用vararg和table等效", function()
     local s1 = eval [[
-      Blog:insert{
-        name = 'Return Test Blog',
-        tagline = 'Return test tagline'
-      }:returning{'id', 'name'}:statement()
+Blog:insert{
+  name = 'Return Test Blog',
+  tagline = 'Return test tagline'
+}:returning{'id', 'name'}:statement()
     ]]
     local s2 = eval [[
-      Blog:insert{
-        name = 'Return Test Blog',
-        tagline = 'Return test tagline'
-      }:returning('id', 'name'):statement()
+Blog:insert{
+  name = 'Return Test Blog',
+  tagline = 'Return test tagline'
+}:returning('id', 'name'):statement()
     ]]
     assert.are.same(s1, s2)
   end)
 
   mit("批量插入多行数据", function()
     local res = eval [[
-      Blog:insert{
-        { name = 'bulk insert 1', tagline = 'bulk insert 1' },
-        { name = 'bulk insert 2', tagline = 'bulk insert 2' }
-      }:exec()
+Blog:insert{
+  { name = 'bulk insert 1', tagline = 'bulk insert 1' },
+  { name = 'bulk insert 2', tagline = 'bulk insert 2' }
+}:exec()
     ]]
     assert.are.same(res, { affected_rows = 2 })
     local deleted = Blog:delete { name__startswith = 'bulk insert' }:exec()
@@ -621,10 +621,10 @@ mdesc("Xodel:insert(rows:table|table[]|Sql, columns?:string[])", function()
 
   mit("批量插入并返回所有字段", function()
     local res = eval [[
-      Blog:insert{
-        { name = 'bulk insert return 1', tagline = 'bulk insert return 1' },
-        { name = 'bulk insert return 2', tagline = 'bulk insert return 2' }
-      }:returning('*'):exec()
+Blog:insert{
+  { name = 'bulk insert return 1', tagline = 'bulk insert return 1' },
+  { name = 'bulk insert return 2', tagline = 'bulk insert return 2' }
+}:returning('*'):exec()
     ]]
     assert.are.same(#res, 2)
     assert.are.same(res[1].name, 'bulk insert return 1')
@@ -635,69 +635,69 @@ mdesc("Xodel:insert(rows:table|table[]|Sql, columns?:string[])", function()
 
   mit("从子查询select插入数据", function()
     local res = eval [[
-      BlogBin:insert(Blog:where{name='Another Blog'}:select{'name', 'tagline'}):exec()
+BlogBin:insert(Blog:where{name='Second Blog'}:select{'name', 'tagline'}):exec()
     ]]
     assert.are.same(res, { affected_rows = 1 })
   end)
 
   mit("检验上面插入的数据", function()
     local res = eval [[
-      BlogBin:where{name='Another Blog'}:select{'tagline'}:get()
+BlogBin:where{name='Second Blog'}:select{'tagline'}:get()
     ]]
     assert.are.same(res, { tagline = 'Another interesting blog' })
   end)
 
   mit("从子查询select_literal插入数据", function()
     local res = eval [[
-      BlogBin:insert(
-        Blog:where{ name = 'My First Blog'}
-        :select{'name', 'tagline'}
-        :select_literal('select from another blog'),
-        {'name', 'tagline', 'note'}
-      ):exec()
+BlogBin:insert(
+  Blog:where{ name = 'First Blog'}
+  :select{'name', 'tagline'}
+  :select_literal('select from another blog'),
+  {'name', 'tagline', 'note'}
+):exec()
     ]]
     assert.are.same(res, { affected_rows = 1 })
   end)
 
   mit("检验上面插入的数据select_literal", function()
     local res = eval [[
-      BlogBin:where{name='My First Blog'}:select{'note'}:get()
+      BlogBin:where{name='First Blog'}:select{'note'}:get()
     ]]
     assert.are.same(res, { note = 'select from another blog' })
   end)
 
   mit("从子查询update+returning插入数据", function()
-    Blog:insert { name = 'Update Returning' }:exec()
+    Blog:insert { name = 'update returning' }:exec()
     local res = eval [[
-      BlogBin:insert(
-        Blog:update{
-          name = 'Update Returning 2'
-        }:where{
-          name = 'Update Returning'
-        }:returning{
-        'name', 'tagline'
-        }:returning_literal('update from another blog'),
-        {'name', 'tagline', 'note'}
-      ):returning{'name', 'tagline', 'note'}:exec()
+BlogBin:insert(
+  Blog:update{
+    name = 'update returning 2'
+  }:where{
+    name = 'update returning'
+  }:returning{
+  'name', 'tagline'
+  }:returning_literal('update from another blog'),
+  {'name', 'tagline', 'note'}
+):returning{'name', 'tagline', 'note'}:exec()
     ]]
-    local inserted = BlogBin:where { name = 'Update Returning 2' }:select { 'name', 'tagline', 'note' }:exec()
+    local inserted = BlogBin:where { name = 'update returning 2' }:select { 'name', 'tagline', 'note' }:exec()
     assert.are.same(inserted,
-      { { name = 'Update Returning 2', tagline = 'default tagline', note = 'update from another blog' } })
-    local deleted = Blog:delete { name = 'Update Returning 2' }:exec()
+      { { name = 'update returning 2', tagline = 'default tagline', note = 'update from another blog' } })
+    local deleted = Blog:delete { name = 'update returning 2' }:exec()
     assert.are.same(deleted, { affected_rows = 1 })
   end)
 
   mit("从子查询delete+returning插入数据", function()
     Blog:insert { name = 'delete returning', tagline = 'delete returning tagline' }:exec()
     local res = eval [[
-      BlogBin:insert(
-        Blog:delete{
-          name = 'delete returning'
-        }:returning{
-          'name', 'tagline'
-        }:returning_literal('deleted from another blog'),
-        {'name', 'tagline', 'note'}
-      ):returning{'name', 'tagline', 'note'}:exec()
+BlogBin:insert(
+  Blog:delete{
+    name = 'delete returning'
+  }:returning{
+    'name', 'tagline'
+  }:returning_literal('deleted from another blog'),
+  {'name', 'tagline', 'note'}
+):returning{'name', 'tagline', 'note'}:exec()
     ]]
     assert.are.same(res,
       { { name = 'delete returning', tagline = 'delete returning tagline', note = 'deleted from another blog' } })
@@ -708,7 +708,10 @@ mdesc("Xodel:insert(rows:table|table[]|Sql, columns?:string[])", function()
   mit("从子查询delete+returning插入数据,未明确指定列", function()
     Blog:insert { name = 'delete returning', tagline = 'no column' }:exec()
     local res = eval [[
-      BlogBin:insert(Blog:delete{name='delete returning'}:returning{'name', 'tagline'}):returning{'name', 'tagline', 'note'}:exec()
+BlogBin:insert(
+  Blog:delete { name = 'delete returning' }
+  :returning { 'name', 'tagline' }
+):returning { 'name', 'tagline', 'note' }:exec()
     ]]
     assert.are.same(res,
       { { name = 'delete returning', tagline = 'no column', note = '' } })
@@ -718,11 +721,11 @@ mdesc("Xodel:insert(rows:table|table[]|Sql, columns?:string[])", function()
 
   mit("指定列名插入数据", function()
     local res = eval [[
-      BlogBin:insert({
-        name = 'Column Test Blog',
-        tagline = 'Column test tagline',
-        note = 'should not be inserted'
-      }, {'name', 'tagline'}):returning('name', 'tagline','note'):exec()
+BlogBin:insert({
+  name = 'Column Test Blog',
+  tagline = 'Column test tagline',
+  note = 'should not be inserted'
+}, {'name', 'tagline'}):returning('name', 'tagline','note'):exec()
     ]]
     assert.are.same(res, { { name = 'Column Test Blog', tagline = 'Column test tagline', note = '' } })
     local deleted = BlogBin:delete { name = 'Column Test Blog' }:exec()
@@ -731,7 +734,7 @@ mdesc("Xodel:insert(rows:table|table[]|Sql, columns?:string[])", function()
 
   mit("插入数据并使用默认值", function()
     local res = eval [[
-      Blog:insert{name = 'Default Test Blog'}:returning{'name', 'tagline'}:exec()
+Blog:insert{name = 'Default Test Blog'}:returning{'name', 'tagline'}:exec()
     ]]
     assert.are.same(res[1].tagline, default_tagline)
     assert.are.same(res[1].name, 'Default Test Blog')
@@ -743,16 +746,16 @@ end)
 mdesc("Xodel:insert抛出异常的情况", function()
   mit("唯一性错误", function()
     assert.error(function()
-      eval [[ Blog:insert{name='My First Blog'}:exec() ]]
+      eval [[ Blog:insert{name='First Blog'}:exec() ]]
     end)
   end)
   mit("传入非法字段", function()
     assert.error(function()
       eval [[
-        Blog:insert{
-          illegal_field = 'Test Blog',
-          tagline = 'Test tagline'
-        }:exec()
+Blog:insert{
+  illegal_field = 'Test Blog',
+  tagline = 'Test tagline'
+}:exec()
       ]]
     end, "invalid field name 'illegal_field' for model 'blog'")
   end)
@@ -760,10 +763,10 @@ mdesc("Xodel:insert抛出异常的情况", function()
   mit("传入名称过长", function()
     assert.error(function()
       eval [[
-        Blog:insert{
-          name = 'This name is way too long and exceeds the maximum length',
-          tagline = 'Test tagline'
-        }:exec()
+Blog:insert{
+  name = 'This name is way too long and exceeds the maximum length',
+  tagline = 'Test tagline'
+}:exec()
       ]]
     end, {
       label = 'name',
@@ -776,10 +779,10 @@ mdesc("Xodel:insert抛出异常的情况", function()
   mit("插入多行时其中某行名称过长", function()
     assert.error(function()
       eval [[
-        Blog:insert{
-          { name = 'Valid Blog', tagline = 'Valid tagline' },
-          { name = 'This name is way too long and exceeds the maximum length', tagline = 'Another tagline' }
-        }:exec()
+Blog:insert{
+  { name = 'Valid Blog', tagline = 'Valid tagline' },
+  { name = 'This name is way too long and exceeds the maximum length', tagline = 'Another tagline' }
+}:exec()
       ]]
     end, {
       batch_index = 2,
@@ -793,7 +796,7 @@ mdesc("Xodel:insert抛出异常的情况", function()
   mit("插入复合字段出错(Author的resume字段)", function()
     assert.error(function()
       eval [[
-        Author:insert{resume={{company='123456789012345678901234567890'}}}:exec()
+Author:insert{resume={{company='123456789012345678901234567890'}}}:exec()
       ]]
     end, {
       index = 1,
@@ -812,7 +815,7 @@ mdesc("Xodel:insert抛出异常的情况", function()
   mit("插入多行复合字段出错(Author的resume字段)", function()
     assert.error(function()
       eval [[
-        Author:insert{{resume={{company='123456789012345678901234567890'}}}}:exec()
+Author:insert{{resume={{company='123456789012345678901234567890'}}}}:exec()
       ]]
     end, {
       batch_index = 1,
@@ -832,7 +835,11 @@ mdesc("Xodel:insert抛出异常的情况", function()
   mit("从子查询插入数据列数不一致而出错1", function()
     assert.Error(function()
       eval [[
-        BlogBin:insert(Blog:where{name='My First Blog'}:select{'name', 'tagline'},{'name'}):exec()
+BlogBin:insert(
+  Blog:where { name = 'First Blog' }
+  :select { 'name', 'tagline' },
+  { 'name' }
+):exec()
       ]]
     end, "ERROR: INSERT has more expressions than target columns (49)")
   end)
@@ -840,74 +847,98 @@ mdesc("Xodel:insert抛出异常的情况", function()
   mit("从子查询插入数据列数不一致而出错2", function()
     assert.Error(function()
       eval [[
-        BlogBin:insert(Blog:where{name='My First Blog'}:select{'name', 'tagline'},{'name', 'tagline', 'note'}):exec()
+BlogBin:insert(
+  Blog:where { name = 'First Blog' }
+  :select { 'name', 'tagline' },
+  { 'name', 'tagline', 'note' }
+):exec()
       ]]
     end, "ERROR: INSERT has more target columns than expressions (43)")
   end)
 end)
 
 mdesc("Xodel:update", function()
-  mdesc("update basic", function()
-    local res = eval [[ Blog:where{name='My First Blog'}:update{tagline='changed tagline'}:returning('*'):exec() ]]
-    assert.are.same(res, { { name = 'My First Blog', tagline = 'changed tagline', id = 1 } })
+  mit("update basic", function()
+    local res = eval [[
+Blog:where { name = 'First Blog' }
+  :update { tagline = 'changed tagline' }
+  :returning('*'):exec()
+]]
+    assert.are.same(res, { { name = 'First Blog', tagline = 'changed tagline', id = 1 } })
   end)
 
-  mdesc("update with join", function()
-    local res = eval [[ Entry:update { headline = F('blog_id__name') }:where{id=1}:returning('headline'):exec() ]]
+  mit("update with join", function()
+    local res = eval [[
+Entry:update { headline = F('blog_id__name') }
+  :where { id = 1 }
+  :returning('headline'):exec()
+    ]]
     local entry = Entry:where { id = 1 }:select { 'headline' }:get()
     assert.are.same(res, { entry })
   end)
 
-  mdesc("update with function", function()
-    local res = eval [[ Entry:update { headline = F('headline')..' suffix by function' }:where{id=1}:returning('headline'):exec() ]]
+  mit("update with function", function()
+    local res = eval [[
+Entry:update {
+  headline = F('headline') .. ' suffix by function'
+}:where {
+  id = 1
+}:returning('headline'):exec()
+    ]]
     local entry = Entry:where { id = 1 }:select { 'headline' }:get()
-    assert.are.same(entry.headline, 'My First Blog suffix by function')
+    assert.are.same(entry.headline, 'First Blog suffix by function')
   end)
 
-  mdesc("increase", function()
+  mit("increase", function()
     local entry = Entry:where { id = 1 }:select { 'rating' }:get()
     local res = eval [[ Entry:increase { rating = 1 }:where{id=1}:returning('rating'):exec() ]]
     assert.are.same(res[1].rating, entry.rating + 1)
   end)
 
-  mdesc("increase two fields", function()
+  mit("increase two fields", function()
     local entry = Entry:where { id = 1 }:get()
     local res = eval [[ Entry:increase { number_of_comments = 1, number_of_pingbacks=2 }:where{id=1}:returning('*'):exec() ]]
     assert.are.same(res[1].number_of_comments, entry.number_of_comments + 1)
     assert.are.same(res[1].number_of_pingbacks, entry.number_of_pingbacks + 2)
   end)
 
-  mdesc("increase string args", function()
+  mit("increase string args", function()
     local entry = Entry:where { id = 1 }:select { 'rating' }:get()
     local res = eval [[ Entry:increase('rating', 2):where{id=1}:returning('rating'):exec() ]]
     assert.are.same(res[1].rating, entry.rating + 2)
   end)
 
-  mdesc("update with where join", function()
-    local res = eval [[ Entry:update { headline = F('headline')..' from first blog' }:where{blog_id__name='My First Blog'}:returning('id','headline'):exec() ]]
+  mit("update with where join", function()
+    local res = eval [[
+Entry:update {
+  headline = F('headline') .. ' from first blog'
+}:where {
+  blog_id__name = 'First Blog'
+}:returning('id', 'headline'):exec()
+    ]]
     assert.are.same(res, Entry:where { headline__endswith = ' from first blog' }:select { 'id', 'headline' }:exec())
   end)
 end)
 
 mdesc("Xodel:merge", function()
-  mdesc("merge basic", function()
+  mit("merge basic", function()
     local res = eval [[
-    Blog:merge {
-      { name = 'My First Blog', tagline = 'updated by merge' },
-      { name = 'Blog added by merge', tagline = 'inserted by merge' },
-    }:exec() ]]
+Blog:merge {
+  { name = 'First Blog', tagline = 'updated by merge' },
+  { name = 'Blog added by merge', tagline = 'inserted by merge' },
+}:exec() ]]
     assert.are.same(res, { affected_rows = 1 })
-    local updated = Blog:where { name = 'My First Blog' }:select { 'tagline' }:get()
+    local updated = Blog:where { name = 'First Blog' }:select { 'tagline' }:get()
     assert.are.same(updated.tagline, 'updated by merge')
     local deleted = Blog:delete { name = 'Blog added by merge' }:exec()
     assert.are.same(deleted, { affected_rows = 1 })
   end)
 
-  mdesc("merge insert only", function()
-    local origin = Blog:where { name = 'My First Blog' }:get()
-    local res = eval [[ Blog:merge { { name = 'My First Blog' }, { name = 'Blog added by merge' } }:exec() ]]
+  mit("merge insert only", function()
+    local origin = Blog:where { name = 'First Blog' }:get()
+    local res = eval [[ Blog:merge { { name = 'First Blog' }, { name = 'Blog added by merge' } }:exec() ]]
     assert.are.same(res, { affected_rows = 1 })
-    local updated = Blog:where { name = 'My First Blog' }:get()
+    local updated = Blog:where { name = 'First Blog' }:get()
     assert.are.same(updated, origin)
     local inserted = Blog:where { name = 'Blog added by merge' }:select { 'name', 'tagline' }:get()
     assert.are.same(inserted, { name = 'Blog added by merge', tagline = 'default tagline' })
@@ -915,7 +946,7 @@ mdesc("Xodel:merge", function()
     assert.are.same(deleted, { affected_rows = 1 })
   end)
 
-  mdesc("merge抛出异常的情况", function()
+  mit("merge抛出异常的情况", function()
     assert.error(function()
       eval [[ Author:merge { { name = 'Tom', age = 11 }, { name = 'Jerry', age = 101 } }:exec() ]]
     end, {
@@ -926,28 +957,173 @@ mdesc("Xodel:merge", function()
       type = 'field_error'
     })
   end)
+end)
 
-  mdesc("Xodel:upsert", function()
-    mit("upsert basic", function()
-      local res = eval [[
-      Blog:upsert {
-        { name = 'My First Blog', tagline = 'updated by upsert' },
-        { name = 'Blog added by upsert', tagline = 'inserted by upsert' },
-      }:exec()
+mdesc("Xodel:upsert", function()
+  mit("upsert basic", function()
+    local res = eval [[
+Blog:upsert {
+{ name = 'First Blog', tagline = 'updated by upsert' },
+{ name = 'Blog added by upsert', tagline = 'inserted by upsert' },
+}:exec()
+    ]]
+    assert.are.same(res, { affected_rows = 2 })
+    local updated = Blog:where { name = 'First Blog' }:select { 'tagline' }:get()
+    assert.are.same(updated.tagline, 'updated by upsert')
+    local inserted = Blog:where { name = 'Blog added by upsert' }:select { 'name', 'tagline' }:get()
+    assert.are.same(inserted, { name = 'Blog added by upsert', tagline = 'inserted by upsert' })
+    local deleted = Blog:delete { name = 'Blog added by upsert' }:exec()
+    assert.are.same(deleted, { affected_rows = 1 })
+  end)
+
+  mit("upsert from returning", function()
+    local backup = BlogBin:exec()
+    BlogBin:delete():exec()
+    BlogBin:insert { { name = 'B1', tagline = 'tag1' }, { name = 'B2', tagline = 'tag2' } }:exec()
+    local res = eval [[
+Blog:upsert(
+  BlogBin
+    :update { tagline = 'updated by upsert returning' }
+    :returning {'name', 'tagline'}
+):returning{'id','name', 'tagline'}:exec()
+    ]]
+    assert.are.same(#res, 2)
+    local names = Blog:where { tagline = 'updated by upsert returning' }:order 'name':flat 'name'
+    assert.are.same(names, { 'B1', 'B2' })
+    Blog:where { tagline = 'updated by upsert returning' }:delete():exec()
+    BlogBin:delete():exec()
+    BlogBin:insert(backup):exec()
+  end)
+
+  mit("upsert from select", function()
+    local res = eval [[
+Blog:upsert(
+  BlogBin
+    :where {
+      name__notin = Blog:select {'name'}:distinct()
+    }
+    :select {'name', 'tagline'}
+    :distinct('name')
+):returning{'id','name', 'tagline'}:exec()
+    ]]
+    assert.are.same(#res, 2)
+    Blog:delete { id__in = { res[1].id, res[2].id } }:exec()
+  end)
+end)
+
+mdesc("upsert抛出异常的情况", function()
+  mit("single upsert", function()
+    assert.error(function()
+      eval [[  Author:upsert { { name = 'Tom', age = 111 } }:exec() ]]
+    end, {
+      batch_index = 1,
+      message = '值不能大于100',
+      name = 'age',
+      label = 'age',
+      type = 'field_error'
+    })
+  end)
+  mit("multiple upsert", function()
+    assert.error(function()
+      eval [[  Author:upsert { { name = 'Tom', age = 11 }, { name = 'Jerry', age = 101 } }:exec() ]]
+    end, {
+      batch_index = 2,
+      message = '值不能大于100',
+      name = 'age',
+      label = 'age',
+      type = 'field_error'
+    })
+  end)
+end)
+
+mdesc("Xodel:updates", function()
+  mit("updates basic", function()
+    Blog:insert { name = 'Third Blog' }:exec()
+    local res = eval [[
+Blog:updates({
+  { name = 'Third Blog', tagline = 'Updated by updates' },
+  { name = 'Fourth Blog', tagline = 'wont update' }
+}):exec()
+    ]]
+    assert.are.same(res, { affected_rows = 1 })
+    local updated_blog = Blog:where { name = 'Third Blog' }:select { 'tagline' }:get()
+    assert.are.same(updated_blog.tagline, 'Updated by updates')
+    local deleted = Blog:delete { name = 'Third Blog' }:exec()
+    assert.are.same(deleted, { affected_rows = 1 })
+  end)
+
+  mit("updates from SELECT subquery", function()
+    local res = eval [[
+BlogBin:updates(
+  Blog
+    :where { name = 'Second Blog' }
+    :select { 'name', 'tagline' },
+  'name'
+):exec()
+    ]]
+    assert.are.same(res, { affected_rows = 1 })
+    local updated = BlogBin:where { name = 'Second Blog' }:select { 'tagline' }:get()
+    assert.are.same(updated.tagline, 'Another interesting blog')
+  end)
+
+  mit("updates from UPDATE subquery", function()
+    BlogBin:insert(
+      Blog:insert {
+        name = 'Third Blog',
+        tagline = 'Third interesting blog'
+      }:returning { 'name', 'tagline' }):exec()
+    local res = eval [[
+BlogBin:updates(
+  Blog
+    :where { name = 'Third Blog' }
+    :update { tagline = 'XXX' }
+    :returning { 'name', 'tagline' },
+  'name'
+):exec()
+    ]]
+    assert.are.same(res, { affected_rows = 1 })
+    local updated1 = BlogBin:where { name = 'Third Blog' }:select { 'tagline' }:get()
+    local updated2 = Blog:where { name = 'Third Blog' }:select { 'tagline' }:get()
+    assert.are.same(updated2.tagline, 'XXX')
+    assert.are.same(updated1.tagline, 'XXX')
+    Blog:delete { name = 'Third Blog' }:exec()
+  end)
+end)
+
+mdesc("updates抛出异常的情况", function()
+  mit("updates without primary key", function()
+    assert.error(function()
+      eval [[
+Blog:updates{
+  { tagline = 'Missing ID' }
+}:exec()
       ]]
-      assert.are.same(res, { affected_rows = 2 })
-      local updated = Blog:where { name = 'My First Blog' }:select { 'tagline' }:get()
-      assert.are.same(updated.tagline, 'updated by upsert')
-      local inserted = Blog:where { name = 'Blog added by upsert' }:select { 'name', 'tagline' }:get()
-      assert.are.same(inserted, { name = 'Blog added by upsert', tagline = 'inserted by upsert' })
-      local deleted = Blog:delete { name = 'Blog added by upsert' }:exec()
-      assert.are.same(deleted, { affected_rows = 1 })
-    end)
-    mit("upsert from sub query", function()
-      local res = eval [[
-        Blog:upsert(BlogBin:where{name='My First Blog'}:select{'name', 'tagline'}):exec()
+    end, {
+      batch_index = 1,
+      label = 'id',
+      message = 'id不能为空',
+      name = 'id',
+      type = 'field_error'
+    })
+  end)
+  mit("multiple updates", function()
+    assert.error(function()
+      eval [[  Author:updates{ { id = 1, age = 11 }, { id = 2, age = 101 } }:exec() ]]
+    end, {
+      batch_index = 2,
+      message = '值不能大于100',
+      name = 'age',
+      label = 'age',
+      type = 'field_error'
+    })
+  end)
+  mit("updates with invalid field", function()
+    assert.error(function()
+      eval [[
+Author:updates({
+  { name = 'John Doe', age2 = 9 }
+}):exec()
       ]]
-      assert.are.same(res, { affected_rows = 2 })
-    end)
+    end, "invalid field name 'age2' for model 'author'")
   end)
 end)

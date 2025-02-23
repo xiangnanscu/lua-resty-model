@@ -687,7 +687,6 @@ function Sql:_base_update(row, columns)
   return self
 end
 
---TODO:
 ---@private
 ---@param join_type string
 ---@param right_table string
@@ -701,14 +700,12 @@ function Sql:_base_join_raw(join_type, right_table, key, op, val)
   return self
 end
 
---TODO:
 ---@private
 ---@param ... DBValue
 ---@return self
 function Sql:_base_select(...)
   local s = get_list_tokens(...)
-  if s == "" then
-  elseif not self._select then
+  if not self._select then
     self._select = s
   else
     self._select = self._select .. ", " .. s
@@ -815,14 +812,21 @@ function Sql:_base_merge(rows, key, columns)
 end
 
 ---@private
----@param rows Sql|Record[]
+---@param rows Sql|Record[]|Record
 ---@param key Keys
----@param columns? string[]
+---@param columns string[]
 ---@return self
 function Sql:_base_upsert(rows, key, columns)
   assert(key, "you must provide key (string or table) for upsert")
   if rows.__SQL_BUILDER__ then
-    self._insert = self:_get_upsert_query_token(rows, key, columns or flat(rows._select_args))
+    ---@cast rows Sql
+    if rows._returning then
+      self:_set_cud_subquery_upsert_token(rows, key, columns)
+    elseif rows._select then
+      self:_set_select_subquery_upsert_token(rows, key, columns)
+    else
+      error("select or returning args should be provided when inserting from a sub query")
+    end
   elseif rows[1] then
     self._insert = self:_get_bulk_upsert_token(rows, key, columns)
   else
@@ -831,7 +835,28 @@ function Sql:_base_upsert(rows, key, columns)
   return self
 end
 
---TODO:
+--```lua
+-- Blog:updates({
+--   { name = 'Third Blog', tagline = 'Updated by updates' },
+--   { name = 'Fourth Blog', tagline = 'wont update' }
+-- }):exec()
+--```
+-- yields:
+--```sql
+-- WITH
+--   V (tagline, name) AS (
+--     VALUES
+--       ('Updated by updates'::text, 'Third Blog'::varchar),
+--       ('wont update', 'Fourth Blog')
+--   )
+-- UPDATE blog T
+-- SET
+--   tagline = V.tagline
+-- FROM
+--   V
+-- WHERE
+--   V.name = T.name
+--```
 ---@private
 ---@param rows Record[]|Sql
 ---@param key Keys
@@ -840,7 +865,6 @@ end
 function Sql:_base_updates(rows, key, columns)
   if rows.__SQL_BUILDER__ then
     ---@cast rows Sql
-    columns = columns or flat(rows._returning_args)
     local cte_name = format("V(%s)", concat(columns, ", "))
     local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
     self:with(cte_name, rows)
@@ -860,14 +884,12 @@ function Sql:_base_updates(rows, key, columns)
   end
 end
 
---TODO:
 ---@private
 ---@param ... DBValue
 ---@return self
 function Sql:_base_returning(...)
   local s = get_list_tokens(...)
-  if s == "" then
-  elseif not self._returning then
+  if not self._returning then
     self._returning = s
   else
     self._returning = self._returning .. ", " .. s
@@ -876,14 +898,12 @@ function Sql:_base_returning(...)
   return self
 end
 
---TODO:
 ---@private
 ---@param ... string
 ---@return self
 function Sql:_base_from(...)
   local s = get_list_tokens(...)
-  if s == "" then
-  elseif not self._from then
+  if not self._from then
     self._from = s
   else
     self._from = self._from .. ", " .. s
@@ -1128,7 +1148,10 @@ function Sql:_get_insert_values_token(row, columns)
   return value_list, columns
 end
 
----make bulk insert token
+---make bulk insert VALUES token:
+---```lua
+---{{a=1,b=2}, {a=3,b=4}} => {'(1,2)', '(3,4)'}, {'a','b'}
+---```
 ---@private
 ---@param rows Record[]
 ---@param columns? string[]
@@ -1307,7 +1330,6 @@ function Sql:_set_cud_subquery_insert_token(subsql, columns)
   self._insert = format("(%s) %s", columns_token, cudsql:statement())
 end
 
---TODO:
 ---@private
 ---@param row Record
 ---@param key Keys
@@ -1318,7 +1340,7 @@ function Sql:_get_upsert_token(row, key, columns)
   local insert_token = format("(%s) VALUES %s ON CONFLICT (%s)",
     as_token(insert_columns),
     as_literal(values_list),
-    get_list_tokens(key))
+    as_token(key))
   if (type(key) == "table" and #key == #insert_columns) or #insert_columns == 1 then
     return format("%s DO NOTHING", insert_token)
   else
@@ -1327,7 +1349,24 @@ function Sql:_get_upsert_token(row, key, columns)
   end
 end
 
---TODO:
+--```lua
+-- Blog:upsert {
+--   { name = 'My First Blog', tagline = 'updated by upsert' },
+--   { name = 'Blog added by upsert', tagline = 'inserted by upsert' },
+-- }:exec()
+--```
+--sql:
+--```sql
+-- INSERT INTO
+--   blog AS T (name, tagline)
+-- VALUES
+--   ('My First Blog', 'updated by upsert'),
+--   ('Blog added by upsert', 'inserted by upsert')
+-- ON CONFLICT (name)
+-- DO UPDATE
+-- SET
+--   tagline = EXCLUDED.tagline
+--```
 ---@private
 ---@param rows Record[]
 ---@param key Keys
@@ -1338,7 +1377,7 @@ function Sql:_get_bulk_upsert_token(rows, key, columns)
   local insert_token = format("(%s) VALUES %s ON CONFLICT (%s)",
     as_token(columns),
     as_token(rows),
-    get_list_tokens(key))
+    as_token(key))
   if (type(key) == "table" and #key == #columns) or #columns == 1 then
     return format("%s DO NOTHING", insert_token)
   else
@@ -1351,16 +1390,68 @@ end
 ---@param rows Sql
 ---@param key Keys
 ---@param columns string[]
----@return string
-function Sql:_get_upsert_query_token(rows, key, columns)
+function Sql:_set_select_subquery_upsert_token(rows, key, columns)
   local insert_token = format("(%s) %s ON CONFLICT (%s)",
     as_token(columns),
     rows:statement(),
     as_token(key))
   if (type(key) == "table" and #key == #columns) or #columns == 1 then
-    return format("%s DO NOTHING", insert_token)
+    self._insert = format("%s DO NOTHING", insert_token)
   else
-    return format("%s DO UPDATE SET %s", insert_token,
+    self._insert = format("%s DO UPDATE SET %s", insert_token,
+      self:_get_update_token_with_prefix(columns, key, "EXCLUDED"))
+  end
+end
+
+-- ```lua
+-- Blog:upsert(
+--   BlogBin
+--     :update { tagline = 'updated by upsert returning' }
+--     :returning {'name', 'tagline'}
+-- ):returning{'id','name', 'tagline'}:exec()
+-- ```
+--yields:
+--```sql
+-- WITH
+--   V (name, tagline) AS (
+--     UPDATE blog_bin T
+--     SET
+--       tagline = 'updated by upsert returning'
+--     RETURNING
+--       T.name,
+--       T.tagline
+--   )
+-- INSERT INTO
+--   blog AS T (name, tagline)
+-- SELECT
+--   name,
+--   tagline
+-- FROM
+--   V ON CONFLICT (name)
+-- DO
+-- UPDATE
+-- SET
+--   tagline = EXCLUDED.tagline
+-- RETURNING
+--   T.id,
+--   T.name,
+--   T.tagline
+--`
+---@private
+---@param rows Sql
+---@param key Keys
+---@param columns string[]
+function Sql:_set_cud_subquery_upsert_token(rows, key, columns)
+  local cte_name = format("V(%s)", concat(columns, ", "))
+  self:with(cte_name, '(' .. rows:statement() .. ')')
+  local insert_token = format("(%s) %s ON CONFLICT (%s)",
+    as_token(columns),
+    Sql:new { table_name = 'V', _select = as_token(columns) }:statement(),
+    as_token(key))
+  if (type(key) == "table" and #key == #columns) or #columns == 1 then
+    self._insert = format("%s DO NOTHING", insert_token)
+  else
+    self._insert = format("%s DO UPDATE SET %s", insert_token,
       self:_get_update_token_with_prefix(columns, key, "EXCLUDED"))
   end
 end
@@ -1906,7 +1997,7 @@ function Sql:_base_get_multiple(keys, columns)
   return self:with(cte_name, cte_values):right_join("V", join_cond)
 end
 
--- {{a=1,b=2}, {a=3,b=4}} => {"(1, 2)", "(3, 4)"}
+-- {{a=1,b='foo'}, {a=3,b='bar'}} => {"(1, 'foo')", "(3, 'bar')"}
 ---@private
 ---@param rows Record[]
 ---@param columns string[]
@@ -2342,28 +2433,26 @@ function Sql:as(table_alias)
   return self
 end
 
---TODO:
 ---@param name string
 ---@param rows Record[]
 ---@return self
 function Sql:with_values(name, rows)
   local columns = get_keys(rows)
-  rows = self:_get_cte_values_literal(rows, columns, true)
+  local cte_rows = self:_get_cte_values_literal(rows, columns, true)
   local cte_name = format("%s(%s)", name, concat(columns, ", "))
-  local cte_values = format("(VALUES %s)", as_token(rows))
+  local cte_values = format("(VALUES %s)", as_token(cte_rows))
   return self:with(cte_name, cte_values)
 end
 
---TODO:
 ---@param rows Record[]
 ---@param key Keys
 ---@return self|XodelInstance[]
 function Sql:get_merge(rows, key)
   local columns = get_keys(rows)
-  rows = self:_get_cte_values_literal(rows, columns, true)
+  local cte_rows = self:_get_cte_values_literal(rows, columns, true)
   local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
   local cte_name = format("V(%s)", concat(columns, ", "))
-  local cte_values = format("(VALUES %s)", as_token(rows))
+  local cte_values = format("(VALUES %s)", as_token(cte_rows))
   self:_base_select("V.*"):with(cte_name, cte_values):_base_join("RIGHT", "V", join_cond)
   return self
 end
@@ -2848,14 +2937,17 @@ function Sql:merge(rows, key, columns)
 end
 
 --PostgreSQL: INSERT ON CONFLICT DO UPDATE
----@param rows Record[]|Sql rows or subquery to be inserted into the table
+---@param rows Record[]|Sql rows or SELECT subquery to be inserted into the table
 ---@param key? Keys unique key(s) to determine whether the row exists, when key is a column table, every column can't be empty
 ---@param columns? string[] columns to be inserted or updated, if not provided, attributes of the first row will be used
 ---@return self
 function Sql:upsert(rows, key, columns)
   if rows.__SQL_BUILDER__ then
+    if columns == nil then
+      columns = flat(rows._select_args or rows._returning_args)
+    end
     if key == nil then
-      key = self:_get_bulk_key(columns or self.model.field_names)
+      key = self:_get_bulk_key(columns)
     end
     return Sql._base_upsert(self, rows, key, columns)
   else
@@ -2868,20 +2960,29 @@ function Sql:upsert(rows, key, columns)
   end
 end
 
----@param rows Record[]
+---@param rows Record[]|Sql
 ---@param key? Keys
 ---@param columns? string[]
 ---@return self
 function Sql:updates(rows, key, columns)
-  rows, key, columns = self:_clean_bulk_params(rows, key, columns, true)
-  if not self._skip_validate then
-    rows = assert(self.model:_validate_update_rows(rows, key, columns))
+  if rows.__SQL_BUILDER__ then
+    if columns == nil then
+      columns = flat(rows._select_args or rows._returning_args)
+    end
+    if key == nil then
+      key = self:_get_bulk_key(columns)
+    end
+    return Sql._base_updates(self, rows, key, columns)
+  else
+    rows, key, columns = self:_clean_bulk_params(rows, key, columns, true)
+    if not self._skip_validate then
+      rows = assert(self.model:_validate_update_rows(rows, key, columns))
+    end
+    rows = assert(self.model:_prepare_db_rows(rows, columns))
+    return Sql._base_updates(self, rows, key, columns)
   end
-  rows = assert(self.model:_prepare_db_rows(rows, columns))
-  return Sql._base_updates(self, rows, key, columns)
 end
 
---TODO:
 ---@param keys Record[]
 ---@param columns string[]
 ---@return self
