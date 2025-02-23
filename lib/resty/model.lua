@@ -713,14 +713,43 @@ function Sql:_base_select(...)
   return self
 end
 
---TODO:
+-- ```sql
+-- WITH
+--   V (tagline, name) AS (
+--     VALUES
+--       ('mergetest1'::varchar, 'merge1'::varchar),
+--       ('mergetest2', 'merge2')
+--   ),
+--   U AS (
+--     UPDATE blog W
+--     SET
+--       tagline = V.tagline
+--     FROM
+--       V
+--     WHERE
+--       V.name = W.name
+--     RETURNING
+--       V.tagline,
+--       V.name
+--   )
+-- INSERT INTO
+--   blog AS T (tagline, name)
+-- SELECT
+--   V.tagline,
+--   V.name
+-- FROM
+--   V
+--   LEFT JOIN U AS W ON (V.name = W.name)
+-- WHERE
+--   W.name IS NULL
+-- ```
 ---@private
 ---@param rows Record[]
 ---@param key Keys
----@param columns? string[]
+---@param columns string[]
 ---@return self
 function Sql:_base_merge(rows, key, columns)
-  rows, columns = self:_get_cte_values_literal(rows, columns, false)
+  rows = self:_get_cte_values_literal(rows, columns, false)
   local cte_name = format("V(%s)", concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(rows))
   local join_cond = self:_get_join_condition_from_key(key, "V", "W")
@@ -770,7 +799,7 @@ end
 ---@private
 ---@param rows Record[]|Sql
 ---@param key Keys
----@param columns? string[]
+---@param columns string[]
 ---@return self
 function Sql:_base_updates(rows, key, columns)
   if rows.__SQL_BUILDER__ then
@@ -785,7 +814,7 @@ function Sql:_base_updates(rows, key, columns)
     error("empty rows passed to updates")
   else
     ---@cast rows Record[]
-    rows, columns = self:_get_cte_values_literal(rows, columns, false)
+    rows = self:_get_cte_values_literal(rows, columns, false)
     local cte_name = format("V(%s)", concat(columns, ", "))
     local cte_values = format("(VALUES %s)", as_token(rows))
     local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
@@ -1004,6 +1033,7 @@ function Sql:_base_get_condition_token_from_table(kwargs, logic)
   end
 end
 
+-- {{a=1,b=2}, {a=3,b=4}}, {'a','b'} => {{1,2},{3,4}}
 ---@private
 ---@param rows Record[]
 ---@param columns string[]
@@ -1122,13 +1152,13 @@ function Sql:_get_column_tokens(context, a, b, ...)
       return self:_get_column_token(a, context) --[[@as string]]
     elseif type(a) == 'function' then
       ---@cast a -DBValue
-      local select_args = a(self._join_proxy_models)
-      if type(select_args) == 'string' then
-        return select_args
-      elseif type(select_args) == 'table' then
-        return concat(select_args, ', ')
+      local select_callback_args = a(self._join_proxy_models)
+      if type(select_callback_args) == 'string' then
+        return select_callback_args
+      elseif type(select_callback_args) == 'table' then
+        return concat(select_callback_args, ', ')
       else
-        error("wrong type:" .. type(select_args))
+        error("wrong type:" .. type(select_callback_args))
       end
     else
       return as_token(a)
@@ -1564,7 +1594,6 @@ function Sql:_resolve_F(value)
   return value
 end
 
---TODO:
 ---@private
 function Sql:_get_bulk_key(columns)
   if self.model.unique_together and self.model.unique_together[1] then
@@ -1830,22 +1859,20 @@ function Sql:_base_get_multiple(keys, columns)
     error("empty keys passed to get_multiple")
   end
   columns = columns or get_keys(keys[1])
-  keys, columns = self:_get_cte_values_literal(keys, columns, false)
+  keys = self:_get_cte_values_literal(keys, columns, false)
   local join_cond = self:_get_join_condition_from_key(columns, "V", self._as or self.table_name)
   local cte_name = format("V(%s)", concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(keys))
   return self:with(cte_name, cte_values):right_join("V", join_cond)
 end
 
---TODO:
+-- {{a=1,b=2}, {a=3,b=4}} => {"(1, 2)", "(3, 4)"}
 ---@private
 ---@param rows Record[]
----@param columns? string[]
+---@param columns string[]
 ---@param no_check? boolean
----@return string[], string[]
+---@return string[]
 function Sql:_get_cte_values_literal(rows, columns, no_check)
-  -- {{a=1,b=2}, {a=3,b=4}} => {"(1, 2)", "(3, 4)"}, {'a','b'}
-  columns = columns or get_keys(rows)
   rows = self:_rows_to_array(rows, columns)
   local first_row = rows[1]
   for i, col in ipairs(columns) do
@@ -1855,16 +1882,16 @@ function Sql:_get_cte_values_literal(rows, columns, no_check)
     elseif no_check then
       first_row[i] = as_literal(first_row[i])
     else
-      error("invalid field name: " .. col)
+      error("error constructing cte values literal, invalid field name: " .. col)
     end
   end
   ---@type string[]
   local res = {}
   res[1] = '(' .. as_token(first_row) .. ')'
-  for i = 2, #rows, 1 do
+  for i = 2, #rows do
     res[i] = as_literal(rows[i])
   end
-  return res, columns
+  return res
 end
 
 local _debug = 0
@@ -2281,7 +2308,7 @@ end
 ---@return self
 function Sql:with_values(name, rows)
   local columns = get_keys(rows)
-  rows, columns = self:_get_cte_values_literal(rows, columns, true)
+  rows = self:_get_cte_values_literal(rows, columns, true)
   local cte_name = format("%s(%s)", name, concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(rows))
   return self:with(cte_name, cte_values)
@@ -2293,7 +2320,7 @@ end
 ---@return self|XodelInstance[]
 function Sql:get_merge(rows, key)
   local columns = get_keys(rows)
-  rows, columns = self:_get_cte_values_literal(rows, columns, true)
+  rows = self:_get_cte_values_literal(rows, columns, true)
   local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
   local cte_name = format("V(%s)", concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(rows))
@@ -4133,8 +4160,7 @@ end
 
 ---@param data Record
 ---@param columns? string[]
----@return Record
----@overload fun(self:Xodel, data:Record, columns?:string[]):nil, ValidateError
+---@return Record?, ValidateError?
 function Xodel:prepare_for_db(data, columns)
   local prepared = {}
   for _, name in ipairs(columns or self.names) do
@@ -4157,17 +4183,15 @@ function Xodel:prepare_for_db(data, columns)
   return prepared
 end
 
---TODO:
----@param cls Xodel
----@param input Record
----@param names? string[]
----@param key? string
+---@param input Record user input
+---@param names? string[] field names to validate, default: model.names
+---@param key? string key to check if the input is validated as an update or create, default: model.primary_key
 ---@return Record?, ValidateError?
-function Xodel.validate(cls, input, names, key)
-  if rawget(input, key or cls.primary_key) ~= nil then
-    return cls:validate_update(input, names)
+function Xodel:validate(input, names, key)
+  if rawget(input, key or self.primary_key) ~= nil then
+    return self:validate_update(input, names or self.names)
   else
-    return cls:validate_create(input, names)
+    return self:validate_create(input, names or self.names)
   end
 end
 
@@ -4177,8 +4201,7 @@ end
 
 ---@param input Record
 ---@param names? string[]
----@return Record
----@overload fun(cls:Xodel, input:Record, names?:string[]):nil, ValidateError
+---@return Record?, ValidateError?
 function Xodel:validate_create(input, names)
   ---@type Record
   local data = {}
@@ -4208,8 +4231,7 @@ end
 
 ---@param input Record
 ---@param names? string[]
----@return Record
----@overload fun(cls:Xodel, input:Record, names?:string[]):nil, ValidateError
+---@return Record?, ValidateError?
 function Xodel:validate_update(input, names)
   ---@type Record
   local data = {}
@@ -4276,8 +4298,7 @@ end
 ---@param cls Xodel
 ---@param input Record
 ---@param names? string[]
----@return Record
----@overload fun(cls:Xodel, input:Record, names?:string[]):nil, ValidateError
+---@return Record?, ValidateError?
 function Xodel.validate_cascade_update(cls, input, names)
   local data, err = cls:validate_update(input, names)
   if data == nil then
@@ -4410,8 +4431,7 @@ end
 ---used in merge and upsert
 ---@param rows Record|Record[]
 ---@param columns string[]
----@return Records
----@overload fun(self:Xodel, rows:Records, columns: string[]):nil, ValidateError
+---@return Records?, ValidateError?
 function Xodel:_validate_create_data(rows, columns)
   if rows[1] then
     ---@cast rows Record[]
@@ -4439,8 +4459,7 @@ end
 
 ---@param rows Record|Record[]
 ---@param columns string[]
----@return Records
----@overload fun(self:Xodel, rows:Records, columns: string[]):nil, ValidateError
+---@return Records?, ValidateError?
 function Xodel:_validate_update_data(rows, columns)
   if rows[1] then
     ---@cast rows Record[]
@@ -4470,8 +4489,7 @@ end
 ---@param rows Record|Record[]
 ---@param key Keys
 ---@param columns string[]
----@return Records
----@overload fun(cls:Xodel, rows:Records, key:Keys, columns: string[]):nil, ValidateError
+---@return Records?, ValidateError?
 function Xodel:_validate_create_rows(rows, key, columns)
   local err, cleaned_rows
   err = self:_find_upsert_key_error(rows, key)
@@ -4488,8 +4506,7 @@ end
 ---@param rows Record|Record[]
 ---@param key Keys
 ---@param columns string[]
----@return Records
----@overload fun(self:Xodel, rows:Records, key:Keys, columns: string[]):nil, ValidateError
+---@return Records?, ValidateError?
 function Xodel:_validate_update_rows(rows, key, columns)
   local err, cleaned_rows
   err = self:_find_upsert_key_error(rows, key)
@@ -4505,8 +4522,7 @@ end
 
 ---@param rows Record|Record[]
 ---@param columns string[]
----@return Records
----@overload fun(self:Xodel, rows:Records, columns: string[]):nil, ValidateError
+---@return Records?, ValidateError?
 function Xodel:_prepare_db_rows(rows, columns)
   if rows[1] then
     ---@cast rows Record[]
