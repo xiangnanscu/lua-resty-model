@@ -4,7 +4,7 @@
 -- https://www.postgreSql.org/docs/current/sql-update.html
 -- https://www.postgreSql.org/docs/current/sql-delete.html
 local encode = require("cjson").encode
-local Fields = require "./lib/resty/fields"
+local Fields = require "resty.fields"
 local Query = require "resty.query"
 local Array = require "resty.array"
 local ngx = ngx
@@ -217,6 +217,9 @@ local function get_foreign_object(attrs, prefix)
   return fk
 end
 
+-- prefix column with `V`: column => V.column
+---@param column string
+---@return string
 local function _prefix_with_V(column)
   return "V." .. column
 end
@@ -647,9 +650,9 @@ end
 function Sql:_base_insert(rows, columns)
   if rows.__SQL_BUILDER__ then
     ---@cast rows Sql
-    if rows._returning_args then
+    if rows._returning then
       self:_set_cud_subquery_insert_token(rows, columns)
-    elseif rows._select_args then
+    elseif rows._select then
       self:_set_select_subquery_insert_token(rows, columns)
     else
       error("select or returning args should be provided when inserting from a sub query")
@@ -713,6 +716,14 @@ function Sql:_base_select(...)
   return self
 end
 
+--use `name` as key implicitly, because it's the only unique column
+--```lua
+-- Blog:merge {
+--   { name = 'merge1', tagline = 'mergetest1' },
+--   { name = 'merge2', tagline = 'mergetest2' }
+-- }:exec()
+--```
+--yields:
 -- ```sql
 -- WITH
 --   V (tagline, name) AS (
@@ -743,40 +754,66 @@ end
 -- WHERE
 --   W.name IS NULL
 -- ```
+--when data column is the same as the key, just insert if possible, no update
+--```lua
+-- Blog:merge({ { name = 'merge1' }, { name = 'merge2' } }, 'name'):exec()
+--```
+--yields:
+--```sql
+-- WITH
+--   V (name) AS (
+--     VALUES
+--       ('merge1'::varchar),
+--       ('merge2')
+--   ),
+--   U AS (
+--     SELECT
+--       V.name
+--     FROM
+--       V
+--       INNER JOIN blog AS W ON (V.name = W.name)
+--   )
+-- INSERT INTO
+--   blog AS T (name)
+-- SELECT
+--   V.name
+-- FROM
+--   V
+--   LEFT JOIN U AS W ON (V.name = W.name)
+-- WHERE
+--   W.name IS NULL
+--```
 ---@private
 ---@param rows Record[]
 ---@param key Keys
 ---@param columns string[]
 ---@return self
 function Sql:_base_merge(rows, key, columns)
-  rows = self:_get_cte_values_literal(rows, columns, false)
   local cte_name = format("V(%s)", concat(columns, ", "))
-  local cte_values = format("(VALUES %s)", as_token(rows))
+  local cte_values = format("(VALUES %s)", as_token(self:_get_cte_values_literal(rows, columns)))
   local join_cond = self:_get_join_condition_from_key(key, "V", "W")
   local vals_columns = map(columns, _prefix_with_V)
+  -- as _find_upsert_key_error requires all keys are non-empty,
+  -- so here we use `key[1]` to determine whether a row should be inserted when key is a table
   local insert_subquery = Sql:new { table_name = "V", _where = format("W.%s IS NULL", key[1] or key) }
       :_base_select(vals_columns)
-      :_keep_args("_select_args", vals_columns)
-      :_base_join_raw("LEFT", "U AS W", join_cond)
-  local updated_subquery
+      :_base_join_raw("LEFT", "U AS W", join_cond) -- `U AS W` to reuse join_cond token
+  local intersect_subquery
   if (type(key) == "table" and #key == #columns) or #columns == 1 then
-    -- https://github.com/xiangnanscu/lua-resty-model?tab=readme-ov-file#merge-multiple-rows-returning-inserted-rows-with-array-key-and-specific-columns
-    updated_subquery = Sql:new { table_name = "V" }
+    intersect_subquery = Sql:new { table_name = "V" }
         :_base_select(vals_columns)
         :_base_join_raw("INNER", self.table_name .. " AS W", join_cond)
-        :_base_returning(vals_columns)
   else
-    -- https://github.com/xiangnanscu/lua-resty-model?tab=readme-ov-file#merge-multiple-rows-returning-inserted-rows-with-array-key
-    updated_subquery = Sql:new { table_name = self.table_name, _as = "W" }
+    intersect_subquery = Sql:new { table_name = self.table_name, _as = "W" }
         :_base_update(self:_get_update_token_with_prefix(columns, key, "V"))
-        :_base_from("V"):_base_where(join_cond)
+        :_base_from("V")
+        :_base_where(join_cond)
         :_base_returning(vals_columns)
   end
-  self:with(cte_name, cte_values):with("U", updated_subquery)
+  self:with(cte_name, cte_values):with("U", intersect_subquery)
   return Sql._base_insert(self, insert_subquery, columns)
 end
 
---TODO:
 ---@private
 ---@param rows Sql|Record[]
 ---@param key Keys
@@ -785,8 +822,7 @@ end
 function Sql:_base_upsert(rows, key, columns)
   assert(key, "you must provide key (string or table) for upsert")
   if rows.__SQL_BUILDER__ then
-    assert(columns ~= nil, "you must specify columns when use subquery as values of upsert")
-    self._insert = self:_get_upsert_query_token(rows, key, columns)
+    self._insert = self:_get_upsert_query_token(rows, key, columns or flat(rows._select_args))
   elseif rows[1] then
     self._insert = self:_get_bulk_upsert_token(rows, key, columns)
   else
@@ -814,7 +850,7 @@ function Sql:_base_updates(rows, key, columns)
     error("empty rows passed to updates")
   else
     ---@cast rows Record[]
-    rows = self:_get_cte_values_literal(rows, columns, false)
+    rows = self:_get_cte_values_literal(rows, columns)
     local cte_name = format("V(%s)", concat(columns, ", "))
     local cte_values = format("(VALUES %s)", as_token(rows))
     local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
@@ -1104,7 +1140,9 @@ function Sql:_get_bulk_insert_values_token(rows, columns)
 end
 
 ---take `key` away from update `columns`, return set token for update
---TODO:
+---```lua
+---{'a','b', 'c'}, {'b'}, 'V' => 'a = V.a, c = V.c'
+---```
 ---@private
 ---@param columns string[] columns that need to update
 ---@param key Keys name or names that need to be taken away from columns
@@ -1309,7 +1347,6 @@ function Sql:_get_bulk_upsert_token(rows, key, columns)
   end
 end
 
---TODO:
 ---@private
 ---@param rows Sql
 ---@param key Keys
@@ -1359,21 +1396,22 @@ function Sql:_base_get_update_query_token(subquery, columns)
   return format("(%s) = (%s)", columns_token, subquery:statement())
 end
 
---TODO:
+-- get join condition from key:
+-- `A.k = B.k` or `A.k1 = B.k1 AND A.k2 = B.k2`
 ---@private
 ---@param key Keys
----@param left_table string
----@param right_table string
----@return string
-function Sql:_get_join_condition_from_key(key, left_table, right_table)
+---@param A string left table name
+---@param B string right table name
+---@return string join condition
+function Sql:_get_join_condition_from_key(key, A, B)
   if type(key) == "string" then
     -- A.k = B.k
-    return format("%s.%s = %s.%s", left_table, key, right_table, key)
+    return format("%s.%s = %s.%s", A, key, B, key)
   end
   -- A.k1 = B.k1 AND A.k2 = B.k2
   local res = {}
   for _, k in ipairs(key) do
-    res[#res + 1] = format("%s.%s = %s.%s", left_table, k, right_table, k)
+    res[#res + 1] = format("%s.%s = %s.%s", A, k, B, k)
   end
   return concat(res, " AND ")
 end
@@ -1595,6 +1633,8 @@ function Sql:_resolve_F(value)
 end
 
 ---@private
+---@param columns string[]
+---@return Keys
 function Sql:_get_bulk_key(columns)
   if self.model.unique_together and self.model.unique_together[1] then
     return clone(self.model.unique_together[1])
@@ -1859,7 +1899,7 @@ function Sql:_base_get_multiple(keys, columns)
     error("empty keys passed to get_multiple")
   end
   columns = columns or get_keys(keys[1])
-  keys = self:_get_cte_values_literal(keys, columns, false)
+  keys = self:_get_cte_values_literal(keys, columns)
   local join_cond = self:_get_join_condition_from_key(columns, "V", self._as or self.table_name)
   local cte_name = format("V(%s)", concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(keys))
@@ -2794,9 +2834,9 @@ function Sql:update(row, columns)
   end
 end
 
----@param rows Record[]
----@param key? Keys
----@param columns? string[]
+---@param rows Record[] rows to be merged into the table
+---@param key? Keys key(s) to determine whether the row exists, when key is a column table, every column can't be empty
+---@param columns? string[] columns to be inserted or updated, if not provided, attributes of the first row will be used
 ---@return self
 function Sql:merge(rows, key, columns)
   rows, key, columns = self:_clean_bulk_params(rows, key, columns)
@@ -2807,17 +2847,25 @@ function Sql:merge(rows, key, columns)
   return Sql._base_merge(self, rows, key, columns)
 end
 
----@param rows Record[]
----@param key? Keys
----@param columns? string[]
+--PostgreSQL: INSERT ON CONFLICT DO UPDATE
+---@param rows Record[]|Sql rows or subquery to be inserted into the table
+---@param key? Keys unique key(s) to determine whether the row exists, when key is a column table, every column can't be empty
+---@param columns? string[] columns to be inserted or updated, if not provided, attributes of the first row will be used
 ---@return self
 function Sql:upsert(rows, key, columns)
-  rows, key, columns = self:_clean_bulk_params(rows, key, columns)
-  if not self._skip_validate then
-    rows = assert(self.model:_validate_create_rows(rows, key, columns))
+  if rows.__SQL_BUILDER__ then
+    if key == nil then
+      key = self:_get_bulk_key(columns or self.model.field_names)
+    end
+    return Sql._base_upsert(self, rows, key, columns)
+  else
+    rows, key, columns = self:_clean_bulk_params(rows, key, columns)
+    if not self._skip_validate then
+      rows = assert(self.model:_validate_create_rows(rows, key, columns))
+    end
+    rows = assert(self.model:_prepare_db_rows(rows, columns))
+    return Sql._base_upsert(self, rows, key, columns)
   end
-  rows = assert(self.model:_prepare_db_rows(rows, columns))
-  return Sql._base_upsert(self, rows, key, columns)
 end
 
 ---@param rows Record[]

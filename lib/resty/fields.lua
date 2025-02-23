@@ -1766,9 +1766,7 @@ end
 ---@field db_type "varchar"
 ---@field media_type "image"
 ---@field image true
-AliossImageField = AliossField:class {
-
-}
+AliossImageField = AliossField:class {}
 function AliossImageField:init(options)
   AliossField.init(self, dict({
     type = "alioss_image",

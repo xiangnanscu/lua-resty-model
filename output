@@ -113,31 +113,31 @@ CREATE TABLE store(
 ```
 
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('My First Blog', 'Welcome to my blog')
+INSERT INTO blog AS T (tagline, name) VALUES ('Welcome to my blog', 'My First Blog')
 ```
 
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('Another Blog', 'Another interesting blog')
+INSERT INTO blog AS T (tagline, name) VALUES ('Another interesting blog', 'Another Blog')
 ```
 
 ```sql
-INSERT INTO author AS T (name, resume, email, age) VALUES ('John Doe', '[{"description":"Worked on various projects.","start_date":"2015-01-01","end_date":"2020-01-01","company":"Company A","position":"Developer"}]', 'john@example.com', 30)
+INSERT INTO author AS T (resume, name, email, age) VALUES ('[{"start_date":"2015-01-01","end_date":"2020-01-01","company":"Company A","position":"Developer","description":"Worked on various projects."}]', 'John Doe', 'john@example.com', 30)
 ```
 
 ```sql
-INSERT INTO author AS T (name, resume, email, age) VALUES ('Jane Smith', '[{"description":"Designed user interfaces.","start_date":"2016-01-01","end_date":"2021-01-01","company":"Company B","position":"Designer"}]', 'jane@example.com', 28)
+INSERT INTO author AS T (resume, name, email, age) VALUES ('[{"start_date":"2016-01-01","end_date":"2021-01-01","company":"Company B","position":"Designer","description":"Designed user interfaces."}]', 'Jane Smith', 'jane@example.com', 28)
 ```
 
 ```sql
-INSERT INTO entry AS T (number_of_comments, number_of_pingbacks, rating, headline, blog_id, body_text, pub_date, mod_date) VALUES (5, 2, 4, 'First Entry', 1, 'This is the first entry in my blog.', '2023-01-01', '2023-01-02')
+INSERT INTO entry AS T (blog_id, body_text, pub_date, mod_date, number_of_comments, number_of_pingbacks, rating, headline) VALUES (1, 'This is the first entry in my blog.', '2023-01-01', '2023-01-02', 5, 2, 4, 'First Entry')
 ```
 
 ```sql
-INSERT INTO entry AS T (number_of_comments, number_of_pingbacks, rating, headline, blog_id, body_text, pub_date, mod_date) VALUES (3, 1, 5, 'Second Entry', 2, 'This is the second entry in another blog.', '2023-01-03', '2023-01-04')
+INSERT INTO entry AS T (blog_id, body_text, pub_date, mod_date, number_of_comments, number_of_pingbacks, rating, headline) VALUES (2, 'This is the second entry in another blog.', '2023-01-03', '2023-01-04', 3, 1, 5, 'Second Entry')
 ```
 
 ```sql
-INSERT INTO entry AS T (number_of_comments, number_of_pingbacks, rating, headline, blog_id, body_text, pub_date, mod_date) VALUES (5, 2, 4, 'Third Entry', 1, 'This is the third entry in my blog.', '2023-01-01', '2023-01-02')
+INSERT INTO entry AS T (blog_id, body_text, pub_date, mod_date, number_of_comments, number_of_pingbacks, rating, headline) VALUES (1, 'This is the third entry in my blog.', '2023-01-01', '2023-01-02', 5, 2, 4, 'Third Entry')
 ```
 
 ```sql
@@ -157,11 +157,11 @@ INSERT INTO publisher AS T (name) VALUES ('Publisher B')
 ```
 
 ```sql
-INSERT INTO book AS T (name, author, rating, pages, price, publisher_id, pubdate) VALUES ('Book One', 1, 4.5, 300, 29.99, 1, '2022-01-01')
+INSERT INTO book AS T (pages, name, publisher_id, pubdate, author, rating, price) VALUES (300, 'Book One', 1, '2022-01-01', 1, 4.5, 29.99)
 ```
 
 ```sql
-INSERT INTO book AS T (name, author, rating, pages, price, publisher_id, pubdate) VALUES ('Book Two', 2, 4, 250, 19.99, 2, '2022-02-01')
+INSERT INTO book AS T (pages, name, publisher_id, pubdate, author, rating, price) VALUES (250, 'Book Two', 2, '2022-02-01', 2, 4, 19.99)
 ```
 
 ```sql
@@ -324,7 +324,7 @@ ok 7 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBV
 ```
 
 ```sql
-SELECT T.name AS book_name, T1.name AS author_name FROM book T INNER JOIN author T1 ON (T.author = T1.id) WHERE T.id = 1
+SELECT T1.name AS author_name, T.name AS book_name FROM book T INNER JOIN author T1 ON (T.author = T1.id) WHERE T.id = 1
 ```
 
 ```js
@@ -398,7 +398,13 @@ SELECT T.id, T.name, T1.rating AS entry__rating FROM blog T INNER JOIN entry T1 
 ok 11 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select reversed foreign key
 ## select reversed foreign key with order_by
 ```lua
-      Blog:select("id","name","entry__headline"):where{name='My First Blog'}:order_by{'entry__headline'}:exec()
+      Blog:select(
+        "id",
+        "name",
+        "entry__headline"
+      ):where{
+        name = 'My First Blog'
+      }:order_by{'entry__headline'}:exec()
     
 ```
 
@@ -424,7 +430,13 @@ SELECT T.id, T.name, T1.headline AS entry__headline FROM blog T INNER JOIN entry
 ok 12 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBValue) select reversed foreign key with order_by
 ## select reversed foreign key with order_by DESC
 ```lua
-      Blog:select("id","name","entry__headline"):where{name='My First Blog'}:order_by{'-entry__headline'}:exec()
+      Blog:select(
+        "id",
+        "name",
+        "entry__headline"
+      ):where{
+        name = 'My First Blog'
+      }:order_by{'-entry__headline'}:exec()
     
 ```
 
@@ -828,7 +840,7 @@ SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) WHERE T1.bl
 ```
 
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('insert one row', 'insert one row')
+INSERT INTO blog AS T (tagline, name) VALUES ('insert one row', 'insert one row')
 ```
 
 ```js
@@ -852,7 +864,7 @@ ok 14 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入单行数�
 ```
 
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name
+INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Test Blog') RETURNING T.id, T.name
 ```
 
 ```js
@@ -879,11 +891,11 @@ ok 15 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入单行数�
 ```
 
 ```js
-"INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name"
+"INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Test Blog') RETURNING T.id, T.name"
 ```
 
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name
+INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Test Blog') RETURNING T.id, T.name
 ```
 
 ```lua
@@ -895,11 +907,11 @@ INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test t
 ```
 
 ```js
-"INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name"
+"INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Test Blog') RETURNING T.id, T.name"
 ```
 
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name
+INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Test Blog') RETURNING T.id, T.name
 ```
 
 ok 16 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) returning使用vararg和table等效
@@ -913,7 +925,7 @@ ok 16 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) returning使用v
 ```
 
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('bulk insert 1', 'bulk insert 1'), ('bulk insert 2', 'bulk insert 2')
+INSERT INTO blog AS T (tagline, name) VALUES ('bulk insert 1', 'bulk insert 1'), ('bulk insert 2', 'bulk insert 2')
 ```
 
 ```js
@@ -937,7 +949,7 @@ ok 17 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 批量插入多�
 ```
 
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('bulk insert return 1', 'bulk insert return 1'), ('bulk insert return 2', 'bulk insert return 2') RETURNING *
+INSERT INTO blog AS T (tagline, name) VALUES ('bulk insert return 1', 'bulk insert return 1'), ('bulk insert return 2', 'bulk insert return 2') RETURNING *
 ```
 
 ```js
@@ -996,7 +1008,12 @@ SELECT T.tagline FROM blog_bin T WHERE T.name = 'Another Blog' LIMIT 2
 ok 20 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 检验上面插入的数据
 ## 从子查询select_literal插入数据
 ```lua
-      BlogBin:insert(Blog:where{name='My First Blog'}:select{'name', 'tagline'}:select_literal('select from another blog'),{'name', 'tagline', 'note'}):exec()
+      BlogBin:insert(
+        Blog:where{ name = 'My First Blog'}
+        :select{'name', 'tagline'}
+        :select_literal('select from another blog'),
+        {'name', 'tagline', 'note'}
+      ):exec()
     
 ```
 
@@ -1034,7 +1051,16 @@ INSERT INTO blog AS T (name) VALUES ('Update Returning')
 ```
 
 ```lua
-      BlogBin:insert(Blog:update{name='Update Returning 2'}:where{name='Update Returning'}:returning{'name', 'tagline'}:returning_literal('update from another blog'),{'name', 'tagline', 'note'}):returning{'name', 'tagline', 'note'}:exec()
+      BlogBin:insert(
+        Blog:update{
+          name = 'Update Returning 2'
+        }:where{
+          name = 'Update Returning'
+        }:returning{
+        'name', 'tagline'
+        }:returning_literal('update from another blog'),
+        {'name', 'tagline', 'note'}
+      ):returning{'name', 'tagline', 'note'}:exec()
     
 ```
 
@@ -1063,11 +1089,18 @@ DELETE FROM blog T WHERE T.name = 'Update Returning 2'
 ok 23 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 从子查询update+returning插入数据
 ## 从子查询delete+returning插入数据
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('delete returning', 'delete returning tagline')
+INSERT INTO blog AS T (tagline, name) VALUES ('delete returning tagline', 'delete returning')
 ```
 
 ```lua
-      BlogBin:insert(Blog:delete{name='delete returning'}:returning{'name', 'tagline'}:returning_literal('deleted from another blog'),{'name', 'tagline', 'note'}):returning{'name', 'tagline', 'note'}:exec()
+      BlogBin:insert(
+        Blog:delete{
+          name = 'delete returning'
+        }:returning{
+          'name', 'tagline'
+        }:returning_literal('deleted from another blog'),
+        {'name', 'tagline', 'note'}
+      ):returning{'name', 'tagline', 'note'}:exec()
     
 ```
 
@@ -1092,7 +1125,7 @@ DELETE FROM blog T WHERE T.name = 'delete returning'
 ok 24 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 从子查询delete+returning插入数据
 ## 从子查询delete+returning插入数据,未明确指定列
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('delete returning', 'no column')
+INSERT INTO blog AS T (tagline, name) VALUES ('no column', 'delete returning')
 ```
 
 ```lua
@@ -1411,11 +1444,14 @@ SELECT T.id, T.headline FROM entry T WHERE T.headline LIKE '% from first blog'
 # Xodel:merge
 # merge basic
 ```lua
- Blog:merge { { name = 'My First Blog', tagline = 'updated by merge' }, { name = 'Blog added by merge', tagline = 'inserted by merge' } }:exec() 
+    Blog:merge {
+      { name = 'My First Blog', tagline = 'updated by merge' },
+      { name = 'Blog added by merge', tagline = 'inserted by merge' },
+    }:exec() 
 ```
 
 ```sql
-WITH V(name, tagline) AS (VALUES ('My First Blog'::varchar, 'updated by merge'::text), ('Blog added by merge', 'inserted by merge')), U AS (UPDATE blog W SET tagline = V.tagline FROM V WHERE V.name = W.name RETURNING V.name, V.tagline) INSERT INTO blog AS T (name, tagline) SELECT V.name, V.tagline FROM V LEFT JOIN U AS W ON (V.name = W.name) WHERE W.name IS NULL
+WITH V(tagline, name) AS (VALUES ('updated by merge'::text, 'My First Blog'::varchar), ('inserted by merge', 'Blog added by merge')), U AS (UPDATE blog W SET tagline = V.tagline FROM V WHERE V.name = W.name RETURNING V.tagline, V.name) INSERT INTO blog AS T (tagline, name) SELECT V.tagline, V.name FROM V LEFT JOIN U AS W ON (V.name = W.name) WHERE W.name IS NULL
 ```
 
 ```js
@@ -1468,5 +1504,64 @@ DELETE FROM blog T WHERE T.name = 'Blog added by merge'
  Author:merge { { name = 'Tom', age = 11 }, { name = 'Jerry', age = 101 } }:exec() 
 ```
 
-1..35
-Done in 0.29s.
+# Xodel:upsert
+## upsert basic
+```lua
+      Blog:upsert {
+        { name = 'My First Blog', tagline = 'updated by upsert' },
+        { name = 'Blog added by upsert', tagline = 'inserted by upsert' },
+      }:exec()
+      
+```
+
+```sql
+INSERT INTO blog AS T (tagline, name) VALUES ('updated by upsert', 'My First Blog'), ('inserted by upsert', 'Blog added by upsert') ON CONFLICT (name) DO UPDATE SET tagline = EXCLUDED.tagline
+```
+
+```js
+{
+  affected_rows: 2,
+}
+```
+
+```sql
+SELECT T.tagline FROM blog T WHERE T.name = 'My First Blog' LIMIT 2
+```
+
+```sql
+SELECT T.name, T.tagline FROM blog T WHERE T.name = 'Blog added by upsert' LIMIT 2
+```
+
+```sql
+DELETE FROM blog T WHERE T.name = 'Blog added by upsert'
+```
+
+ok 36 - Xodel:merge Xodel:upsert upsert basic
+## upsert from sub query
+```lua
+        BlogBin:upsert(Blog:where{name='My First Blog'}:select{'name', 'tagline'}):exec()
+      
+```
+
+```sql
+INSERT INTO blog_bin AS T (name, tagline) SELECT T.name, T.tagline FROM blog T WHERE T.name = 'My First Blog' ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, tagline = EXCLUDED.tagline
+```
+
+```js
+{
+  affected_rows: 1,
+}
+```
+
+not ok 37 - Xodel:merge Xodel:upsert upsert from sub query
+# spec/model_spec.lua @ 227
+# Failure message: spec/model_spec.lua:950: Expected objects to be the same.
+# Passed in:
+# (table: 0x7ffa53923bf0) {
+#  *[affected_rows] = 2 }
+# Expected:
+# (table: 0x7ffa53923478) {
+#  *[affected_rows] = 1 }
+1..37
+info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.
+info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.
