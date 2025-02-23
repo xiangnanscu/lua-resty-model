@@ -121,31 +121,31 @@ INSERT INTO blog AS T (name, tagline) VALUES ('Second Blog', 'Another interestin
 ```
 
 ```sql
-INSERT INTO author AS T (resume, email, name, age) VALUES ('[{"end_date":"2020-01-01","company":"Company A","position":"Developer","description":"Worked on various projects.","start_date":"2015-01-01"}]', 'john@example.com', 'John Doe', 30)
+INSERT INTO author AS T (name, email, age, resume) VALUES ('John Doe', 'john@example.com', 30, '[{"start_date":"2015-01-01","end_date":"2020-01-01","company":"Company A","position":"Developer","description":"Worked on various projects."}]')
 ```
 
 ```sql
-INSERT INTO author AS T (resume, email, name, age) VALUES ('[{"end_date":"2021-01-01","company":"Company B","position":"Designer","description":"Designed user interfaces.","start_date":"2016-01-01"}]', 'jane@example.com', 'Jane Smith', 28)
+INSERT INTO author AS T (name, email, age, resume) VALUES ('Jane Smith', 'jane@example.com', 28, '[{"start_date":"2016-01-01","end_date":"2021-01-01","company":"Company B","position":"Designer","description":"Designed user interfaces."}]')
 ```
 
 ```sql
-INSERT INTO entry AS T (body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks, rating, headline, pub_date) VALUES ('This is the first entry in my blog.', 1, '2023-01-02', 5, 2, 4, 'First Entry', '2023-01-01')
+INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (4, 'First Entry', '2023-01-01', 'This is the first entry in my blog.', 1, '2023-01-02', 5, 2)
 ```
 
 ```sql
-INSERT INTO entry AS T (body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks, rating, headline, pub_date) VALUES ('This is the second entry in another blog.', 2, '2023-01-04', 3, 1, 5, 'Second Entry', '2023-01-03')
+INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (5, 'Second Entry', '2023-01-03', 'This is the second entry in another blog.', 2, '2023-01-04', 3, 1)
 ```
 
 ```sql
-INSERT INTO entry AS T (body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks, rating, headline, pub_date) VALUES ('This is the third entry in my blog.', 1, '2023-01-02', 5, 2, 4, 'Third Entry', '2023-01-01')
+INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (4, 'Third Entry', '2023-01-01', 'This is the third entry in my blog.', 1, '2023-01-02', 5, 2)
 ```
 
 ```sql
-INSERT INTO view_log AS T (entry_id, ctime) VALUES (1, '2023-01-01 10:00:00')
+INSERT INTO view_log AS T (ctime, entry_id) VALUES ('2023-01-01 10:00:00', 1)
 ```
 
 ```sql
-INSERT INTO view_log AS T (entry_id, ctime) VALUES (2, '2023-01-03 12:00:00')
+INSERT INTO view_log AS T (ctime, entry_id) VALUES ('2023-01-03 12:00:00', 2)
 ```
 
 ```sql
@@ -157,11 +157,11 @@ INSERT INTO publisher AS T (name) VALUES ('Publisher B')
 ```
 
 ```sql
-INSERT INTO book AS T (publisher_id, name, pages, price, rating, pubdate, author) VALUES (1, 'Book One', 300, 29.99, 4.5, '2022-01-01', 1)
+INSERT INTO book AS T (rating, pages, price, name, pubdate, publisher_id, author) VALUES (4.5, 300, 29.99, 'Book One', '2022-01-01', 1, 1)
 ```
 
 ```sql
-INSERT INTO book AS T (publisher_id, name, pages, price, rating, pubdate, author) VALUES (2, 'Book Two', 250, 19.99, 4, '2022-02-01', 2)
+INSERT INTO book AS T (rating, pages, price, name, pubdate, publisher_id, author) VALUES (4, 250, 19.99, 'Book Two', '2022-02-01', 2, 2)
 ```
 
 ```sql
@@ -1401,7 +1401,7 @@ SELECT * FROM entry T WHERE T.id = 1 LIMIT 2
 ```
 
 ```sql
-UPDATE entry T SET number_of_pingbacks = (T.number_of_pingbacks + 2), number_of_comments = (T.number_of_comments + 1) WHERE T.id = 1 RETURNING *
+UPDATE entry T SET number_of_comments = (T.number_of_comments + 1), number_of_pingbacks = (T.number_of_pingbacks + 2) WHERE T.id = 1 RETURNING *
 ```
 
 ```js
@@ -1628,7 +1628,7 @@ DELETE FROM blog_bin T
 ```
 
 ```sql
-INSERT INTO blog_bin AS T (note, id, name, tagline) VALUES ('', 1, 'Second Blog', 'Another interesting blog'), ('select from another blog', 2, 'First Blog', 'Welcome to my blog'), ('update from another blog', 3, 'update returning 2', 'default tagline'), ('deleted from another blog', 4, 'delete returning', 'delete returning tagline'), ('', 5, 'delete returning', 'no column')
+INSERT INTO blog_bin AS T (name, note, id, tagline) VALUES ('Second Blog', '', 1, 'Another interesting blog'), ('First Blog', 'select from another blog', 2, 'Welcome to my blog'), ('update returning 2', 'update from another blog', 3, 'default tagline'), ('delete returning', 'deleted from another blog', 4, 'delete returning tagline'), ('delete returning', '', 5, 'no column')
 ```
 
 ok 47 - Xodel:upsert upsert from returning
@@ -1806,4 +1806,4 @@ Author:updates({
 
 ok 56 - updates抛出异常的情况 updates with invalid field
 1..56
-Done in 0.29s.
+Done in 0.31s.
