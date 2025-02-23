@@ -2,7 +2,7 @@ local clone = require "table.clone"
 local isarray = require("table.isarray")
 local Validator = require "resty.validator"
 local Array = require "resty.array"
-local getenv = require("resty.utils").getenv
+local getenv = require("resty.dotenv").getenv
 local get_payload = require "resty.alioss".get_payload
 local string_format = string.format
 local table_concat = table.concat
@@ -608,7 +608,7 @@ function BaseField:get_options()
     type = self.type,
   }
   for _, name in ipairs(self:get_option_names()) do
-    if self[name] ~= nil then
+    if rawget(self, name) ~= nil then
       ret[name] = self[name]
     end
   end
@@ -760,8 +760,6 @@ function StringField:init(options)
   BaseField.init(self, dict({
     type = "string",
     db_type = "varchar",
-    -- compact = false,
-    -- trim = true,
   }, options))
   --TODO:考虑default为函数时,数据库层面应该为空字符串.从migrate.lua的serialize_defaut特定
   --可以考虑default函数传入nil时认定为migrate的情形, 自行返回空字符串
@@ -947,6 +945,7 @@ end
 ---@field type "year_month"
 ---@field db_type "varchar"
 YearMonthField = StringField:class {
+  maxlength = 7,
   option_names = { unpack(StringField.option_names) },
 }
 
@@ -954,7 +953,6 @@ function YearMonthField:init(options)
   StringField.init(self, dict({
     type = "year_month",
     db_type = "varchar",
-    maxlength = 7
   }, options))
 end
 
@@ -1120,6 +1118,8 @@ end
 ---@field precision integer
 ---@field timezone boolean
 DatetimeField = BaseField:class {
+  precision = 0,
+  timezone = true,
   option_names = {
     'auto_now_add',
     'auto_now',
@@ -1131,8 +1131,6 @@ function DatetimeField:init(options)
   BaseField.init(self, dict({
     type = "datetime",
     db_type = "timestamp",
-    precision = 0,
-    timezone = true,
   }, options))
   if self.auto_now_add then
     self.default = ngx_localtime
@@ -1198,14 +1196,14 @@ end
 ---@field precision integer
 ---@field timezone boolean
 TimeField = BaseField:class {
+  precision = 0,
+  timezone = true,
   option_names = { 'precision', 'timezone' },
 }
 function TimeField:init(options)
   BaseField.init(self, dict({
     type = "time",
     db_type = "time",
-    precision = 0,
-    timezone = true,
   }, options))
 end
 
@@ -1244,6 +1242,14 @@ end
 ---@field related_query_name string
 ---@field is_multiple boolean OneToOneField is not multiple
 ForeignkeyField = BaseField:class {
+  FK_TYPE_NOT_DEFIEND = FK_TYPE_NOT_DEFIEND,
+  on_delete = 'CASCADE',
+  on_update = 'CASCADE',
+  admin_url_name = 'admin',
+  models_url_name = 'model',
+  keyword_query_name = 'keyword',
+  limit_query_name = 'limit',
+  convert = tostring,
   option_names = {
     "json_dereference",
     "reference",
@@ -1266,14 +1272,6 @@ function ForeignkeyField:init(options)
   BaseField.init(self, dict({
     type = "foreignkey",
     db_type = FK_TYPE_NOT_DEFIEND,
-    FK_TYPE_NOT_DEFIEND = FK_TYPE_NOT_DEFIEND,
-    on_delete = 'CASCADE',
-    on_update = 'CASCADE',
-    admin_url_name = 'admin',
-    models_url_name = 'model',
-    keyword_query_name = 'keyword',
-    limit_query_name = 'limit',
-    convert = tostring,
   }, options))
   local fk_model = self.reference
   if fk_model == "self" then
@@ -1503,12 +1501,12 @@ end
 ---@field type "array"
 ---@field field? AnyField
 ArrayField = BaseArrayField:class {
+  min = 1,
   option_names = { 'field', 'min' },
 }
 function ArrayField:init(options)
   BaseArrayField.init(self, dict({
     type = "array",
-    min = 1,
   }, options))
   if type(self.field) == 'table' then
     self.field = normalize_field_shortcuts(self.field)
@@ -1575,12 +1573,12 @@ end
 ---@field uploadable? boolean
 ---@field ModelClass? Xodel
 TableField = BaseArrayField:class {
+  max_rows = TABLE_MAX_ROWS,
   option_names = { 'model', 'max_rows', 'uploadable', 'names', 'columns', 'form_names', 'cascade_column' },
 }
 function TableField:init(options)
   BaseArrayField.init(self, dict({
     type = "table",
-    max_rows = TABLE_MAX_ROWS,
   }, options))
   if type(self.model) ~= 'table' then
     error("please define model for a table field: " .. self.name)
@@ -1706,7 +1704,7 @@ function AliossField:init(options)
   StringField.init(self, dict({
     type = "alioss",
     db_type = "varchar",
-    maxlength = 255
+    maxlength = 255,
   }, options))
   self:setup(options)
 end
@@ -1768,7 +1766,9 @@ end
 ---@field db_type "varchar"
 ---@field media_type "image"
 ---@field image true
-AliossImageField = AliossField:class {}
+AliossImageField = AliossField:class {
+
+}
 function AliossImageField:init(options)
   AliossField.init(self, dict({
     type = "alioss_image",

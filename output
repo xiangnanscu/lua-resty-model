@@ -121,23 +121,23 @@ INSERT INTO blog AS T (name, tagline) VALUES ('Another Blog', 'Another interesti
 ```
 
 ```sql
-INSERT INTO author AS T (email, age, name, resume) VALUES ('john@example.com', 30, 'John Doe', '[{"start_date":"2015-01-01","end_date":"2020-01-01","company":"Company A","position":"Developer","description":"Worked on various projects."}]')
+INSERT INTO author AS T (name, resume, email, age) VALUES ('John Doe', '[{"description":"Worked on various projects.","start_date":"2015-01-01","end_date":"2020-01-01","company":"Company A","position":"Developer"}]', 'john@example.com', 30)
 ```
 
 ```sql
-INSERT INTO author AS T (email, age, name, resume) VALUES ('jane@example.com', 28, 'Jane Smith', '[{"start_date":"2016-01-01","end_date":"2021-01-01","company":"Company B","position":"Designer","description":"Designed user interfaces."}]')
+INSERT INTO author AS T (name, resume, email, age) VALUES ('Jane Smith', '[{"description":"Designed user interfaces.","start_date":"2016-01-01","end_date":"2021-01-01","company":"Company B","position":"Designer"}]', 'jane@example.com', 28)
 ```
 
 ```sql
-INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (4, 'First Entry', '2023-01-01', 'This is the first entry in my blog.', 1, '2023-01-02', 5, 2)
+INSERT INTO entry AS T (number_of_comments, number_of_pingbacks, rating, headline, blog_id, body_text, pub_date, mod_date) VALUES (5, 2, 4, 'First Entry', 1, 'This is the first entry in my blog.', '2023-01-01', '2023-01-02')
 ```
 
 ```sql
-INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (5, 'Second Entry', '2023-01-03', 'This is the second entry in another blog.', 2, '2023-01-04', 3, 1)
+INSERT INTO entry AS T (number_of_comments, number_of_pingbacks, rating, headline, blog_id, body_text, pub_date, mod_date) VALUES (3, 1, 5, 'Second Entry', 2, 'This is the second entry in another blog.', '2023-01-03', '2023-01-04')
 ```
 
 ```sql
-INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (4, 'Third Entry', '2023-01-01', 'This is the third entry in my blog.', 1, '2023-01-02', 5, 2)
+INSERT INTO entry AS T (number_of_comments, number_of_pingbacks, rating, headline, blog_id, body_text, pub_date, mod_date) VALUES (5, 2, 4, 'Third Entry', 1, 'This is the third entry in my blog.', '2023-01-01', '2023-01-02')
 ```
 
 ```sql
@@ -157,11 +157,11 @@ INSERT INTO publisher AS T (name) VALUES ('Publisher B')
 ```
 
 ```sql
-INSERT INTO book AS T (rating, pages, price, publisher_id, pubdate, name, author) VALUES (4.5, 300, 29.99, 1, '2022-01-01', 'Book One', 1)
+INSERT INTO book AS T (name, author, rating, pages, price, publisher_id, pubdate) VALUES ('Book One', 1, 4.5, 300, 29.99, 1, '2022-01-01')
 ```
 
 ```sql
-INSERT INTO book AS T (rating, pages, price, publisher_id, pubdate, name, author) VALUES (4, 250, 19.99, 2, '2022-02-01', 'Book Two', 2)
+INSERT INTO book AS T (name, author, rating, pages, price, publisher_id, pubdate) VALUES ('Book Two', 2, 4, 250, 19.99, 2, '2022-02-01')
 ```
 
 ```sql
@@ -1469,4 +1469,4 @@ DELETE FROM blog T WHERE T.name = 'Blog added by merge'
 ```
 
 1..35
-Done in 0.28s.
+Done in 0.29s.
