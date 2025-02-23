@@ -1435,7 +1435,7 @@ end
 ---@param columns string[]
 function Sql:_set_cud_subquery_upsert_token(rows, key, columns)
   local cte_name = format("V(%s)", concat(columns, ", "))
-  self:with(cte_name, '(' .. rows:statement() .. ')')
+  self:with(cte_name, rows)
   local insert_token = format("(%s) %s ON CONFLICT (%s)",
     as_token(columns),
     Sql:new { table_name = 'V', _select = as_token(columns) }:statement(),
