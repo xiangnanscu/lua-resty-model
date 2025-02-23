@@ -53,7 +53,7 @@ CREATE TABLE blog_bin(
 ```sql
 CREATE TABLE author(
   id SERIAL PRIMARY KEY NOT NULL,
-  name varchar(200) NOT NULL DEFAULT '',
+  name varchar(200) NOT NULL UNIQUE,
   email varchar(255) NOT NULL DEFAULT '',
   age integer ,
   resume jsonb DEFAULT '{}'
@@ -113,31 +113,31 @@ CREATE TABLE store(
 ```
 
 ```sql
-INSERT INTO blog AS T (tagline, name) VALUES ('Welcome to my blog', 'My First Blog')
+INSERT INTO blog AS T (name, tagline) VALUES ('My First Blog', 'Welcome to my blog')
 ```
 
 ```sql
-INSERT INTO blog AS T (tagline, name) VALUES ('Another interesting blog', 'Another Blog')
+INSERT INTO blog AS T (name, tagline) VALUES ('Another Blog', 'Another interesting blog')
 ```
 
 ```sql
-INSERT INTO author AS T (age, name, resume, email) VALUES (30, 'John Doe', '[{"start_date":"2015-01-01","end_date":"2020-01-01","company":"CompanyA","position":"Developer","description":"Workedonvariousprojects."}]', 'john@example.com')
+INSERT INTO author AS T (email, age, name, resume) VALUES ('john@example.com', 30, 'John Doe', '[{"start_date":"2015-01-01","end_date":"2020-01-01","company":"Company A","position":"Developer","description":"Worked on various projects."}]')
 ```
 
 ```sql
-INSERT INTO author AS T (age, name, resume, email) VALUES (28, 'Jane Smith', '[{"start_date":"2016-01-01","end_date":"2021-01-01","company":"CompanyB","position":"Designer","description":"Designeduserinterfaces."}]', 'jane@example.com')
+INSERT INTO author AS T (email, age, name, resume) VALUES ('jane@example.com', 28, 'Jane Smith', '[{"start_date":"2016-01-01","end_date":"2021-01-01","company":"Company B","position":"Designer","description":"Designed user interfaces."}]')
 ```
 
 ```sql
-INSERT INTO entry AS T (headline, body_text, pub_date, blog_id, number_of_comments, number_of_pingbacks, rating, mod_date) VALUES ('First Entry', 'This is the first entry in my blog.', '2023-01-01', 1, 5, 2, 4, '2023-01-02')
+INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (4, 'First Entry', '2023-01-01', 'This is the first entry in my blog.', 1, '2023-01-02', 5, 2)
 ```
 
 ```sql
-INSERT INTO entry AS T (headline, body_text, pub_date, blog_id, number_of_comments, number_of_pingbacks, rating, mod_date) VALUES ('Second Entry', 'This is the second entry in another blog.', '2023-01-03', 2, 3, 1, 5, '2023-01-04')
+INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (5, 'Second Entry', '2023-01-03', 'This is the second entry in another blog.', 2, '2023-01-04', 3, 1)
 ```
 
 ```sql
-INSERT INTO entry AS T (headline, body_text, pub_date, blog_id, number_of_comments, number_of_pingbacks, rating, mod_date) VALUES ('Third Entry', 'This is the third entry in my blog.', '2023-01-01', 1, 5, 2, 4, '2023-01-02')
+INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (4, 'Third Entry', '2023-01-01', 'This is the third entry in my blog.', 1, '2023-01-02', 5, 2)
 ```
 
 ```sql
@@ -149,23 +149,23 @@ INSERT INTO view_log AS T (ctime, entry_id) VALUES ('2023-01-03 12:00:00', 2)
 ```
 
 ```sql
-INSERT INTO publisher AS T (name) VALUES ('PublisherA')
+INSERT INTO publisher AS T (name) VALUES ('Publisher A')
 ```
 
 ```sql
-INSERT INTO publisher AS T (name) VALUES ('PublisherB')
+INSERT INTO publisher AS T (name) VALUES ('Publisher B')
 ```
 
 ```sql
-INSERT INTO book AS T (pages, price, publisher_id, pubdate, name, rating, author) VALUES (300, 29.99, 1, '2022-01-01', 'Book One', 4.5, 1)
+INSERT INTO book AS T (rating, pages, price, publisher_id, pubdate, name, author) VALUES (4.5, 300, 29.99, 1, '2022-01-01', 'Book One', 1)
 ```
 
 ```sql
-INSERT INTO book AS T (pages, price, publisher_id, pubdate, name, rating, author) VALUES (250, 19.99, 2, '2022-02-01', 'Book Two', 4, 2)
+INSERT INTO book AS T (rating, pages, price, publisher_id, pubdate, name, author) VALUES (4, 250, 19.99, 2, '2022-02-01', 'Book Two', 2)
 ```
 
 ```sql
-INSERT INTO store AS T (name) VALUES ('BookStoreA'), ('BookStoreB')
+INSERT INTO store AS T (name) VALUES ('Book Store A'), ('Book Store B')
 ```
 
 # Model:create_model mixins: unique被混合的模型被覆盖
@@ -324,7 +324,7 @@ ok 7 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBV
 ```
 
 ```sql
-SELECT T1.name AS author_name, T.name AS book_name FROM book T INNER JOIN author T1 ON (T.author = T1.id) WHERE T.id = 1
+SELECT T.name AS book_name, T1.name AS author_name FROM book T INNER JOIN author T1 ON (T.author = T1.id) WHERE T.id = 1
 ```
 
 ```js
@@ -821,20 +821,24 @@ SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) WHERE T1.bl
 ## 插入单行数据
 ```lua
       Blog:insert{
-        name = 'Test Blog',
-        tagline = 'Test tagline'
+        name = 'insert one row',
+        tagline = 'insert one row'
       }:exec()
     
 ```
 
 ```sql
-INSERT INTO blog AS T (tagline, name) VALUES ('Test tagline', 'Test Blog')
+INSERT INTO blog AS T (name, tagline) VALUES ('insert one row', 'insert one row')
 ```
 
 ```js
 {
   affected_rows: 1,
 }
+```
+
+```sql
+DELETE FROM blog T WHERE T.name = 'insert one row'
 ```
 
 ok 14 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入单行数据
@@ -848,7 +852,7 @@ ok 14 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入单行数�
 ```
 
 ```sql
-INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Test Blog') RETURNING T.id, T.name
+INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name
 ```
 
 ```js
@@ -860,8 +864,12 @@ INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Tes
 ]
 ```
 
+```sql
+DELETE FROM blog T WHERE T.id = 4
+```
+
 ok 15 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入单行数据并返回特定字段
-## returning使用vararg和table等效性
+## returning使用vararg和table等效
 ```lua
       Blog:insert{
         name = 'Return Test Blog',
@@ -871,11 +879,11 @@ ok 15 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入单行数�
 ```
 
 ```js
-"INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Test Blog') RETURNING T.id, T.name"
+"INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name"
 ```
 
 ```sql
-INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Test Blog') RETURNING T.id, T.name
+INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name
 ```
 
 ```lua
@@ -887,25 +895,25 @@ INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Tes
 ```
 
 ```js
-"INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Test Blog') RETURNING T.id, T.name"
+"INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name"
 ```
 
 ```sql
-INSERT INTO blog AS T (tagline, name) VALUES ('Return test tagline', 'Return Test Blog') RETURNING T.id, T.name
+INSERT INTO blog AS T (name, tagline) VALUES ('Return Test Blog', 'Return test tagline') RETURNING T.id, T.name
 ```
 
-ok 16 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) returning使用vararg和table等效性
+ok 16 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) returning使用vararg和table等效
 ## 批量插入多行数据
 ```lua
       Blog:insert{
-        { name = 'Bulk Blog 1', tagline = 'Bulk tagline 1' },
-        { name = 'Bulk Blog 2', tagline = 'Bulk tagline 2' }
+        { name = 'bulk insert 1', tagline = 'bulk insert 1' },
+        { name = 'bulk insert 2', tagline = 'bulk insert 2' }
       }:exec()
     
 ```
 
 ```sql
-INSERT INTO blog AS T (tagline, name) VALUES ('Bulk tagline 1', 'Bulk Blog 1'), ('Bulk tagline 2', 'Bulk Blog 2')
+INSERT INTO blog AS T (name, tagline) VALUES ('bulk insert 1', 'bulk insert 1'), ('bulk insert 2', 'bulk insert 2')
 ```
 
 ```js
@@ -914,33 +922,41 @@ INSERT INTO blog AS T (tagline, name) VALUES ('Bulk tagline 1', 'Bulk Blog 1'), 
 }
 ```
 
+```sql
+DELETE FROM blog T WHERE T.name LIKE 'bulk insert%'
+```
+
 ok 17 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 批量插入多行数据
 ## 批量插入并返回所有字段
 ```lua
       Blog:insert{
-        { name = 'Return Bulk 1', tagline = 'Return bulk 1' },
-        { name = 'Return Bulk 2', tagline = 'Return bulk 2' }
+        { name = 'bulk insert return 1', tagline = 'bulk insert return 1' },
+        { name = 'bulk insert return 2', tagline = 'bulk insert return 2' }
       }:returning('*'):exec()
     
 ```
 
 ```sql
-INSERT INTO blog AS T (tagline, name) VALUES ('Return bulk 1', 'Return Bulk 1'), ('Return bulk 2', 'Return Bulk 2') RETURNING *
+INSERT INTO blog AS T (name, tagline) VALUES ('bulk insert return 1', 'bulk insert return 1'), ('bulk insert return 2', 'bulk insert return 2') RETURNING *
 ```
 
 ```js
 [
   {
     id     : 7,
-    name   : "Return Bulk 1",
-    tagline: "Return bulk 1",
+    name   : "bulk insert return 1",
+    tagline: "bulk insert return 1",
   },
   {
     id     : 8,
-    name   : "Return Bulk 2",
-    tagline: "Return bulk 2",
+    name   : "bulk insert return 2",
+    tagline: "bulk insert return 2",
   },
 ]
+```
+
+```sql
+DELETE FROM blog T WHERE T.name LIKE 'bulk insert return%'
 ```
 
 ok 18 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 批量插入并返回所有字段
@@ -1036,84 +1052,105 @@ WITH D(name, tagline, note) AS (UPDATE blog T SET name = 'Update Returning 2' WH
 ]
 ```
 
+```sql
+SELECT T.name, T.tagline, T.note FROM blog_bin T WHERE T.name = 'Update Returning 2'
+```
+
+```sql
+DELETE FROM blog T WHERE T.name = 'Update Returning 2'
+```
+
 ok 23 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 从子查询update+returning插入数据
 ## 从子查询delete+returning插入数据
 ```sql
-INSERT INTO blog AS T (name) VALUES ('Returning Test Blog')
+INSERT INTO blog AS T (name, tagline) VALUES ('delete returning', 'delete returning tagline')
 ```
 
 ```lua
-      BlogBin:insert(Blog:delete{name='Returning Test Blog'}:returning{'name', 'tagline'}:returning_literal('deleted from another blog'),{'name', 'tagline', 'note'}):returning{'name', 'tagline', 'note'}:exec()
+      BlogBin:insert(Blog:delete{name='delete returning'}:returning{'name', 'tagline'}:returning_literal('deleted from another blog'),{'name', 'tagline', 'note'}):returning{'name', 'tagline', 'note'}:exec()
     
 ```
 
 ```sql
-WITH D(name, tagline, note) AS (DELETE FROM blog T WHERE T.name = 'Returning Test Blog' RETURNING T.name, T.tagline, 'deleted from another blog') INSERT INTO blog_bin AS T (name, tagline, note) SELECT name, tagline, note FROM D RETURNING T.name, T.tagline, T.note
+WITH D(name, tagline, note) AS (DELETE FROM blog T WHERE T.name = 'delete returning' RETURNING T.name, T.tagline, 'deleted from another blog') INSERT INTO blog_bin AS T (name, tagline, note) SELECT name, tagline, note FROM D RETURNING T.name, T.tagline, T.note
 ```
 
 ```js
 [
   {
-    name   : "Returning Test Blog",
+    name   : "delete returning",
     note   : "deleted from another blog",
-    tagline: "default tagline",
+    tagline: "delete returning tagline",
   },
 ]
+```
+
+```sql
+DELETE FROM blog T WHERE T.name = 'delete returning'
 ```
 
 ok 24 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 从子查询delete+returning插入数据
 ## 从子查询delete+returning插入数据,未明确指定列
 ```sql
-INSERT INTO blog AS T (tagline, name) VALUES ('no column', 'Returning Test')
+INSERT INTO blog AS T (name, tagline) VALUES ('delete returning', 'no column')
 ```
 
 ```lua
-      BlogBin:insert(Blog:delete{name='Returning Test'}:returning{'name', 'tagline'}):returning{'name', 'tagline', 'note'}:exec()
+      BlogBin:insert(Blog:delete{name='delete returning'}:returning{'name', 'tagline'}):returning{'name', 'tagline', 'note'}:exec()
     
 ```
 
 ```sql
-WITH D(name, tagline) AS (DELETE FROM blog T WHERE T.name = 'Returning Test' RETURNING T.name, T.tagline) INSERT INTO blog_bin AS T (name, tagline) SELECT name, tagline FROM D RETURNING T.name, T.tagline, T.note
+WITH D(name, tagline) AS (DELETE FROM blog T WHERE T.name = 'delete returning' RETURNING T.name, T.tagline) INSERT INTO blog_bin AS T (name, tagline) SELECT name, tagline FROM D RETURNING T.name, T.tagline, T.note
 ```
 
 ```js
 [
   {
-    name   : "Returning Test",
+    name   : "delete returning",
     note   : "",
     tagline: "no column",
   },
 ]
 ```
 
+```sql
+DELETE FROM blog T WHERE T.name = 'delete returning'
+```
+
 ok 25 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 从子查询delete+returning插入数据,未明确指定列
 ## 指定列名插入数据
 ```lua
-      Blog:insert({
+      BlogBin:insert({
         name = 'Column Test Blog',
         tagline = 'Column test tagline',
-        extra_field = 'should not be inserted'
-      }, {'name', 'tagline'}):exec()
+        note = 'should not be inserted'
+      }, {'name', 'tagline'}):returning('name', 'tagline','note'):exec()
     
 ```
 
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('Column Test Blog', 'Column test tagline')
+INSERT INTO blog_bin AS T (name, tagline) VALUES ('Column Test Blog', 'Column test tagline') RETURNING T.name, T.tagline, T.note
 ```
 
 ```js
-{
-  affected_rows: 1,
-}
+[
+  {
+    name   : "Column Test Blog",
+    note   : "",
+    tagline: "Column test tagline",
+  },
+]
+```
+
+```sql
+DELETE FROM blog_bin T WHERE T.name = 'Column Test Blog'
 ```
 
 ok 26 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 指定列名插入数据
 ## 插入数据并使用默认值
 ```lua
-      Blog:insert{
-        name = 'Default Test Blog'
-        -- tagline将使用默认值
-      }:returning{'name', 'tagline'}:exec()
+      Blog:insert{name = 'Default Test Blog'}:returning{'name', 'tagline'}:exec()
     
 ```
 
@@ -1128,6 +1165,10 @@ INSERT INTO blog AS T (name) VALUES ('Default Test Blog') RETURNING T.name, T.ta
     tagline: "default tagline",
   },
 ]
+```
+
+```sql
+DELETE FROM blog T WHERE T.name = 'Default Test Blog'
 ```
 
 ok 27 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入数据并使用默认值
@@ -1365,6 +1406,66 @@ UPDATE entry T SET headline = (T.headline || ' from first blog') FROM blog T1 WH
 
 ```sql
 SELECT T.id, T.headline FROM entry T WHERE T.headline LIKE '% from first blog'
+```
+
+# Xodel:merge
+# merge basic
+```lua
+ Blog:merge { { name = 'My First Blog', tagline = 'updated by merge' }, { name = 'Blog added by merge', tagline = 'inserted by merge' } }:exec() 
+```
+
+```sql
+WITH V(name, tagline) AS (VALUES ('My First Blog'::varchar, 'updated by merge'::text), ('Blog added by merge', 'inserted by merge')), U AS (UPDATE blog W SET tagline = V.tagline FROM V WHERE V.name = W.name RETURNING V.name, V.tagline) INSERT INTO blog AS T (name, tagline) SELECT V.name, V.tagline FROM V LEFT JOIN U AS W ON (V.name = W.name) WHERE W.name IS NULL
+```
+
+```js
+{
+  affected_rows: 1,
+}
+```
+
+```sql
+SELECT T.tagline FROM blog T WHERE T.name = 'My First Blog' LIMIT 2
+```
+
+```sql
+DELETE FROM blog T WHERE T.name = 'Blog added by merge'
+```
+
+# merge insert only
+```sql
+SELECT * FROM blog T WHERE T.name = 'My First Blog' LIMIT 2
+```
+
+```lua
+ Blog:merge { { name = 'My First Blog' }, { name = 'Blog added by merge' } }:exec() 
+```
+
+```sql
+WITH V(name) AS (VALUES ('My First Blog'::varchar), ('Blog added by merge')), U AS (SELECT V.name FROM V INNER JOIN blog AS W ON (V.name = W.name)) INSERT INTO blog AS T (name) SELECT V.name FROM V LEFT JOIN U AS W ON (V.name = W.name) WHERE W.name IS NULL
+```
+
+```js
+{
+  affected_rows: 1,
+}
+```
+
+```sql
+SELECT * FROM blog T WHERE T.name = 'My First Blog' LIMIT 2
+```
+
+```sql
+SELECT T.name, T.tagline FROM blog T WHERE T.name = 'Blog added by merge' LIMIT 2
+```
+
+```sql
+DELETE FROM blog T WHERE T.name = 'Blog added by merge'
+```
+
+# merge抛出异常的情况
+```lua
+ Author:merge { { name = 'Tom', age = 11 }, { name = 'Jerry', age = 101 } }:exec() 
 ```
 
 1..35
