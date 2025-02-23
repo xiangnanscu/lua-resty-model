@@ -1285,7 +1285,7 @@ end
 ---@param fk_model Xodel
 function ForeignkeyField:setup_with_fk_model(fk_model)
   -- setup: reference_column, reference_label_column, db_type
-  assert(type(fk_model) == "table" and fk_model.__is_model_class__,
+  assert(type(fk_model) == "table" and fk_model.__IS_MODEL_CLASS__,
     string_format("a foreignkey must define a reference model. not %s(type: %s)", fk_model, type(fk_model)))
   local rc = self.reference_column or fk_model.primary_key or fk_model.DEFAULT_PRIMARY_KEY or "id"
   local fk = fk_model.fields[rc]
@@ -1583,7 +1583,7 @@ function TableField:init(options)
   if type(self.model) ~= 'table' then
     error("please define model for a table field: " .. self.name)
   end
-  if not self.model.__is_model_class__ then
+  if not self.model.__IS_MODEL_CLASS__ then
     self.model = self.ModelClass:create_model {
       extends = self.model.extends,
       mixins = self.model.mixins,

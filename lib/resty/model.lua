@@ -1001,7 +1001,7 @@ end
 ---@return self
 function Sql:_base_join(join_type, join_args, ...)
   if type(join_args) == 'table' then
-    if join_args.__is_model_class__ then
+    if join_args.__IS_MODEL_CLASS__ then
       local fk_models = {}
       local res = { join_args, ... }
       local callback
@@ -3499,7 +3499,7 @@ end
 ---@operator call:Xodel
 ---@field private __index Xodel
 ---@field private __normalized__? boolean
----@field __is_model_class__? boolean
+---@field __IS_MODEL_CLASS__? boolean
 ---@field private __SQL_BUILDER__? boolean
 ---@field DEFAULT  fun():'DEFAULT'
 ---@field NULL  userdata
@@ -3626,7 +3626,7 @@ end
 ---@param model any
 ---@return boolean
 function Xodel:is_model_class(model)
-  return type(model) == 'table' and model.__is_model_class__
+  return type(model) == 'table' and model.__IS_MODEL_CLASS__
 end
 
 ---@param name string
@@ -3714,7 +3714,7 @@ function Xodel:_make_model_class(opts)
     uniques:push(Array(clone(unique_group)))
   end
   ModelClass.unique_together = uniques
-  ModelClass.__is_model_class__ = true
+  ModelClass.__IS_MODEL_CLASS__ = true
   if ModelClass.table_name then
     ModelClass:materialize_with_table_name { table_name = ModelClass.table_name }
   end
