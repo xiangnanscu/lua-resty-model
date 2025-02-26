@@ -1371,14 +1371,12 @@ end
 ---@param columns? string[]
 function Sql:_set_cud_subquery_insert_token(subsql, columns)
   -- WITH D(a,b,c) AS (UPDATE T2 SET a=1,b=2,c=3 RETURNING a,b,c) INSERT INTO T1(a,b,c) SELECT a,b,c from D
-  local returning_columns
-  if not columns then
+  local returning_columns = columns
+  if not returning_columns then
     if not subsql._returning then
       error("subquery must have returning clause")
     end
     returning_columns = extract_column_names(subsql._returning)
-  else
-    returning_columns = columns
   end
   local columns_token = as_token(returning_columns)
   local cudsql = Sql:new { table_name = "D", _select = columns_token }
