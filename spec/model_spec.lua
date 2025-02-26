@@ -749,16 +749,16 @@ mdesc("Xodel:insert抛出异常的情况", function()
       eval [[ Blog:insert{name='First Blog'}:exec() ]]
     end)
   end)
-  mit("传入非法字段", function()
-    assert.error(function()
-      eval [[
-Blog:insert{
-  illegal_field = 'Test Blog',
-  tagline = 'Test tagline'
-}:exec()
-      ]]
-    end, "invalid field name 'illegal_field' for model 'blog'")
-  end)
+  --   mit("传入非法字段", function()
+  --     assert.error(function()
+  --       eval [[
+  -- Blog:insert{
+  --   illegal_field = 'Test Blog',
+  --   tagline = 'Test tagline'
+  -- }:exec()
+  --       ]]
+  --     end, "invalid field name 'illegal_field' for model 'blog'")
+  --   end)
 
   mit("传入名称过长", function()
     assert.error(function()

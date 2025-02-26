@@ -193,7 +193,6 @@ local function to_camel_case(str)
   return result
 end
 
-
 local function get_keys(rows, columns)
   columns = columns or {}
   for k, _ in pairs(rows[1] or rows) do
@@ -201,7 +200,6 @@ local function get_keys(rows, columns)
   end
   return columns
 end
-
 
 local function get_foreign_object(attrs, prefix)
   -- when in : attrs = {id=1, buyer__name='tom', buyer__id=2}, prefix = 'buyer__'
@@ -222,6 +220,62 @@ end
 ---@return string
 local function _prefix_with_V(column)
   return "V." .. column
+end
+
+---@param s string
+---@return string[]
+local function split_string(s, pattern)
+  local parts = {}
+  local start = 1
+
+  while true do
+    local pos = s:find(pattern, start, true)
+    if not pos then
+      insert(parts, s:sub(start))
+      break
+    end
+    insert(parts, s:sub(start, pos - 1))
+    start = pos + 2
+  end
+
+  return parts
+end
+
+---@param sql_part string
+---@return string?
+local function extract_column_name(sql_part)
+  -- 1. T.col, user.name
+  local _, col = sql_part:match("^([%w_]+)%.([%w_]+)$")
+  if col then
+    return col
+  end
+
+  -- 2.  T.col AS alias, col AS alias
+  local alias = sql_part:match("[Aa][Ss]%s+([%w_]+)%s*$")
+  if alias then
+    return alias
+  end
+
+  -- 3. ignore function call
+  if sql_part:match("%b()") then
+    return nil
+  end
+
+  return sql_part:match("^([%w_]+)$")
+end
+
+---@param sql_text string
+---@return string[]
+local function extract_column_names(sql_text)
+  local columns = {}
+  local parts = split_string(sql_text, ", ")
+  for _, part in ipairs(parts) do
+    local col = extract_column_name(part)
+    if col then
+      insert(columns, col)
+    end
+  end
+  return columns
 end
 
 ---@param value DBValue
@@ -585,15 +639,11 @@ end
 ---@field private _distinct?  boolean
 ---@field private _distinct_on?  string
 ---@field private _returning?  string
----@field private _returning_args?  DBValue[]
----@field private _returning_literal_args?  DBValue[]
 ---@field private _insert?  string
 ---@field private _update?  string
 ---@field private _delete?  boolean
 ---@field private _using?  string
 ---@field private _select?  string
----@field private _select_args?  DBValue[]
----@field private _select_literal_args?  DBValue[]
 ---@field private _from?  string
 ---@field private _where?  string
 ---@field private _group?  string
@@ -895,7 +945,6 @@ function Sql:_base_returning(...)
   else
     self._returning = self._returning .. ", " .. s
   end
-  self:_keep_args("_returning_args", ...)
   return self
 end
 
@@ -1306,7 +1355,13 @@ end
 ---@param columns? string[]
 function Sql:_set_select_subquery_insert_token(subsql, columns)
   -- INSERT INTO T1(a,b,c) SELECT a,b,c FROM T2
-  local insert_columns = columns or flat(subsql._select_args)
+  local insert_columns = columns
+  if not insert_columns then
+    if not subsql._select then
+      error("subquery must have select clause")
+    end
+    insert_columns = extract_column_names(subsql._select)
+  end
   local columns_token = as_token(insert_columns)
   self._insert = format("(%s) %s", columns_token, subsql:statement())
 end
@@ -1316,7 +1371,16 @@ end
 ---@param columns? string[]
 function Sql:_set_cud_subquery_insert_token(subsql, columns)
   -- WITH D(a,b,c) AS (UPDATE T2 SET a=1,b=2,c=3 RETURNING a,b,c) INSERT INTO T1(a,b,c) SELECT a,b,c from D
-  local columns_token = as_token(columns or flat(subsql._returning_args))
+  local returning_columns
+  if not columns then
+    if not subsql._returning then
+      error("subquery must have returning clause")
+    end
+    returning_columns = extract_column_names(subsql._returning)
+  else
+    returning_columns = columns
+  end
+  local columns_token = as_token(returning_columns)
   local cudsql = Sql:new { table_name = "D", _select = columns_token }
   self:with(format("D(%s)", columns_token), subsql)
   self._insert = format("(%s) %s", columns_token, cudsql:statement())
@@ -1455,7 +1519,7 @@ end
 ---@return string
 function Sql:_base_get_update_query_token(subquery, columns)
   -- UPDATE T1 SET (a, b) = (SELECT a1, b1 FROM T2 WHERE T1.tid = T2.id);
-  local columns_token = as_token(columns or flat(subquery._select_args))
+  local columns_token = as_token(columns or extract_column_names(subquery._select))
   return format("(%s) = (%s)", columns_token, subquery:statement())
 end
 
@@ -2425,19 +2489,21 @@ function Sql:select(a, b, ...)
   else
     self._select = self._select .. ", " .. s
   end
-  self:_keep_args("_select_args", a, b, ...)
   return self
 end
 
----@param kwargs {[string]: string}
+---@param kwargs {[string]: string}|string
+---@param as? string
 ---@return self
-function Sql:select_as(kwargs)
+function Sql:select_as(kwargs, as)
+  if type(kwargs) == 'string' then
+    ---@cast as string
+    kwargs = { [kwargs] = as }
+  end
   local cols = {}
-  local keys = {}
   for key, alias in pairs(kwargs) do
     local col = self:_parse_column(key) .. ' AS ' .. alias
     cols[#cols + 1] = col
-    keys[#keys + 1] = key
   end
   if #cols > 0 then
     if not self._select then
@@ -2446,7 +2512,6 @@ function Sql:select_as(kwargs)
       self._select = self._select .. ", " .. concat(cols, ", ")
     end
   end
-  self:_keep_args("_select_args", unpack(keys))
   return self
 end
 
@@ -2461,7 +2526,6 @@ function Sql:select_literal(a, b, ...)
   else
     self._select = self._select .. ", " .. s
   end
-  self:_keep_args("_select_literal_args", a, b, ...)
   return self
 end
 
@@ -2469,11 +2533,9 @@ end
 ---@return self
 function Sql:select_literal_as(kwargs)
   local cols = {}
-  local keys = {}
   for key, alias in pairs(kwargs) do
     local col = as_literal(key) .. ' AS ' .. alias
     cols[#cols + 1] = col
-    keys[#keys + 1] = key
   end
   if #cols > 0 then
     if not self._select then
@@ -2482,7 +2544,6 @@ function Sql:select_literal_as(kwargs)
       self._select = self._select .. ", " .. concat(cols, ", ")
     end
   end
-  self:_keep_args("_select_literal_args", unpack(keys))
   return self
 end
 
@@ -2497,7 +2558,6 @@ function Sql:returning(a, b, ...)
   else
     self._returning = self._returning .. ", " .. s
   end
-  self:_keep_args("_returning_args", a, b, ...)
   return self
 end
 
@@ -2512,7 +2572,6 @@ function Sql:returning_literal(a, b, ...)
   else
     self._returning = self._returning .. ", " .. s
   end
-  self:_keep_args("_returning_literal_args", a, b, ...)
   return self
 end
 
@@ -2527,7 +2586,6 @@ function Sql:group(a, ...)
   end
   --** by default, group by columns are selected
   self:select(a, ...)
-  -- self:_keep_args("_group_args", a, ...)
   return self
 end
 
@@ -2752,7 +2810,7 @@ function Sql:insert(rows, columns)
   if not rows.__SQL_BUILDER__ then
     ---@cast rows Record|Record[]
     if not columns then
-      columns = get_keys(rows)
+      columns = self.model.names -- get_keys(rows)
     end
     if not self._skip_validate then
       rows = assert(self.model:_validate_create_data(rows, columns))
@@ -2853,7 +2911,12 @@ end
 function Sql:upsert(rows, key, columns)
   if rows.__SQL_BUILDER__ then
     if columns == nil then
-      columns = flat(rows._select_args or rows._returning_args)
+      local select_text = rows._select or rows._returning
+      if select_text then
+        columns = extract_column_names(select_text)
+      else
+        error("subquery must have select or returning clause")
+      end
     end
     if key == nil then
       key = self:_get_bulk_key(columns)
@@ -2876,7 +2939,12 @@ end
 function Sql:updates(rows, key, columns)
   if rows.__SQL_BUILDER__ then
     if columns == nil then
-      columns = flat(rows._select_args or rows._returning_args)
+      local select_text = rows._select or rows._returning
+      if select_text then
+        columns = extract_column_names(select_text)
+      else
+        error("subquery must have select or returning clause")
+      end
     end
     if key == nil then
       key = self:_get_bulk_key(columns)
@@ -3731,11 +3799,17 @@ function Xodel:_make_model_class(opts)
   return proxy
 end
 
-local EXTEND_ATTRS = { 'label', 'referenced_label_column', 'preload' }
+local EXTEND_ATTRS = { 'table_name', 'label', 'referenced_label_column', 'preload' }
 ---@param options ModelOpts
 ---@return ModelOpts
 function Xodel:normalize(options)
   local extends = options.extends
+  local abstract
+  if options.abstract ~= nil then
+    abstract = not not options.abstract
+  else
+    abstract = options.table_name == nil
+  end
   local model = {
     table_name = options.table_name,
     admin = clone(options.admin or {}),
@@ -3777,12 +3851,6 @@ function Xodel:normalize(options)
   end
   model.field_names = normalize_field_names(clone(opts_names))
   model.fields = {}
-  local abstract
-  if options.abstract ~= nil then
-    abstract = not not options.abstract
-  else
-    abstract = model.table_name == nil
-  end
   for _, name in ipairs(model.field_names) do
     if not abstract then
       self.check_field_name(model, name)

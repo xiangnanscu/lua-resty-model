@@ -121,31 +121,31 @@ INSERT INTO blog AS T (name, tagline) VALUES ('Second Blog', 'Another interestin
 ```
 
 ```sql
-INSERT INTO author AS T (name, email, age, resume) VALUES ('John Doe', 'john@example.com', 30, '[{"start_date":"2015-01-01","end_date":"2020-01-01","company":"Company A","position":"Developer","description":"Worked on various projects."}]')
+INSERT INTO author AS T (name, email, age, resume) VALUES ('John Doe', 'john@example.com', 30, '[{"end_date":"2020-01-01","company":"Company A","position":"Developer","description":"Worked on various projects.","start_date":"2015-01-01"}]')
 ```
 
 ```sql
-INSERT INTO author AS T (name, email, age, resume) VALUES ('Jane Smith', 'jane@example.com', 28, '[{"start_date":"2016-01-01","end_date":"2021-01-01","company":"Company B","position":"Designer","description":"Designed user interfaces."}]')
+INSERT INTO author AS T (name, email, age, resume) VALUES ('Jane Smith', 'jane@example.com', 28, '[{"end_date":"2021-01-01","company":"Company B","position":"Designer","description":"Designed user interfaces.","start_date":"2016-01-01"}]')
 ```
 
 ```sql
-INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (4, 'First Entry', '2023-01-01', 'This is the first entry in my blog.', 1, '2023-01-02', 5, 2)
+INSERT INTO entry AS T (blog_id, reposted_blog_id, headline, body_text, pub_date, mod_date, number_of_comments, number_of_pingbacks, rating) VALUES (1, DEFAULT, 'First Entry', 'This is the first entry in my blog.', '2023-01-01', '2023-01-02', 5, 2, 4)
 ```
 
 ```sql
-INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (5, 'Second Entry', '2023-01-03', 'This is the second entry in another blog.', 2, '2023-01-04', 3, 1)
+INSERT INTO entry AS T (blog_id, reposted_blog_id, headline, body_text, pub_date, mod_date, number_of_comments, number_of_pingbacks, rating) VALUES (2, DEFAULT, 'Second Entry', 'This is the second entry in another blog.', '2023-01-03', '2023-01-04', 3, 1, 5)
 ```
 
 ```sql
-INSERT INTO entry AS T (rating, headline, pub_date, body_text, blog_id, mod_date, number_of_comments, number_of_pingbacks) VALUES (4, 'Third Entry', '2023-01-01', 'This is the third entry in my blog.', 1, '2023-01-02', 5, 2)
+INSERT INTO entry AS T (blog_id, reposted_blog_id, headline, body_text, pub_date, mod_date, number_of_comments, number_of_pingbacks, rating) VALUES (1, DEFAULT, 'Third Entry', 'This is the third entry in my blog.', '2023-01-01', '2023-01-02', 5, 2, 4)
 ```
 
 ```sql
-INSERT INTO view_log AS T (ctime, entry_id) VALUES ('2023-01-01 10:00:00', 1)
+INSERT INTO view_log AS T (entry_id, ctime) VALUES (1, '2023-01-01 10:00:00')
 ```
 
 ```sql
-INSERT INTO view_log AS T (ctime, entry_id) VALUES ('2023-01-03 12:00:00', 2)
+INSERT INTO view_log AS T (entry_id, ctime) VALUES (2, '2023-01-03 12:00:00')
 ```
 
 ```sql
@@ -157,11 +157,11 @@ INSERT INTO publisher AS T (name) VALUES ('Publisher B')
 ```
 
 ```sql
-INSERT INTO book AS T (rating, pages, price, name, pubdate, publisher_id, author) VALUES (4.5, 300, 29.99, 'Book One', '2022-01-01', 1, 1)
+INSERT INTO book AS T (name, pages, price, rating, author, publisher_id, pubdate) VALUES ('Book One', 300, 29.99, 4.5, 1, 1, '2022-01-01')
 ```
 
 ```sql
-INSERT INTO book AS T (rating, pages, price, name, pubdate, publisher_id, author) VALUES (4, 250, 19.99, 'Book Two', '2022-02-01', 2, 2)
+INSERT INTO book AS T (name, pages, price, rating, author, publisher_id, pubdate) VALUES ('Book Two', 250, 19.99, 4, 2, 2, '2022-02-01')
 ```
 
 ```sql
@@ -324,7 +324,7 @@ ok 7 - Xodel:select(a:(fun(ctx:table):string|table)|DBValue, b?:DBValue, ...:DBV
 ```
 
 ```sql
-SELECT T.name AS book_name, T1.name AS author_name FROM book T INNER JOIN author T1 ON (T.author = T1.id) WHERE T.id = 1
+SELECT T1.name AS author_name, T.name AS book_name FROM book T INNER JOIN author T1 ON (T.author = T1.id) WHERE T.id = 1
 ```
 
 ```js
@@ -1047,7 +1047,7 @@ SELECT T.note FROM blog_bin T WHERE T.name = 'First Blog' LIMIT 2
 ok 22 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 检验上面插入的数据select_literal
 ## 从子查询update+returning插入数据
 ```sql
-INSERT INTO blog AS T (name) VALUES ('update returning')
+INSERT INTO blog AS T (name, tagline) VALUES ('update returning', 'default tagline')
 ```
 
 ```lua
@@ -1191,7 +1191,7 @@ Blog:insert{name = 'Default Test Blog'}:returning{'name', 'tagline'}:exec()
 ```
 
 ```sql
-INSERT INTO blog AS T (name) VALUES ('Default Test Blog') RETURNING T.name, T.tagline
+INSERT INTO blog AS T (name, tagline) VALUES ('Default Test Blog', 'default tagline') RETURNING T.name, T.tagline
 ```
 
 ```js
@@ -1215,20 +1215,10 @@ ok 27 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) 插入数据并�
 ```
 
 ```sql
-INSERT INTO blog AS T (name) VALUES ('First Blog')
+INSERT INTO blog AS T (name, tagline) VALUES ('First Blog', 'default tagline')
 ```
 
 ok 28 - Xodel:insert抛出异常的情况 唯一性错误
-## 传入非法字段
-```lua
-Blog:insert{
-  illegal_field = 'Test Blog',
-  tagline = 'Test tagline'
-}:exec()
-      
-```
-
-ok 29 - Xodel:insert抛出异常的情况 传入非法字段
 ## 传入名称过长
 ```lua
 Blog:insert{
@@ -1238,7 +1228,7 @@ Blog:insert{
       
 ```
 
-ok 30 - Xodel:insert抛出异常的情况 传入名称过长
+ok 29 - Xodel:insert抛出异常的情况 传入名称过长
 ## 插入多行时其中某行名称过长
 ```lua
 Blog:insert{
@@ -1248,21 +1238,21 @@ Blog:insert{
       
 ```
 
-ok 31 - Xodel:insert抛出异常的情况 插入多行时其中某行名称过长
+ok 30 - Xodel:insert抛出异常的情况 插入多行时其中某行名称过长
 ## 插入复合字段出错(Author的resume字段)
 ```lua
 Author:insert{resume={{company='123456789012345678901234567890'}}}:exec()
       
 ```
 
-ok 32 - Xodel:insert抛出异常的情况 插入复合字段出错(Author的resume字段)
+ok 31 - Xodel:insert抛出异常的情况 插入复合字段出错(Author的resume字段)
 ## 插入多行复合字段出错(Author的resume字段)
 ```lua
 Author:insert{{resume={{company='123456789012345678901234567890'}}}}:exec()
       
 ```
 
-ok 33 - Xodel:insert抛出异常的情况 插入多行复合字段出错(Author的resume字段)
+ok 32 - Xodel:insert抛出异常的情况 插入多行复合字段出错(Author的resume字段)
 ## 从子查询插入数据列数不一致而出错1
 ```lua
 BlogBin:insert(
@@ -1277,7 +1267,7 @@ BlogBin:insert(
 INSERT INTO blog_bin AS T (name) SELECT T.name, T.tagline FROM blog T WHERE T.name = 'First Blog'
 ```
 
-ok 34 - Xodel:insert抛出异常的情况 从子查询插入数据列数不一致而出错1
+ok 33 - Xodel:insert抛出异常的情况 从子查询插入数据列数不一致而出错1
 ## 从子查询插入数据列数不一致而出错2
 ```lua
 BlogBin:insert(
@@ -1292,7 +1282,7 @@ BlogBin:insert(
 INSERT INTO blog_bin AS T (name, tagline, note) SELECT T.name, T.tagline FROM blog T WHERE T.name = 'First Blog'
 ```
 
-ok 35 - Xodel:insert抛出异常的情况 从子查询插入数据列数不一致而出错2
+ok 34 - Xodel:insert抛出异常的情况 从子查询插入数据列数不一致而出错2
 # Xodel:update
 ## update basic
 ```lua
@@ -1316,7 +1306,7 @@ UPDATE blog T SET tagline = 'changed tagline' WHERE T.name = 'First Blog' RETURN
 ]
 ```
 
-ok 36 - Xodel:update update basic
+ok 35 - Xodel:update update basic
 ## update with join
 ```lua
 Entry:update { headline = F('blog_id__name') }
@@ -1341,7 +1331,7 @@ UPDATE entry T SET headline = T1.name FROM blog T1 WHERE (T.id = 1) AND (T.blog_
 SELECT T.headline FROM entry T WHERE T.id = 1 LIMIT 2
 ```
 
-ok 37 - Xodel:update update with join
+ok 36 - Xodel:update update with join
 ## update with function
 ```lua
 Entry:update {
@@ -1368,7 +1358,7 @@ UPDATE entry T SET headline = (T.headline || ' suffix by function') WHERE T.id =
 SELECT T.headline FROM entry T WHERE T.id = 1 LIMIT 2
 ```
 
-ok 38 - Xodel:update update with function
+ok 37 - Xodel:update update with function
 ## increase
 ```sql
 SELECT T.rating FROM entry T WHERE T.id = 1 LIMIT 2
@@ -1390,7 +1380,7 @@ UPDATE entry T SET rating = (T.rating + 1) WHERE T.id = 1 RETURNING T.rating
 ]
 ```
 
-ok 39 - Xodel:update increase
+ok 38 - Xodel:update increase
 ## increase two fields
 ```sql
 SELECT * FROM entry T WHERE T.id = 1 LIMIT 2
@@ -1401,7 +1391,7 @@ SELECT * FROM entry T WHERE T.id = 1 LIMIT 2
 ```
 
 ```sql
-UPDATE entry T SET number_of_comments = (T.number_of_comments + 1), number_of_pingbacks = (T.number_of_pingbacks + 2) WHERE T.id = 1 RETURNING *
+UPDATE entry T SET number_of_pingbacks = (T.number_of_pingbacks + 2), number_of_comments = (T.number_of_comments + 1) WHERE T.id = 1 RETURNING *
 ```
 
 ```js
@@ -1420,7 +1410,7 @@ UPDATE entry T SET number_of_comments = (T.number_of_comments + 1), number_of_pi
 ]
 ```
 
-ok 40 - Xodel:update increase two fields
+ok 39 - Xodel:update increase two fields
 ## increase string args
 ```sql
 SELECT T.rating FROM entry T WHERE T.id = 1 LIMIT 2
@@ -1442,7 +1432,7 @@ UPDATE entry T SET rating = (T.rating + 2) WHERE T.id = 1 RETURNING T.rating
 ]
 ```
 
-ok 41 - Xodel:update increase string args
+ok 40 - Xodel:update increase string args
 ## update with where join
 ```lua
 Entry:update {
@@ -1474,7 +1464,7 @@ UPDATE entry T SET headline = (T.headline || ' from first blog') FROM blog T1 WH
 SELECT T.id, T.headline FROM entry T WHERE T.headline LIKE '% from first blog'
 ```
 
-ok 42 - Xodel:update update with where join
+ok 41 - Xodel:update update with where join
 # Xodel:merge
 ## merge basic
 ```lua
@@ -1485,7 +1475,7 @@ Blog:merge {
 ```
 
 ```sql
-WITH V(name, tagline) AS (VALUES ('First Blog'::varchar, 'updated by merge'::text), ('Blog added by merge', 'inserted by merge')), U AS (UPDATE blog W SET tagline = V.tagline FROM V WHERE V.name = W.name RETURNING V.name, V.tagline) INSERT INTO blog AS T (name, tagline) SELECT V.name, V.tagline FROM V LEFT JOIN U AS W ON (V.name = W.name) WHERE W.name IS NULL
+WITH V(tagline, name) AS (VALUES ('updated by merge'::text, 'First Blog'::varchar), ('inserted by merge', 'Blog added by merge')), U AS (UPDATE blog W SET tagline = V.tagline FROM V WHERE V.name = W.name RETURNING V.tagline, V.name) INSERT INTO blog AS T (tagline, name) SELECT V.tagline, V.name FROM V LEFT JOIN U AS W ON (V.name = W.name) WHERE W.name IS NULL
 ```
 
 ```js
@@ -1502,7 +1492,7 @@ SELECT T.tagline FROM blog T WHERE T.name = 'First Blog' LIMIT 2
 DELETE FROM blog T WHERE T.name = 'Blog added by merge'
 ```
 
-ok 43 - Xodel:merge merge basic
+ok 42 - Xodel:merge merge basic
 ## merge insert only
 ```sql
 SELECT * FROM blog T WHERE T.name = 'First Blog' LIMIT 2
@@ -1534,13 +1524,13 @@ SELECT T.name, T.tagline FROM blog T WHERE T.name = 'Blog added by merge' LIMIT 
 DELETE FROM blog T WHERE T.name = 'Blog added by merge'
 ```
 
-ok 44 - Xodel:merge merge insert only
+ok 43 - Xodel:merge merge insert only
 ## merge抛出异常的情况
 ```lua
  Author:merge { { name = 'Tom', age = 11 }, { name = 'Jerry', age = 101 } }:exec() 
 ```
 
-ok 45 - Xodel:merge merge抛出异常的情况
+ok 44 - Xodel:merge merge抛出异常的情况
 # Xodel:upsert
 ## upsert basic
 ```lua
@@ -1552,7 +1542,7 @@ Blog:upsert {
 ```
 
 ```sql
-INSERT INTO blog AS T (name, tagline) VALUES ('First Blog', 'updated by upsert'), ('Blog added by upsert', 'inserted by upsert') ON CONFLICT (name) DO UPDATE SET tagline = EXCLUDED.tagline
+INSERT INTO blog AS T (tagline, name) VALUES ('updated by upsert', 'First Blog'), ('inserted by upsert', 'Blog added by upsert') ON CONFLICT (name) DO UPDATE SET tagline = EXCLUDED.tagline
 ```
 
 ```js
@@ -1573,7 +1563,7 @@ SELECT T.name, T.tagline FROM blog T WHERE T.name = 'Blog added by upsert' LIMIT
 DELETE FROM blog T WHERE T.name = 'Blog added by upsert'
 ```
 
-ok 46 - Xodel:upsert upsert basic
+ok 45 - Xodel:upsert upsert basic
 ## upsert from returning
 ```sql
 SELECT * FROM blog_bin T
@@ -1584,7 +1574,7 @@ DELETE FROM blog_bin T
 ```
 
 ```sql
-INSERT INTO blog_bin AS T (name, tagline) VALUES ('B1', 'tag1'), ('B2', 'tag2')
+INSERT INTO blog_bin AS T (name, tagline, note) VALUES ('B1', 'tag1', ''), ('B2', 'tag2', '')
 ```
 
 ```lua
@@ -1628,10 +1618,10 @@ DELETE FROM blog_bin T
 ```
 
 ```sql
-INSERT INTO blog_bin AS T (name, note, id, tagline) VALUES ('Second Blog', '', 1, 'Another interesting blog'), ('First Blog', 'select from another blog', 2, 'Welcome to my blog'), ('update returning 2', 'update from another blog', 3, 'default tagline'), ('delete returning', 'deleted from another blog', 4, 'delete returning tagline'), ('delete returning', '', 5, 'no column')
+INSERT INTO blog_bin AS T (name, tagline, note) VALUES ('Second Blog', 'Another interesting blog', ''), ('First Blog', 'Welcome to my blog', 'select from another blog'), ('update returning 2', 'default tagline', 'update from another blog'), ('delete returning', 'delete returning tagline', 'deleted from another blog'), ('delete returning', 'no column', '')
 ```
 
-ok 47 - Xodel:upsert upsert from returning
+ok 46 - Xodel:upsert upsert from returning
 ## upsert from select
 ```lua
 Blog:upsert(
@@ -1668,24 +1658,24 @@ INSERT INTO blog AS T (name, tagline) SELECT DISTINCT ON(T.name) T.name, T.tagli
 DELETE FROM blog T WHERE T.id IN (20, 21)
 ```
 
-ok 48 - Xodel:upsert upsert from select
+ok 47 - Xodel:upsert upsert from select
 # upsert抛出异常的情况
 ## single upsert
 ```lua
   Author:upsert { { name = 'Tom', age = 111 } }:exec() 
 ```
 
-ok 49 - upsert抛出异常的情况 single upsert
+ok 48 - upsert抛出异常的情况 single upsert
 ## multiple upsert
 ```lua
   Author:upsert { { name = 'Tom', age = 11 }, { name = 'Jerry', age = 101 } }:exec() 
 ```
 
-ok 50 - upsert抛出异常的情况 multiple upsert
+ok 49 - upsert抛出异常的情况 multiple upsert
 # Xodel:updates
 ## updates basic
 ```sql
-INSERT INTO blog AS T (name) VALUES ('Third Blog')
+INSERT INTO blog AS T (name, tagline) VALUES ('Third Blog', 'default tagline')
 ```
 
 ```lua
@@ -1697,7 +1687,7 @@ Blog:updates({
 ```
 
 ```sql
-WITH V(name, tagline) AS (VALUES ('Third Blog'::varchar, 'Updated by updates'::text), ('Fourth Blog', 'wont update')) UPDATE blog T SET tagline = V.tagline FROM V WHERE V.name = T.name
+WITH V(tagline, name) AS (VALUES ('Updated by updates'::text, 'Third Blog'::varchar), ('wont update', 'Fourth Blog')) UPDATE blog T SET tagline = V.tagline FROM V WHERE V.name = T.name
 ```
 
 ```js
@@ -1714,7 +1704,7 @@ SELECT T.tagline FROM blog T WHERE T.name = 'Third Blog' LIMIT 2
 DELETE FROM blog T WHERE T.name = 'Third Blog'
 ```
 
-ok 51 - Xodel:updates updates basic
+ok 50 - Xodel:updates updates basic
 ## updates from SELECT subquery
 ```lua
 BlogBin:updates(
@@ -1740,7 +1730,7 @@ WITH V(name, tagline) AS (SELECT T.name, T.tagline FROM blog T WHERE T.name = 'S
 SELECT T.tagline FROM blog_bin T WHERE T.name = 'Second Blog' LIMIT 2
 ```
 
-ok 52 - Xodel:updates updates from SELECT subquery
+ok 51 - Xodel:updates updates from SELECT subquery
 ## updates from UPDATE subquery
 ```sql
 WITH D(name, tagline) AS (INSERT INTO blog AS T (name, tagline) VALUES ('Third Blog', 'Third interesting blog') RETURNING T.name, T.tagline) INSERT INTO blog_bin AS T (name, tagline) SELECT name, tagline FROM D
@@ -1779,7 +1769,7 @@ SELECT T.tagline FROM blog T WHERE T.name = 'Third Blog' LIMIT 2
 DELETE FROM blog T WHERE T.name = 'Third Blog'
 ```
 
-ok 53 - Xodel:updates updates from UPDATE subquery
+ok 52 - Xodel:updates updates from UPDATE subquery
 # updates抛出异常的情况
 ## updates without primary key
 ```lua
@@ -1789,13 +1779,13 @@ Blog:updates{
       
 ```
 
-ok 54 - updates抛出异常的情况 updates without primary key
+ok 53 - updates抛出异常的情况 updates without primary key
 ## multiple updates
 ```lua
   Author:updates{ { id = 1, age = 11 }, { id = 2, age = 101 } }:exec() 
 ```
 
-ok 55 - updates抛出异常的情况 multiple updates
+ok 54 - updates抛出异常的情况 multiple updates
 ## updates with invalid field
 ```lua
 Author:updates({
@@ -1804,6 +1794,6 @@ Author:updates({
       
 ```
 
-ok 56 - updates抛出异常的情况 updates with invalid field
-1..56
+ok 55 - updates抛出异常的情况 updates with invalid field
+1..55
 Done in 0.31s.
