@@ -499,6 +499,12 @@ mdesc("Xodel:where", function()
     assert.are.same(res, "SELECT T.name, SUM(T.price) AS price_sum FROM book T GROUP BY T.name HAVING SUM(T.price) > 100")
   end)
 
+  mdesc("group by book name with having condition with Q object", function()
+    local res = eval [[ Book:group_by { 'name' }:annotate { Sum('price') }:having(Q { price_sum__lt = 100 } / Q { price_sum__gt = 200 }) ]]
+    assert.are.same(res,
+      "SELECT T.name, SUM(T.price) AS price_sum FROM book T GROUP BY T.name HAVING (SUM(T.price) < 100) OR (SUM(T.price) > 200)")
+  end)
+
   mdesc("group by book name with having total price condition", function()
     local res = eval [[ Book:group_by { 'name' }:annotate { price_total = Sum('price') }:having { price_total__gt = 100 } ]]
     assert.are.same(res,

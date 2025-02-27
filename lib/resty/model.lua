@@ -660,7 +660,7 @@ end
 ---@field private _join_type?  string
 ---@field private _join_args?  table[]
 ---@field private _group_args? string[]
----@field private _join_models?  Xodel[]
+---@field private _join_proxy_models?  Xodel[]
 ---@field private _join_alias?  string[]
 ---@field private _prepend?  (Sql|string)[]
 ---@field private _append?  (Sql|string)[]
@@ -1000,18 +1000,16 @@ function Sql:_ensure_context()
       [self.model.class_name] = main_proxy
     }
     self._join_alias = { alias }
-    self._join_models = { self.model }
   end
 end
 
---TODO:
 ---@private
 ---@param join_type string
----@param fk_models Xodel[]
----@param callback function
+---@param fk_model Xodel
+---@param callback fun(ctx:table):string
 ---@param join_key? string
 ---@return string
-function Sql:_handle_manual_join(join_type, fk_models, callback, join_key)
+function Sql:_handle_manual_join(join_type, fk_model, callback, join_key)
   self:_ensure_context()
   if not self._join_args then
     self._join_args = {}
@@ -1020,54 +1018,35 @@ function Sql:_handle_manual_join(join_type, fk_models, callback, join_key)
     self._join_keys = {}
   end
   local offset = #self._join_proxy_models
-  for i, fk_model in ipairs(fk_models) do
-    local right_alias = 'T' .. #self._join_models
-    local proxy = self:_create_join_proxy(fk_model, right_alias)
-    self._join_proxy_models[#self._join_proxy_models + 1] = proxy
-    self._join_proxy_models[fk_model.table_name] = proxy
-    self._join_proxy_models[fk_model.class_name] = proxy
-    self._join_alias[#self._join_alias + 1] = right_alias
-    self._join_models[#self._join_models + 1] = fk_model
-    self._join_keys[join_key or right_alias] = right_alias
-    -- res[#res + 1] = { proxy = proxy, alias = right_alias, model = fk_model }
-  end
+  local right_alias = 'T' .. #self._join_proxy_models
+  local proxy = self:_create_join_proxy(fk_model, right_alias)
+  self._join_proxy_models[#self._join_proxy_models + 1] = proxy
+  self._join_proxy_models[fk_model.table_name] = proxy
+  self._join_proxy_models[fk_model.class_name] = proxy
+  self._join_alias[#self._join_alias + 1] = right_alias
+  self._join_keys[join_key or right_alias] = right_alias
   local join_conds = callback(self._join_proxy_models)
-  if type(join_conds) == 'string' then
-    join_conds = { join_conds }
-  end
-  for i, fk_model in ipairs(fk_models) do
-    local right_alias_declare = fk_model.table_name .. ' ' .. self._join_alias[offset + i]
-    self._join_args[#self._join_args + 1] = { join_type, right_alias_declare, join_conds[i] }
-  end
+  local right_alias_declare = fk_model.table_name .. ' ' .. self._join_alias[offset + 1]
+  self._join_args[#self._join_args + 1] = { join_type, right_alias_declare, join_conds }
   return self._join_alias[#self._join_alias]
 end
 
---TODO:
 ---@private
 ---@param join_type string
----@param join_args table|string
----@param ... any
+---@param join_args string|Xodel
+---@param key string|fun(ctx:table):string
+---@param op? string
+---@param val? DBValue
 ---@return self
-function Sql:_base_join(join_type, join_args, ...)
+function Sql:_base_join(join_type, join_args, key, op, val)
   if type(join_args) == 'table' then
-    if join_args.__IS_MODEL_CLASS__ then
-      local fk_models = {}
-      local res = { join_args, ... }
-      local callback
-      for i, a in ipairs(res) do
-        if i == #res then
-          callback = a
-        else
-          fk_models[#fk_models + 1] = a
-        end
-      end
-      ---@diagnostic disable-next-line: param-type-mismatch
-      self:_handle_manual_join(join_type, fk_models, callback)
-      return self
-    else
-      error("invalid argument, it must be a pair: { model_class, condition_callback }")
-    end
+    ---@cast join_args Xodel
+    ---@cast key fun(ctx:table):string
+    self:_handle_manual_join(join_type, join_args, key)
+    return self
   else
+    ---@cast join_args string
+    ---@cast key string
     local fk = self.model.foreignkey_fields[join_args]
     if fk then
       return self:_base_join("INNER", fk.reference, function(ctx)
@@ -1076,7 +1055,7 @@ function Sql:_base_join(join_type, join_args, ...)
           ctx[fk.reference.table_name][fk.reference_column])
       end)
     else
-      return self:_base_join_raw(join_type, join_args, ...)
+      return self:_base_join_raw(join_type, join_args, key, op, val)
     end
   end
 end
@@ -1089,6 +1068,77 @@ end
 function Sql:_base_where(cond, op, dval)
   local where_token = self:_base_get_condition_token(cond, op, dval)
   return self:_handle_where_token(where_token, "(%s) AND (%s)")
+end
+
+---@private
+---@param cols Keys
+---@param op "IN"|"NOT IN"
+---@param range Sql|table
+---@return string
+function Sql:_get_in_token(cols, op, range)
+  if range.__SQL_BUILDER__ then
+    return format("(%s) %s (%s)", as_token(cols), op, range:statement())
+  else
+    return format("(%s) %s %s", as_token(cols), op, as_literal(range))
+  end
+end
+
+---@private
+---@param cols string|string[]
+---@param range Sql|table
+---@return self
+function Sql:_base_where_in(cols, range)
+  local in_token = self:_get_in_token(cols, "IN", range)
+  if self._where then
+    self._where = format("(%s) AND %s", self._where, in_token)
+  else
+    self._where = in_token
+  end
+  return self
+end
+
+---@param cols string|string[]
+---@param range Sql|table
+---@return self
+function Sql:where_in(cols, range)
+  if type(cols) == "string" then
+    return Sql._base_where_in(self, self:_parse_column(cols), range)
+  else
+    local res = {}
+    for i = 1, #cols do
+      res[i] = self:_parse_column(cols[i])
+    end
+    return Sql._base_where_in(self, res, range)
+  end
+end
+
+---@private
+---@param cols string|string[]
+---@param range Sql|table
+---@return self
+function Sql:_base_where_not_in(cols, range)
+  local not_in_token = self:_get_in_token(cols, "NOT IN", range)
+  if self._where then
+    self._where = format("(%s) AND %s", self._where, not_in_token)
+  else
+    self._where = not_in_token
+  end
+  return self
+end
+
+---@param cols string|string[]
+---@param range Sql|table
+---@return self
+function Sql:where_not_in(cols, range)
+  if type(cols) == "string" then
+    return Sql._base_where_not_in(self, self:_parse_column(cols), range)
+  else
+    local res = {}
+    for i = 1, #cols do
+      res[i] = self:_parse_column(cols[i])
+    end
+    return Sql._base_where_not_in(self, res, range)
+  end
 end
 
 ---@private
@@ -1238,7 +1288,7 @@ end
 ---get select token
 ---@private
 ---@param context ColumnContext
----@param a (fun(ctx:table):string|table)|DBValue
+---@param a DBValue|fun(ctx:table):string
 ---@param b? DBValue
 ---@param ... DBValue
 ---@return string
@@ -1608,23 +1658,6 @@ function Sql:_get_condition_token_from_table(kwargs, logic)
   end
 end
 
---TODO:
----@private
----@param kwargs {[string]:any}
----@param logic? string
----@return string
-function Sql:_get_having_condition_token_from_table(kwargs, logic)
-  local tokens = {}
-  for k, value in pairs(kwargs) do
-    tokens[#tokens + 1] = self:_get_expr_token(value, self:_parse_having_column(k))
-  end
-  if logic == nil then
-    return concat(tokens, " AND ")
-  else
-    return concat(tokens, " " .. logic .. " ")
-  end
-end
-
 ---@private
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? DBValue
@@ -1648,26 +1681,18 @@ function Sql:_get_condition_token(cond, op, dval)
   end
 end
 
---TODO:
 ---@private
----@param cond table|string|fun(ctx:table):string
----@param op? DBValue
----@param dval? DBValue
+---@param cond {[string]: DBValue}|QClass
 ---@return string
-function Sql:_get_having_condition_token(cond, op, dval)
-  if op == nil then
-    if type(cond) == 'table' then
-      return Sql._get_having_condition_token_from_table(self, cond)
-    else
-      return Sql._base_get_condition_token(self, cond)
-    end
-  elseif dval == nil then
-    ---@cast cond string
-    return format("%s = %s", self:_get_having_column(cond), as_literal(op))
-  else
-    ---@cast cond string
-    return format("%s %s %s", self:_get_having_column(cond), op, as_literal(dval))
+function Sql:_get_having_condition_token(cond)
+  if cond.__IS_LOGICAL_BUILDER__ then
+    return self:_resolve_Q(cond, "having")
   end
+  local tokens = {}
+  for key, value in pairs(cond) do
+    tokens[#tokens + 1] = self:_get_expr_token(value, self:_parse_having_column(key))
+  end
+  return concat(tokens, " AND ")
 end
 
 ---@private
@@ -1899,11 +1924,10 @@ function Sql:_get_order_column(key)
   end
 end
 
---TODO: narrow down the type of a to string|table|function
 ---@private
----@param a (fun(ctx:table):string|table)|DBValue
----@param b? DBValue
----@param ...? DBValue
+---@param a string|table|fun(ctx:table):string
+---@param b? string|table
+---@param ...? string|table
 ---@return string
 function Sql:_get_order_columns(a, b, ...)
   if b == nil then
@@ -1939,30 +1963,27 @@ end
 
 ---@private
 ---@param q QClass
+---@param context? "where"|"having"
 ---@return string
-function Sql:_resolve_Q(q)
+function Sql:_resolve_Q(q, context)
   if q.logic == "NOT" then
     return format("NOT (%s)", self:_resolve_Q(q.left))
   elseif q.left and q.right then
     local left_token = self:_resolve_Q(q.left)
     local right_token = self:_resolve_Q(q.right)
     return format("(%s) %s (%s)", left_token, q.logic, right_token)
-  else
+  elseif context == nil or context == "where" then
     return self:_get_condition_token_from_table(q.cond, q.logic)
+  elseif context == "having" then
+    return self:_get_having_condition_token(q.cond)
   end
 end
 
---TODO:
---- {{id=1}, {id=2}, {id=3}} => columns: {'id'}  keys: {{1},{2},{3}}
---- each row of keys must be the same struct, so get columns from first row
 ---@private
 ---@param keys Record[]
 ---@param columns? string[]
 ---@return self
-function Sql:_base_get_multiple(keys, columns)
-  if #keys == 0 then
-    error("empty keys passed to get_multiple")
-  end
+function Sql:_base_gets(keys, columns)
   columns = columns or get_keys(keys[1])
   keys = self:_get_cte_values_literal(keys, columns)
   local join_cond = self:_get_join_condition_from_key(columns, "V", self._as or self.table_name)
@@ -2101,7 +2122,7 @@ function Sql:_parse_column(key, context)
               end
               return format("%s = %s", ctx[left_model_index][last_token], ctx[#ctx][last_field.reference_column])
             end
-            prefix = self:_handle_manual_join(self._join_type or "INNER", { model }, join_cond_cb, join_key)
+            prefix = self:_handle_manual_join(self._join_type or "INNER", model, join_cond_cb, join_key)
           end
         end
       else
@@ -2166,7 +2187,7 @@ function Sql:_parse_column(key, context)
           else
             join_type = self._join_type or "INNER"
           end
-          prefix = self:_handle_manual_join(join_type, { reversed_model }, join_cond_cb, join_key)
+          prefix = self:_handle_manual_join(join_type, reversed_model, join_cond_cb, join_key)
         end
         column = reversed_model.primary_key
         field = reversed_field
@@ -2222,7 +2243,6 @@ function Sql:_parse_having_column(key)
   return self:_get_having_column(token), op
 end
 
---TODO: support key as a column name, not a alias
 ---@private
 ---@param key string
 ---@return string
@@ -2233,7 +2253,7 @@ function Sql:_get_having_column(key)
       return res
     end
   end
-  error(format("invalid field name for having: '%s'", key))
+  error(format("invalid alias for having: '%s'", key))
 end
 
 ---@private
@@ -2476,7 +2496,7 @@ function Sql:delete(cond, op, dval)
   return self
 end
 
----@param a (fun(ctx:table):string|table)|DBValue
+---@param a DBValue|fun(ctx:table):string
 ---@param b? DBValue
 ---@param ...? DBValue
 ---@return self
@@ -2545,7 +2565,7 @@ function Sql:select_literal_as(kwargs)
   return self
 end
 
----@param a (fun(ctx:table):string)|DBValue
+---@param a DBValue|fun(ctx:table):string
 ---@param b? DBValue
 ---@param ...? DBValue
 ---@return self
@@ -2589,8 +2609,8 @@ end
 
 function Sql:group_by(...) return self:group(...) end
 
----@param a (fun(ctx:table):string|table)|DBValue
----@param ...? DBValue
+---@param a string|table|fun(ctx:table):string
+---@param ...? string|table
 ---@return self
 function Sql:order(a, ...)
   local s = self:_get_order_columns(a, ...)
@@ -2630,8 +2650,8 @@ function Sql:get_table()
   end
 end
 
----@param join_args string|table
----@param key string
+---@param join_args string|Xodel join model or foreign key
+---@param key string|fun(ctx:table):string join condition or left part of join cond or join callback
 ---@param op? string
 ---@param val? DBValue
 ---@return self
@@ -2639,8 +2659,8 @@ function Sql:join(join_args, key, op, val)
   return self:_base_join("INNER", join_args, key, op, val)
 end
 
----@param join_args string|table
----@param key string
+---@param join_args string|Xodel
+---@param key string|fun(ctx:table):string
 ---@param op? string
 ---@param val? DBValue
 ---@return self
@@ -2648,8 +2668,8 @@ function Sql:inner_join(join_args, key, op, val)
   return self:_base_join("INNER", join_args, key, op, val)
 end
 
----@param join_args string|table
----@param key string
+---@param join_args string|Xodel
+---@param key string|fun(ctx:table):string
 ---@param op? string
 ---@param val? DBValue
 ---@return self
@@ -2657,8 +2677,8 @@ function Sql:left_join(join_args, key, op, val)
   return self:_base_join("LEFT", join_args, key, op, val)
 end
 
----@param join_args string|table
----@param key string
+---@param join_args string|Xodel
+---@param key string|fun(ctx:table):string
 ---@param op? string
 ---@param val? DBValue
 ---@return self
@@ -2666,8 +2686,8 @@ function Sql:right_join(join_args, key, op, val)
   return self:_base_join("RIGHT", join_args, key, op, val)
 end
 
----@param join_args string|table
----@param key string
+---@param join_args string|Xodel
+---@param key string|fun(ctx:table):string
 ---@param op string
 ---@param val DBValue
 ---@return self
@@ -2675,8 +2695,8 @@ function Sql:full_join(join_args, key, op, val)
   return self:_base_join("FULL", join_args, key, op, val)
 end
 
----@param join_args string|table
----@param key string
+---@param join_args string|Xodel
+---@param key string|fun(ctx:table):string
 ---@param op string
 ---@param val DBValue
 ---@return self
@@ -2698,12 +2718,13 @@ function Sql:offset(n)
   return self
 end
 
----@param cond table|string|fun(ctx:table):string
+---@param cond table|QClass|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
 ---@return self
 function Sql:where(cond, op, dval)
   if type(cond) == 'table' and cond.__IS_LOGICAL_BUILDER__ then
+    ---@cast cond QClass
     local where_token = self:_resolve_Q(cond)
     if self._where == nil then
       self._where = where_token
@@ -2717,14 +2738,12 @@ function Sql:where(cond, op, dval)
   end
 end
 
----@param cond table|string|fun(ctx:table):string
----@param op? DBValue
----@param dval? DBValue
-function Sql:having(cond, op, dval)
+---@param cond {[string]: DBValue}|QClass
+function Sql:having(cond)
   if self._having then
-    self._having = format("(%s) AND (%s)", self._having, self:_get_condition_token(cond, op, dval))
+    self._having = format("(%s) AND (%s)", self._having, self:_get_having_condition_token(cond))
   else
-    self._having = self:_get_condition_token(cond, op, dval)
+    self._having = self:_get_having_condition_token(cond)
   end
   return self
 end
@@ -2958,12 +2977,41 @@ function Sql:updates(rows, key, columns)
   end
 end
 
---TODO:
+--- ```lua
+-- Resume:gets({
+--   { start_date = '2025-01-01', end_date = '2025-01-02', company = 'company1' },
+--   { start_date = '2025-01-03', end_date = '2025-02-02', company = 'company2' } }):exec()
+--```
+-- yields:
+---```sql
+-- WITH
+--   V (start_date, end_date, company) AS (
+--     VALUES
+--       (
+--         '2025-01-01'::date,
+--         '2025-01-02'::date,
+--         'company1'::varchar
+--       ),
+--       ('2025-01-03', '2025-02-02', 'company2')
+--   )
+-- SELECT
+--   *
+-- FROM
+--   resume T
+--   RIGHT JOIN V ON (
+--     V.start_date = T.start_date
+--     AND V.end_date = T.end_date
+--     AND V.company = T.company
+--   )
+---```
 ---@param keys Record[]
----@param columns string[]
+---@param columns? string[]
 ---@return self
-function Sql:get_multiple(keys, columns)
-  return Sql._base_get_multiple(self, keys, columns)
+function Sql:gets(keys, columns)
+  if #keys == 0 then
+    error("empty keys passed to gets")
+  end
+  return Sql._base_gets(self, keys, columns)
 end
 
 ---@param statement string
@@ -3113,7 +3161,7 @@ function Sql:skip_validate(bool)
   return self
 end
 
----@param col? (fun(ctx:table):string)|string
+---@param col? string|fun(ctx:table):string
 ---@return Record[]
 function Sql:flat(col)
   if col then
