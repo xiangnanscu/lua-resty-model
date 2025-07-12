@@ -14,7 +14,7 @@ local function md(lang, s)
 ```
 ]], lang, s))
 end
-local db_options = {
+local db_config = {
   DATABASE = 'test',
   USER = 'postgres',
   PASSWORD = 'postgres',
@@ -25,7 +25,7 @@ local db_options = {
     md('sql', statement)
   end,
 }
-Model.db_options = db_options
+Model.db_config = db_config
 Model.auto_primary_key = true
 
 

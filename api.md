@@ -30,7 +30,7 @@
     - auto_primary_key: 是否自动生成主键
     - primary_key: 主键名
     - unique_together: 联合唯一约束
-    - db_options: 数据库选项
+    - db_config: 数据库选项
     - referenced_label_column: 引用标签列
     - preload: 是否预加载
 - 返回: 新的模型类

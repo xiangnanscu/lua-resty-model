@@ -21,7 +21,7 @@ local function md(lang, s)
 end
 
 local FORMAT_SQL = 10
-local db_options = {
+local db_config = {
   DATABASE = 'test',
   USER = 'postgres',
   PASSWORD = 'postgres',
@@ -35,7 +35,7 @@ EOF]], statement))
     end
   end,
 }
-Model.db_options = db_options
+Model.db_config = db_config
 Model.auto_primary_key = true
 
 
