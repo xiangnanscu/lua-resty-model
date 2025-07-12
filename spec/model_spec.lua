@@ -43,7 +43,7 @@ Model.auto_primary_key = true
 local Blog = Model:create_model {
   table_name = 'blog',
   fields = {
-    { "name",    maxlength = 20, minlength = 2,              unique = true },
+    { "name",    maxlength = 20, minlength = 2,              unique = true, compact = false },
     { "tagline", type = 'text',  default = 'default tagline' },
   }
 }
@@ -74,9 +74,9 @@ local Resume = Model:create_model {
 local Author = Model:create_model {
   table_name = 'author',
   fields = {
-    { "name",   maxlength = 200,  unique = true },
+    { "name",   maxlength = 200,  unique = true, compact = false },
     { "email",  type = 'email' },
-    { "age",    type = 'integer', max = 100,    min = 10 },
+    { "age",    type = 'integer', max = 100,     min = 10 },
     { "resume", model = Resume },
   }
 }
@@ -1124,12 +1124,15 @@ Blog:updates{
     })
   end)
   mit("updates with invalid field", function()
-    assert.error(function()
+    local ok, err = pcall(function()
       eval [[
 Author:updates({
   { name = 'John Doe', age2 = 9 }
 }):exec()
       ]]
-    end, "invalid field name 'age2' for model 'author'")
+    end)
+    assert(not ok, "Expected an error but function executed successfully")
+    assert(string.find(tostring(err), "invalid field name 'age2' for model 'author'", 1, true),
+      "Error message should contain 'invalid field name 'age2' for model 'author'', got: " .. tostring(err))
   end)
 end)
