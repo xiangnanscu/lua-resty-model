@@ -1939,6 +1939,19 @@ function Sql:_get_condition_token(cond, op, dval)
 end
 
 ---@private
+---@param cond table|string|fun(ctx:table):string
+---@param op? DBValue
+---@param dval? DBValue
+---@return string
+function Sql:_get_condition_token_or(cond, op, dval)
+  if type(cond) == "table" then
+    return self:_get_condition_token_from_table(cond, "OR")
+  else
+    return self:_get_condition_token(cond, op, dval)
+  end
+end
+
+---@private
 ---@param cond {[string]: DBValue}|QClass
 ---@return string
 function Sql:_get_having_condition_token(cond)
@@ -3005,6 +3018,33 @@ function Sql:where(cond, op, dval)
     local where_token = self:_get_condition_token(cond, op, dval)
     return self:_handle_where_token(where_token, "(%s) AND (%s)")
   end
+end
+
+---@param cond table|string|fun(ctx:table):string
+---@param op? string
+---@param dval? DBValue
+---@return self
+function Sql:where_or(cond, op, dval)
+  local where_token = self:_get_condition_token_or(cond, op, dval)
+  return self:_handle_where_token(where_token, "(%s) AND (%s)")
+end
+
+---@param cond table|string|fun(ctx:table):string
+---@param op? string
+---@param dval? DBValue
+---@return self
+function Sql:or_where_or(cond, op, dval)
+  local where_token = self:_get_condition_token_or(cond, op, dval)
+  return self:_handle_where_token(where_token, "%s OR %s")
+end
+
+---@param cond table|string|fun(ctx:table):string
+---@param op? string
+---@param dval? DBValue
+---@return self
+function Sql:or_where(cond, op, dval)
+  local where_token = self:_get_condition_token(cond, op, dval)
+  return self:_handle_where_token(where_token, "%s OR %s")
 end
 
 ---@param cond {[string]: DBValue}|QClass
@@ -4738,7 +4778,7 @@ function Xodel:save_cascade_update(input, names, key)
   end)
   local prepared = self:_prepare_for_db(data, names_without_tablefield)
   local updated_sql = self:create_sql():_base_update(prepared):where { [key] = look_value }
-      :_base_returning(key)
+      :_base_returning(key):_base_returning(names_without_tablefield)
   self:_walk_cascade_fields(function(tf, fk)
     local rows = data[tf.name] ---@cast rows Record[]
     if #rows > 0 then
@@ -4749,7 +4789,11 @@ function Xodel:save_cascade_update(input, names, key)
       updated_sql:prepend(delete_sql)
     end
   end)
-  return (updated_sql:execr())
+  local ins = updated_sql:exec()
+  if #ins == 0 then
+    error("no record updated")
+  end
+  return ins[1]
 end
 
 ---@param rows Record|Record[]
