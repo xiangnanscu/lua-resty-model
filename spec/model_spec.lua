@@ -414,7 +414,20 @@ mdesc("Xodel:where", function()
 
   mdesc("where blog_id name contains", function()
     local res = eval [[ Entry:where { blog_id__name__contains = 'my blog' } ]]
-    assert.are.same(res, "SELECT * FROM entry T INNER JOIN blog T1 ON (T.blog_id = T1.id) WHERE T1.name LIKE '%my blog%'")
+    assert.are.same(res,
+      "SELECT * FROM entry T INNER JOIN blog T1 ON (T.blog_id = T1.id) WHERE T1.name LIKE '%my blog%' ESCAPE '\\'")
+  end)
+
+  mdesc("where view log entry_id blog_id name starts with", function()
+    local res = eval [[ ViewLog:where { entry_id__blog_id__name__startswith = 'my' } ]]
+    assert.are.same(res,
+      "SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) INNER JOIN blog T2 ON (T1.blog_id = T2.id) WHERE T2.name LIKE 'my%' ESCAPE '\\'")
+  end)
+
+  mdesc("where view log entry_id blog_id name starts with and headline equals", function()
+    local res = eval [[ ViewLog:where { entry_id__blog_id__name__startswith = 'my' }:where { entry_id__headline = 'aa' } ]]
+    assert.are.same(res,
+      [[SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) INNER JOIN blog T2 ON (T1.blog_id = T2.id) WHERE (T2.name LIKE 'my%' ESCAPE '\') AND (T1.headline = 'aa')]])
   end)
 
   mdesc("where view log entry_id blog_id equals", function()
@@ -431,18 +444,6 @@ mdesc("Xodel:where", function()
     local res = eval [[ ViewLog:where { entry_id__blog_id__name = 'my blog name' } ]]
     assert.are.same(res,
       "SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) INNER JOIN blog T2 ON (T1.blog_id = T2.id) WHERE T2.name = 'my blog name'")
-  end)
-
-  mdesc("where view log entry_id blog_id name starts with", function()
-    local res = eval [[ ViewLog:where { entry_id__blog_id__name__startswith = 'my' } ]]
-    assert.are.same(res,
-      "SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) INNER JOIN blog T2 ON (T1.blog_id = T2.id) WHERE T2.name LIKE 'my%'")
-  end)
-
-  mdesc("where view log entry_id blog_id name starts with and headline equals", function()
-    local res = eval [[ ViewLog:where { entry_id__blog_id__name__startswith = 'my' }:where { entry_id__headline = 'aa' } ]]
-    assert.are.same(res,
-      [[SELECT * FROM view_log T INNER JOIN entry T1 ON (T.entry_id = T1.id) INNER JOIN blog T2 ON (T1.blog_id = T2.id) WHERE (T2.name LIKE 'my%') AND (T1.headline = 'aa')]])
   end)
 
   mdesc("where blog entry equals", function()

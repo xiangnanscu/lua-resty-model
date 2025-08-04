@@ -554,6 +554,12 @@ local function as_literal_without_brackets(value)
   end
 end
 
+local function escape_like_value(val)
+  val = tostring(val)
+  val = val:gsub('([\\%%_])', '\\%1'):gsub("'", "''")
+  return val
+end
+
 ---sql.from util
 ---@param a DBValue
 ---@param b? DBValue
@@ -2059,22 +2065,28 @@ local EXPR_OPERATORS = {
     return format("%s NOT IN %s", key, as_literal(value))
   end,
   contains = function(key, value)
-    return format("%s LIKE '%%%s%%'", key, value:gsub("'", "''"))
+    local esc = escape_like_value(value)
+    return format("%s LIKE '%%%s%%' ESCAPE '\\'", key, esc)
   end,
   icontains = function(key, value)
-    return format("%s ILIKE '%%%s%%'", key, value:gsub("'", "''"))
+    local esc = escape_like_value(value)
+    return format("%s ILIKE '%%%s%%' ESCAPE '\\'", key, esc)
   end,
   startswith = function(key, value)
-    return format("%s LIKE '%s%%'", key, value:gsub("'", "''"))
+    local esc = escape_like_value(value)
+    return format("%s LIKE '%s%%' ESCAPE '\\'", key, esc)
   end,
   istartswith = function(key, value)
-    return format("%s ILIKE '%s%%'", key, value:gsub("'", "''"))
+    local esc = escape_like_value(value)
+    return format("%s ILIKE '%s%%' ESCAPE '\\'", key, esc)
   end,
   endswith = function(key, value)
-    return format("%s LIKE '%%%s'", key, value:gsub("'", "''"))
+    local esc = escape_like_value(value)
+    return format("%s LIKE '%%%s' ESCAPE '\\'", key, esc)
   end,
   iendswith = function(key, value)
-    return format("%s ILIKE '%%%s'", key, value:gsub("'", "''"))
+    local esc = escape_like_value(value)
+    return format("%s ILIKE '%%%s' ESCAPE '\\'", key, esc)
   end,
   range = function(key, value)
     return format("%s BETWEEN %s AND %s", key, as_literal(value[1]), as_literal(value[2]))
