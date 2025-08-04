@@ -3277,9 +3277,6 @@ end
 function Sql:exec_statement(statement)
   -- https://github.com/leafo/pgmoon/blob/cd42b4a12ceae969db3f38bb2757ae738e4b0e32/pgmoon/init.moon#L872
   local records, num_queries = self.model.query(statement, self._compact)
-  if records == nil then
-    error(num_queries)
-  end
   local all_results
   if self._prepend then
     all_results = records
