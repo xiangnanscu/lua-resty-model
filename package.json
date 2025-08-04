@@ -11,8 +11,8 @@
     "resty": "resty -I lib -I resty_modules/lualib -I resty_modules/site/lualib --main-conf 'env NODE_ENV;' --http-conf 'lua_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;'",
     "postpush": "while true; do git push origin master && { echo 'Git push succeeded'; break; } || echo 'Git push failed, retrying in 1 seconds'; sleep 1; done",
     "pull": "while true; do git pull origin master && { echo 'Git pull succeeded'; break; } || echo 'Git pull failed, retrying in 1 seconds'; sleep 1; done",
-    "test": "yarn resty -I spec ngx_busted.lua -o TAP",
-    "sql.md": "yarn resty -I spec ngx_busted.lua -o TAP | node ./sqlf.mjs > sql.md"
+    "test": "yarn resty -I spec bin/ngx_busted.lua -o TAP",
+    "sql.md": "yarn resty -I spec bin/ngx_busted.lua -o TAP | node ./bin/sqlf.mjs > sql.md"
   },
   "author": "",
   "license": "MIT",
