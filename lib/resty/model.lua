@@ -2114,10 +2114,10 @@ local EXPR_OPERATORS = {
     return format("EXTRACT('day' FROM %s) = '%s'", key, value)
   end,
   regex = function(key, value)
-    return format("%s ~ '%%%s'", key, value:gsub("'", "''"))
+    return format("%s ~ '%s'", key, value:gsub("'", "''"))
   end,
   iregex = function(key, value)
-    return format("%s ~* '%%%s'", key, value:gsub("'", "''"))
+    return format("%s ~* '%s'", key, value:gsub("'", "''"))
   end,
   null = function(key, value)
     if value then
@@ -2962,7 +2962,6 @@ function Sql:limit(n)
     return self
   end
 
-  -- 如果是字符串类型，尝试转换为数字
   if type(n) == "string" then
     n = tonumber(n)
     if n == nil then
@@ -2970,7 +2969,8 @@ function Sql:limit(n)
     end
   end
 
-  if type(n) ~= "number" or n ~= math.floor(n) or n <= 0 then
+  local MAX_LIMIT = 10000
+  if type(n) ~= "number" or n ~= math.floor(n) or n <= 0 or n > MAX_LIMIT then
     error("invalid limit value: " .. tostring(n))
   end
   self._limit = n
@@ -3005,15 +3005,20 @@ end
 ---@param dval? DBValue
 ---@return self
 function Sql:where(cond, op, dval)
-  if type(cond) == 'table' and cond.__IS_LOGICAL_BUILDER__ then
-    ---@cast cond QClass
-    local where_token = self:_resolve_Q(cond)
-    if self._where == nil then
-      self._where = where_token
+  if type(cond) == 'table' then
+    if not cond.__IS_LOGICAL_BUILDER__ then
+      local where_token = Sql._get_condition_token_from_table(self, cond)
+      return self:_handle_where_token(where_token, "(%s) AND (%s)")
     else
-      self._where = format("(%s) AND (%s)", self._where, where_token)
+      ---@cast cond QClass
+      local where_token = self:_resolve_Q(cond)
+      if self._where == nil then
+        self._where = where_token
+      else
+        self._where = format("(%s) AND (%s)", self._where, where_token)
+      end
+      return self
     end
-    return self
   else
     local where_token = self:_get_condition_token(cond, op, dval)
     return self:_handle_where_token(where_token, "(%s) AND (%s)")
