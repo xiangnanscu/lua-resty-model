@@ -334,7 +334,7 @@ end
 ---@param t2? table
 ---@return table
 local function dict(t1, t2)
-  local res = clone(t1)
+  local res = clone(t1 or {})
   if t2 then
     for key, value in pairs(t2) do
       res[key] = value
@@ -879,6 +879,8 @@ end
 ---@field private _group?  string
 ---@field private _having?  string
 ---@field private _order?  string
+---@field private _nulls_first?  boolean
+---@field private _nulls_last?  boolean
 ---@field private _limit?  number
 ---@field private _offset?  number
 ---@field private _union?  Sql | string
@@ -1616,6 +1618,10 @@ function Sql:_get_update_token(row, columns)
       end
     end
   end
+  local auto_now = self.model.auto_now_name
+  if auto_now then
+    insert(kv, format("%s = CURRENT_TIMESTAMP", auto_now))
+  end
   return concat(kv, ", ")
 end
 
@@ -2179,7 +2185,17 @@ function Sql:_get_order_column(key)
     -- local matched = match(key, '^([-+])?([\\w_.]+)$', 'josui')
     local a, b = key:match("^([-+]?)([%w_]+)$")
     if a or b then
-      return format("%s %s", self:_parse_column(b, "order_by"), a == '-' and 'DESC' or 'ASC')
+      local column = self:_parse_column(b, "order_by")
+      local direction = a == '-' and 'DESC' or 'ASC'
+      local nulls_clause = ""
+
+      if self._nulls_first then
+        nulls_clause = " NULLS FIRST"
+      elseif self._nulls_last then
+        nulls_clause = " NULLS LAST"
+      end
+
+      return format("%s %s%s", column, direction, nulls_clause)
     else
       error(format("invalid order arg format: %s", key))
     end
@@ -2434,7 +2450,7 @@ function Sql:_parse_column(key, context)
         column = last_token
         break
       else
-        error("parse column error, invalid name: " .. token)
+        error("parse column error, invalid name: " .. token .. " for model: " .. model.class_name)
       end
     end
     if not a then
@@ -2661,7 +2677,11 @@ end
 ---@param table_alias string
 ---@return self
 function Sql:as(table_alias)
-  self._as = smart_quote(table_alias)
+  if table_alias then
+    self._as = smart_quote(table_alias)
+  else
+    self._as = nil
+  end
   return self
 end
 
@@ -2670,7 +2690,8 @@ end
 ---@return self
 function Sql:with_values(name, rows)
   local columns = get_keys(rows)
-  rows = self.model:_prepare_db_rows(rows, columns)
+  -- create_sql_as is not suitable for this case, because it will treat non-existed columns as error
+  -- rows = self.model:_prepare_db_rows(rows, columns)
   local cte_rows = self:_get_cte_values_literal(rows, columns, true)
   local cte_name = format("%s(%s)", name, concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(cte_rows))
@@ -2860,6 +2881,20 @@ end
 
 function Sql:group_by(...) return self:group(...) end
 
+---@return self
+function Sql:nulls_first()
+  self._nulls_first = true
+  self._nulls_last = nil -- Clear the opposite setting
+  return self
+end
+
+---@return self
+function Sql:nulls_last()
+  self._nulls_last = true
+  self._nulls_first = nil -- Clear the opposite setting
+  return self
+end
+
 ---@param a string|table|fun(ctx:table):string
 ---@param ...? string|FClass
 ---@return self
@@ -2963,6 +2998,7 @@ function Sql:limit(n)
   end
 
   if type(n) == "string" then
+    ---@diagnostic disable-next-line: cast-local-type
     n = tonumber(n)
     if n == nil then
       error("invalid limit value: not a valid number")
@@ -3073,6 +3109,15 @@ function Sql:distinct(...)
     local distinct_token = self:_get_column_tokens("distinct", ...)
     self._distinct_on = distinct_token
   end
+  return self
+end
+
+---@param ... DBValue
+---@return self
+function Sql:distinct_on(...)
+  local s = self:_get_column_tokens("distinct", ...)
+  self._distinct_on = s
+  self._order = s
   return self
 end
 
@@ -3516,7 +3561,7 @@ end
 ---@param cond? table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
----@return XodelInstance
+---@return XodelInstance|false
 function Sql:get(cond, op, dval)
   local records
   if cond ~= nil then
@@ -3529,10 +3574,12 @@ function Sql:get(cond, op, dval)
   end
   if #records == 1 then
     return records[1]
-  elseif #records == 0 then
-    error("record not found")
+    -- elseif #records == 0 then
+    --   error("record not found")
+    -- else
+    --   error(format("multiple records returned: %d", #records))
   else
-    error(format("multiple records returned: %d", #records))
+    return false
   end
 end
 
@@ -3654,14 +3701,15 @@ function Sql:where_recursive(name, value, select_names)
   local table_name = self.model.table_name
   local t_alias = table_name .. '_recursive'
   local seed_sql = self.model:create_sql():select(fkc, name):where(name, value)
-  local join_cond = format("%s.%s = %s.%s", table_name, name, t_alias, fkc)
-  local recursive_sql = self.model:create_sql():select(fkc, name):_base_join('INNER', t_alias, join_cond)
+  local recursive_sql = self.model:create_sql():select(fkc, name)
+  local join_cond = format("%s.%s = %s.%s", recursive_sql._as or smart_quote(table_name), name, t_alias, fkc)
+  recursive_sql:_base_join('INNER', t_alias, join_cond)
   if select_names then
     seed_sql:select(select_names)
     recursive_sql:select(select_names)
   end
   self:with_recursive(t_alias, seed_sql:union_all(recursive_sql))
-  return self:from(t_alias .. ' AS ' .. table_name)
+  return self:from(t_alias .. ' AS ' .. (self._as or smart_quote(table_name)))
 end
 
 ---@param params table
@@ -3769,6 +3817,7 @@ local MODEL_MERGE_NAMES = {
   label = true,
   db_config = true,
   abstract = true,
+  is_role_model = true,
   auto_primary_key = true,
   primary_key = true,
   unique_together = true,
@@ -3935,6 +3984,7 @@ end
 ---@field RecordClass table
 ---@field extends? table
 ---@field admin? table
+---@field is_role_model? boolean
 ---@field table_name string
 ---@field class_name string
 ---@field referenced_label_column? string
@@ -3989,6 +4039,7 @@ Xodel.__index = Xodel
 ---@field extends? table
 ---@field mixins? table[]
 ---@field abstract? boolean
+---@field is_role_model? boolean
 ---@field admin? table
 ---@field table_name? string
 ---@field class_name? string
@@ -4058,6 +4109,15 @@ function Xodel:create_sql()
   return Sql:new { model = self, table_name = self._table_name_token or smart_quote(self.table_name), _as = 'T' }
 end
 
+---@param table_name string
+---@param rows Record[]
+---@return Sql
+function Xodel:create_sql_as(table_name, rows)
+  -- rows will NOT be processed by _prepare_db_rows
+  local alias_sql = Sql:new { model = self, table_name = table_name, _as = 'T' }
+  return alias_sql:with_values(table_name, rows)
+end
+
 ---@param model any
 ---@return boolean
 function Xodel:is_model_class(model)
@@ -4069,7 +4129,7 @@ function Xodel:check_field_name(name)
   check_conflicts(name);
   assert(not IS_PG_KEYWORDS[name:upper()],
     format("%s is a postgresql reserved word, can't be used as a table or column name", name))
-  if (self[name] ~= nil) then
+  if (self[name] ~= nil and name ~= 'class') then
     error(format("field name '%s' conflicts with model class attributes", name))
   end
 end
@@ -4094,6 +4154,7 @@ function Xodel:_make_model_class(opts)
     mixins = opts.mixins,
     extends = opts.extends,
     abstract = opts.abstract,
+    is_role_model = opts.is_role_model,
     primary_key = opts.primary_key,
     unique_together = opts.unique_together,
     auto_primary_key = auto_primary_key,
@@ -4240,7 +4301,11 @@ function Xodel:normalize(options)
       end
     elseif extends and extends.fields[name] then
       local pfield = extends.fields[name]
-      field = dict(pfield:get_options(), field)
+      local m_field = dict(pfield:get_options(), field)
+      if pfield.attrs or field.attrs then
+        m_field.attrs = dict(pfield.attrs, field.attrs)
+      end
+      field = m_field
       if pfield.model and field.model then
         field.model = self:create_model {
           abstract = true,
@@ -4353,7 +4418,8 @@ function Xodel:resolve_foreignkey_related()
       end
       -- reversed foreignkey field
       local rqn = field.related_query_name
-      assert(not self.fields[rqn], format("related_query_name %s conflicts with field name", rqn))
+      assert(not self.fields[rqn],
+        format("model '%s'.'%s' related_query_name '%s' conflicts with field name", self.table_name, field.name, rqn))
       fk_model.reversed_fields[rqn] = field
       -- { -- Blog / Poll
       --   is_reversed = true,
@@ -4463,6 +4529,9 @@ function Xodel:merge_field(a, b)
   local aopts = is_field_class(a) and a:get_options() or clone(a)
   local bopts = is_field_class(b) and b:get_options() or clone(b)
   local options = dict(aopts, bopts)
+  if aopts.attrs or bopts.attrs then
+    options.attrs = dict(aopts.attrs, bopts.attrs)
+  end
   if aopts.model and bopts.model then
     options.model = self:merge_model(aopts.model, bopts.model)
   end
@@ -4755,6 +4824,9 @@ function Xodel:validate_cascade_update(input, names)
   local data = self:validate_update(input, names)
   self:_walk_cascade_fields(function(tf, fk)
     local rows = data[tf.name] ---@cast rows Record[]
+    if not rows then
+      return
+    end
     for _, row in ipairs(rows) do
       row[fk.name] = input[fk.reference_column]
     end
@@ -4786,6 +4858,9 @@ function Xodel:save_cascade_update(input, names, key)
       :_base_returning(key):_base_returning(names_without_tablefield)
   self:_walk_cascade_fields(function(tf, fk)
     local rows = data[tf.name] ---@cast rows Record[]
+    if not rows then
+      return
+    end
     if #rows > 0 then
       local align_sql = tf.model:where { [fk.name] = input[fk.reference_column] }:skip_validate():align(rows)
       updated_sql:prepend(align_sql)
