@@ -128,6 +128,7 @@ Sql.__index = Sql
 Sql.__SQL_BUILDER__ = true
 Sql.as_token = as_token
 Sql.as_literal = as_literal
+Sql.MAX_LIMIT = 10000
 
 function Sql:__tostring()
   return self:statement()
@@ -2220,8 +2221,7 @@ function Sql:limit(n)
     end
   end
 
-  local MAX_LIMIT = 10000
-  if type(n) ~= "number" or n ~= math.floor(n) or n <= 0 or n > MAX_LIMIT then
+  if type(n) ~= "number" or n ~= math.floor(n) or n <= 0 or n > self.MAX_LIMIT then
     error("invalid limit value: " .. tostring(n))
   end
   self._limit = n
@@ -2263,12 +2263,7 @@ function Sql:where(cond, op, dval)
     else
       ---@cast cond QClass
       local where_token = self:_resolve_Q(cond)
-      if self._where == nil then
-        self._where = where_token
-      else
-        self._where = format("(%s) AND (%s)", self._where, where_token)
-      end
-      return self
+      return self:_handle_where_token(where_token, "(%s) AND (%s)")
     end
   else
     local where_token = self:_get_condition_token(cond, op, dval)
@@ -2332,7 +2327,11 @@ end
 function Sql:distinct_on(...)
   local s = self:_get_column_tokens("distinct", ...)
   self._distinct_on = s
-  self._order = s
+  if self._order then
+    self._order = s .. ", " .. self._order
+  else
+    self._order = s
+  end
   return self
 end
 
