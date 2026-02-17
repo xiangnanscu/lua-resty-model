@@ -1791,7 +1791,11 @@ function Sql:statement()
     elseif self._union then
       statement = format("(%s) UNION (%s)", statement, self._union)
     elseif self._union_all then
-      statement = format("%s UNION ALL (%s)", statement, self._union_all)
+      -- 这种情况必须加上括号，否则报错
+      -- (SELECT id FROM t1 ORDER BY id LIMIT 2)
+      -- UNION ALL
+      -- SELECT id FROM t2;
+      statement = format("(%s) UNION ALL (%s)", statement, self._union_all)
     elseif self._except then
       statement = format("(%s) EXCEPT (%s)", statement, self._except)
     elseif self._except_all then
@@ -2003,7 +2007,7 @@ function Sql:select_as(kwargs, as)
   end
   local cols = {}
   for key, alias in pairs(kwargs) do
-    local col = self:_parse_column(key) .. ' AS ' .. alias
+    local col = self:_parse_column(key) .. ' AS ' .. smart_quote(alias)
     cols[#cols + 1] = col
   end
   if #cols > 0 then
@@ -2035,7 +2039,7 @@ end
 function Sql:select_literal_as(kwargs)
   local cols = {}
   for key, alias in pairs(kwargs) do
-    local col = as_literal(key) .. ' AS ' .. alias
+    local col = as_literal(key) .. ' AS ' .. smart_quote(alias)
     cols[#cols + 1] = col
   end
   if #cols > 0 then
@@ -2749,20 +2753,7 @@ end
 ---@param dval? DBValue
 ---@return XodelInstance|false
 function Sql:try_get(cond, op, dval)
-  local records
-  if cond ~= nil then
-    if type(cond) == 'table' and next(cond) == nil then
-      error("empty condition table is not allowed")
-    end
-    records = self:where(cond, op, dval):limit(2):exec()
-  else
-    records = self:limit(2):exec()
-  end
-  if #records == 1 then
-    return records[1]
-  else
-    return false
-  end
+  return self:get(cond, op, dval)
 end
 
 ---@param cond? table|string|fun(ctx:table):string
@@ -2781,10 +2772,6 @@ function Sql:get(cond, op, dval)
   end
   if #records == 1 then
     return records[1]
-    -- elseif #records == 0 then
-    --   error("record not found")
-    -- else
-    --   error(format("multiple records returned: %d", #records))
   else
     return false
   end
