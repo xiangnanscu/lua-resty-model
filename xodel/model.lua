@@ -12,42 +12,7 @@ local Q = require "xodel.q"
 local Query = require "xodel.query"
 local Utils = require "xodel.utils"
 local ngx = ngx
-local clone, isempty, NULL, table_new, table_clear
-if ngx then
-  clone = require "table.clone"
-  isempty = require "table.isempty"
-  NULL = ngx.null
-  table_new = table.new
-  table_clear = require("table.clear")
-else
-  clone = function(t)
-    local t2 = {}
-    for k, v in pairs(t) do
-      t2[k] = v
-    end
-    return t2
-  end
 
-  isempty = function(t)
-    for k, v in pairs(t) do
-      return false
-    end
-    return true
-  end
-
-  ---@param m? number
-  ---@param n? number
-  ---@return table
-  table_new = function(m, n)
-    return {}
-  end
-  table_clear = function(tab)
-    for k, _ in pairs(tab) do
-      tab[k] = nil
-    end
-  end
-  NULL = newproxy(false)
-end
 local setmetatable = setmetatable
 local ipairs = ipairs
 local tostring = tostring

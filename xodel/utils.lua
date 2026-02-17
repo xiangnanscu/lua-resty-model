@@ -1,3 +1,49 @@
+local ipairs = ipairs
+local tostring = tostring
+local type = type
+local pairs = pairs
+local error = error
+local insert = table.insert
+local format = string.format
+local concat = table.concat
+local clone, isempty, NULL, table_new, table_clear
+if ngx then
+  clone = require "table.clone"
+  isempty = require "table.isempty"
+  NULL = ngx.null
+  table_new = table.new
+  table_clear = require("table.clear")
+else
+  clone = function(t)
+    local t2 = {}
+    for k, v in pairs(t) do
+      t2[k] = v
+    end
+    return t2
+  end
+
+  isempty = function(t)
+    for k, v in pairs(t) do
+      return false
+    end
+    return true
+  end
+
+  ---@param m? number
+  ---@param n? number
+  ---@return table
+  table_new = function(m, n)
+    return {}
+  end
+  table_clear = function(tab)
+    for k, _ in pairs(tab) do
+      tab[k] = nil
+    end
+  end
+  NULL = newproxy(false)
+end
+
+
 local PG_OPERATORS = {
   -- 比较运算符
   ["="] = true,
@@ -649,19 +695,38 @@ local NON_OPERATOR_CONTEXTS = {
 }
 
 return {
-  assemble_sql = assemble_sql,
+  clone = clone,
+  isempty = isempty,
+  NULL = NULL,
+  table_new = table_new,
+  table_clear = table_clear,
+  PG_OPERATORS = PG_OPERATORS,
+  IS_PG_KEYWORDS = IS_PG_KEYWORDS,
+  PG_SET_MAP = PG_SET_MAP,
+  smart_quote = smart_quote,
+  make_token = make_token,
+  DEFAULT = DEFAULT,
+  list = list,
+  dict = dict,
+  map = map,
+  capitalize = capitalize,
+  to_camel_case = to_camel_case,
+  get_keys = get_keys,
+  get_foreign_object = get_foreign_object,
+  split_string = split_string,
+  extract_column_name = extract_column_name,
+  extract_column_names = extract_column_names,
+  as_literal = as_literal,
+  as_token = as_token,
+  as_literal_without_brackets = as_literal_without_brackets,
+  escape_like_value = escape_like_value,
+  get_list_tokens = get_list_tokens,
+  _prefix_with_V = _prefix_with_V,
+  _get_join_expr = _get_join_expr,
+  _get_join_token = _get_join_token,
   get_join_table_condition = get_join_table_condition,
   get_join_table_condition_select = get_join_table_condition_select,
-  get_join_token = get_join_token,
-  get_join_expr = get_join_expr,
-  prefix_with_V = _prefix_with_V,
-  get_list_tokens = get_list_tokens,
-  escape_like_value = escape_like_value,
-  escape_value = escape_value,
-  as_token = as_token,
-  as_literal = as_literal,
-  as_literal_without_brackets = as_literal_without_brackets,
+  assemble_sql = assemble_sql,
   json_operators = json_operators,
   NON_OPERATOR_CONTEXTS = NON_OPERATOR_CONTEXTS,
 }
-

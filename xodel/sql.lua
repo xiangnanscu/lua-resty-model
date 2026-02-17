@@ -1,3 +1,15 @@
+local setmetatable = setmetatable
+local ipairs = ipairs
+local tostring = tostring
+local type = type
+local pairs = pairs
+local assert = assert
+local error = error
+local insert = table.insert
+local next = next
+local format = string.format
+local concat = table.concat
+
 ---@class SqlOptions
 ---@field table_name string
 ---@field as? string
