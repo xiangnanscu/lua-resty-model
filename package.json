@@ -1,5 +1,5 @@
 {
-  "name": "lua-resty-model",
+  "name": "xodel",
   "version": "1.0.0",
   "description": "openresty super orm finally comes out",
   "main": "index.js",

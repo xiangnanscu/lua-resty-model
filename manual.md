@@ -1,13 +1,13 @@
 # Model.lua 使用说明
 
-本文档详细说明了 lua-resty-model 中 model.lua 文件所有公共方法的使用方式。文档使用与 model_spec.lua 相同的模型进行示例演示。
+本文档详细说明了 xodel 中 model.lua 文件所有公共方法的使用方式。文档使用与 model_spec.lua 相同的模型进行示例演示。
 
 ## 模型定义
 
 ### 测试模型结构
 
 ```lua
-local Model = require("resty.model")
+local Model = require("xodel.model")
 
 -- Blog 模型
 local Blog = Model:create_model {
@@ -1598,4 +1598,4 @@ local blog_stats = Blog
   :exec()
 ```
 
-这份文档涵盖了 model.lua 中所有公共方法的详细使用方式，每个方法都提供了多种调用方式的具体示例。通过这些示例，开发者可以快速掌握 lua-resty-model 的各种功能和用法。
+这份文档涵盖了 model.lua 中所有公共方法的详细使用方式，每个方法都提供了多种调用方式的具体示例。通过这些示例，开发者可以快速掌握 xodel 的各种功能和用法。

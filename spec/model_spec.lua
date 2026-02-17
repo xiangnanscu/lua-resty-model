@@ -2,7 +2,7 @@ local utils = require("resty.utils")
 local field = require "resty.fields"
 local array = require "resty.array"
 local migrate = require "resty.migrate"
-local Model = require("./lib/resty/model")
+local Model = require("xodel.model")
 local format = string.format
 local Q = Model.Q
 local F = Model.F
@@ -521,7 +521,8 @@ mdesc("Xodel:where", function()
 
   mdesc("where blog_id name contains", function()
     local res = eval [[ Entry:where { blog_id__name__contains = 'my blog' } ]]
-    assert.are.same(res, "SELECT * FROM entry T INNER JOIN blog T1 ON (T.blog_id = T1.id) WHERE T1.name LIKE '%my blog%' ESCAPE '\\'")
+    assert.are.same(res,
+      "SELECT * FROM entry T INNER JOIN blog T1 ON (T.blog_id = T1.id) WHERE T1.name LIKE '%my blog%' ESCAPE '\\'")
   end)
 
   mdesc("where view log entry_id blog_id equals", function()

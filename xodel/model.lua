@@ -4,9 +4,9 @@
 -- https://www.postgreSql.org/docs/current/sql-update.html
 -- https://www.postgreSql.org/docs/current/sql-delete.html
 local encode = require("cjson").encode
-local Fields = require "resty.fields"
-local Query = require "resty.query"
 local Array = require "resty.array"
+local Fields = require "xodel.fields"
+local Query = require "xodel.query"
 local ngx = ngx
 local clone, isempty, NULL, table_new, table_clear
 

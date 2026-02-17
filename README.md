@@ -1,11 +1,11 @@
-# lua-resty-model
+# xodel
 
 Openresty super postgresql orm finally comes out! Inspired by django orm. Support arbitrary depth of automatic join, group by, reversed lookup, F, Q, annotate, etc.
 
 ## Install
 
 ```sh
-opm get xiangnanscu/lua-resty-model
+opm get xiangnanscu/xodel
 ```
 
 ## Synopsis
@@ -251,6 +251,7 @@ local TableModel = Model:create_model {
 # Xodel:insert(rows:table|table[]|Sql, columns?:string[])
 
 ## insert one user
+
 ```lua
  usr:insert{permission=1, username ='u1'}:exec()
 ```
@@ -269,7 +270,9 @@ VALUES
 ```
 
 ok 27 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user
+
 ## insert one user returning one column
+
 ```lua
  usr:insert{permission=1, username ='u2'}:returning('permission'):exec()
 ```
@@ -288,11 +291,13 @@ RETURNING
   {
     permission: 1,
   },
-]
+];
 ```
 
 ok 28 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user returning one column
+
 ## insert one user with default permission
+
 ```lua
  usr:insert{username ='u3'}:returning('permission'):exec()
 ```
@@ -311,11 +316,13 @@ RETURNING
   {
     permission: 0,
   },
-]
+];
 ```
 
 ok 29 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user with default permission
+
 ## insert one user returning two columns
+
 ```lua
  usr:insert{permission=1, username ='u4'}:returning('permission','username'):exec()
 ```
@@ -334,13 +341,15 @@ RETURNING
 [
   {
     permission: 1,
-    username  : "u4",
+    username: "u4",
   },
-]
+];
 ```
 
 ok 30 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user returning two columns
+
 ## insert one user returning one column in compact form
+
 ```lua
  usr:insert{permission=1, username ='u5'}:returning('username'):compact():exec()
 ```
@@ -355,15 +364,13 @@ RETURNING
 ```
 
 ```js
-[
-  [
-    "u5",
-  ],
-]
+[["u5"]];
 ```
 
 ok 31 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user returning one column in compact form
+
 ## insert two users
+
 ```lua
  usr:insert{{permission=1, username ='u6'}, {permission=1, username ='u7'}}:exec()
 ```
@@ -383,7 +390,9 @@ VALUES
 ```
 
 ok 32 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users
+
 ## insert two users returning one column
+
 ```lua
  usr:insert{{permission=1, username ='u8'}, {permission=1, username ='u9'}}:returning('username'):exec()
 ```
@@ -406,11 +415,13 @@ RETURNING
   {
     username: "u9",
   },
-]
+];
 ```
 
 ok 33 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users returning one column
+
 ## insert two users returning two columns
+
 ```lua
  usr:insert{{permission=2, username ='u10'}, {permission=3, username ='u11'}}:returning('username','permission'):exec()
 ```
@@ -430,17 +441,19 @@ RETURNING
 [
   {
     permission: 2,
-    username  : "u10",
+    username: "u10",
   },
   {
     permission: 3,
-    username  : "u11",
+    username: "u11",
   },
-]
+];
 ```
 
 ok 34 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users returning two columns
+
 ## insert two users returning one column in flatten form
+
 ```lua
  usr:insert{{permission=1, username ='u12'}, {permission=1, username ='u13'}}:returning('username'):flat()
 ```
@@ -456,14 +469,13 @@ RETURNING
 ```
 
 ```js
-[
-  "u12",
-  "u13",
-]
+["u12", "u13"];
 ```
 
 ok 35 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users returning one column in flatten form
+
 ## insert two users returning two columns in flatten form
+
 ```lua
  usr:insert{{permission=1, username ='u14'}, {permission=2, username ='u15'}}:returning('username','permission'):flat()
 ```
@@ -480,16 +492,13 @@ RETURNING
 ```
 
 ```js
-[
-  "u14",
-  1,
-  "u15",
-  2,
-]
+["u14", 1, "u15", 2];
 ```
 
 ok 36 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users returning two columns in flatten form
+
 ## insert one user with specific columns (permission being ignored)
+
 ```lua
  usr:insert({permission=4, username ='u16'}, {'username'}):returning('username','permission'):exec()
 ```
@@ -508,13 +517,15 @@ RETURNING
 [
   {
     permission: 0,
-    username  : "u16",
+    username: "u16",
   },
-]
+];
 ```
 
 ok 37 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user with specific columns (permission being ignored)
+
 ## insert one user with specific columns
+
 ```lua
  usr:insert({permission=4, username ='u17'}, {'username', 'permission'}):returning('username','permission'):exec()
 ```
@@ -533,13 +544,15 @@ RETURNING
 [
   {
     permission: 4,
-    username  : "u17",
+    username: "u17",
   },
-]
+];
 ```
 
 ok 38 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user with specific columns
+
 ## insert two users with specific columns (permission being ignored)
+
 ```lua
  usr:insert({{permission=4, username ='u18'},{permission=5, username ='u19'}}, {'username'}):returning('username','permission'):exec()
 ```
@@ -559,17 +572,19 @@ RETURNING
 [
   {
     permission: 0,
-    username  : "u18",
+    username: "u18",
   },
   {
     permission: 0,
-    username  : "u19",
+    username: "u19",
   },
-]
+];
 ```
 
 ok 39 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users with specific columns (permission being ignored)
+
 ## insert two users with specific columns
+
 ```lua
  usr:insert({{permission=4, username ='u20'},{permission=5, username ='u21'}}, {'username', 'permission'}):returning('username','permission'):exec()
 ```
@@ -589,17 +604,19 @@ RETURNING
 [
   {
     permission: 4,
-    username  : "u20",
+    username: "u20",
   },
   {
     permission: 5,
-    username  : "u21",
+    username: "u21",
   },
-]
+];
 ```
 
 ok 40 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users with specific columns
+
 ## insert users with default permission
+
 ```lua
  usr:insert{{username ='f1'},{username ='f2'}}:flat('permission')
 ```
@@ -615,23 +632,31 @@ RETURNING
 ```
 
 ```js
-[
-  0,
-  0,
-]
+[0, 0];
 ```
 
 ok 41 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert users with default permission
+
 ## insert one user validate required failed
+
 ok 42 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user validate required failed
+
 ## insert one user validate maxlength failed
+
 ok 43 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user validate maxlength failed
+
 ## insert one user validate max failed
+
 ok 44 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert one user validate max failed
+
 ## insert two users validate max failed
+
 ok 45 - Xodel:insert(rows:table|table[]|Sql, columns?:string[]) insert two users validate max failed
+
 # Xodel:insert
+
 ## create
+
 ```lua
 dept:insert{name ='d1'}:returning('*'):execr()
 ```
@@ -648,14 +673,16 @@ RETURNING
 ```js
 [
   {
-    id  : 1,
+    id: 1,
     name: "d1",
   },
-]
+];
 ```
 
 ok 46 - Xodel:insert create
+
 ## create multiple rows
+
 ```lua
 dept:insert{{name ='d2'}, {name ='d3'}}:returning('name'):execr()
 ```
@@ -678,12 +705,15 @@ RETURNING
   {
     name: "d3",
   },
-]
+];
 ```
 
 ok 47 - Xodel:insert create multiple rows
+
 # Xodel:count(cond?, op?, dval?)
+
 ## specify condition
+
 ```lua
 usr:count{id__lt=3}
 ```
@@ -698,11 +728,13 @@ WHERE
 ```
 
 ```js
-2
+2;
 ```
 
 ok 48 - Xodel:count(cond?, op?, dval?) specify condition
+
 ## test with Xodel:all
+
 ```lua
 dept:execr()
 ```
@@ -717,18 +749,18 @@ FROM
 ```js
 [
   {
-    id  : 1,
+    id: 1,
     name: "d1",
   },
   {
-    id  : 2,
+    id: 2,
     name: "d2",
   },
   {
-    id  : 3,
+    id: 3,
     name: "d3",
   },
-]
+];
 ```
 
 ```lua
@@ -743,12 +775,15 @@ FROM
 ```
 
 ```js
-3
+3;
 ```
 
 ok 49 - Xodel:count(cond?, op?, dval?) test with Xodel:all
+
 # XodelInstance:save(names?:string[], key?:string)
+
 ## save basic
+
 ```lua
 profile{usr_id=1, dept_name='d1', age=20}:save()
 ```
@@ -774,7 +809,9 @@ RETURNING
 ```
 
 ok 50 - XodelInstance:save(names?:string[], key?:string) save basic
+
 ## save with specific names
+
 ```lua
 profile{usr_id=2, dept_name='d2', salary=500, sex='m', age=50}:save{'usr_id','dept_name'}
 ```
@@ -800,7 +837,9 @@ RETURNING
 ```
 
 ok 51 - XodelInstance:save(names?:string[], key?:string) save with specific names
+
 ## save with primary key specified to update
+
 ```lua
 profile{id=1, age=33}:save()
 ```
@@ -823,7 +862,9 @@ RETURNING
 ```
 
 ok 52 - XodelInstance:save(names?:string[], key?:string) save with primary key specified to update
+
 ## save with primary key ignored and force create
+
 ```lua
 profile{id=5, age=55, usr_id=3, dept_name='d3',}:save_create()
 ```
@@ -849,14 +890,19 @@ RETURNING
 ```
 
 ok 53 - XodelInstance:save(names?:string[], key?:string) save with primary key ignored and force create
+
 ## save with wrong name
+
 ```lua
 profile{usr_id=1, dept_name='d1', age=20}:save{'xxxx'}
 ```
 
 ok 54 - XodelInstance:save(names?:string[], key?:string) save with wrong name
+
 # Xodel:merge(rows:table[], key?:string|string[], columns?:string[])
+
 ## merge multiple rows returning inserted rows with all columns
+
 ```lua
 usr:merge({{permission=4, username ='u1'},{permission=2, username ='u22'}}, 'username'):returning('*'):exec()
 ```
@@ -897,15 +943,17 @@ RETURNING
 ```js
 [
   {
-    id        : 24,
+    id: 24,
     permission: 2,
-    username  : "u22",
+    username: "u22",
   },
-]
+];
 ```
 
 ok 55 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with all columns
+
 ## merge multiple rows returning inserted rows with specific columns
+
 ```lua
 usr:merge({{username ='u23'},{username ='u24'}}, 'username'):returning('username'):exec()
 ```
@@ -945,11 +993,13 @@ RETURNING
   {
     username: "u24",
   },
-]
+];
 ```
 
 ok 56 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with specific columns
+
 ## merge multiple rows returning inserted rows with specific columns in compact form
+
 ```lua
 usr:merge({{username ='u25'},{username ='u26'}}, 'username'):returning('username'):flat()
 ```
@@ -982,14 +1032,13 @@ RETURNING
 ```
 
 ```js
-[
-  "u25",
-  "u26",
-]
+["u25", "u26"];
 ```
 
 ok 57 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with specific columns in compact form
+
 ## merge multiple rows returning inserted rows with array key
+
 ```lua
 evaluate:merge({{usr_id=1, year=2021, rank='A'},{usr_id=1, year=2022, rank='B'}}, {'usr_id', 'year'}):returning('rank'):flat()
 ```
@@ -1034,15 +1083,13 @@ RETURNING
 ```
 
 ```js
-[
-  "A",
-  "B",
-]
+["A", "B"];
 ```
 
 ok 58 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with array key
 
 ## merge multiple rows returning inserted rows with array key and specific columns
+
 ```lua
 evaluate:merge({{usr_id=2, year=2021, rank='A'},{usr_id=2, year=2022, rank='B'}}, {'usr_id', 'year'}, {'usr_id', 'year'}):returning('rank'):flat()
 ```
@@ -1083,19 +1130,23 @@ RETURNING
 ```
 
 ```js
-[
-  "C",
-  "C",
-]
+["C", "C"];
 ```
 
 ok 59 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows returning inserted rows with array key and specific columns
+
 ## merge multiple rows validate max failed
+
 ok 60 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows validate max failed
+
 ## merge multiple rows missing default unique value failed
+
 ok 61 - Xodel:merge(rows:table[], key?:string|string[], columns?:string[]) merge multiple rows missing default unique value failed
+
 # Xodel:upsert(rows:table[], key?:string|string[], columns?:string[])
+
 ## upsert multiple rows returning inserted rows with all columns
+
 ```lua
 usr:upsert({{permission=4, username ='u1'},{permission=2, username ='u27'}}, 'username'):returning('username'):exec()
 ```
@@ -1122,11 +1173,13 @@ RETURNING
   {
     username: "u27",
   },
-]
+];
 ```
 
 ok 62 - Xodel:upsert(rows:table[], key?:string|string[], columns?:string[]) upsert multiple rows returning inserted rows with all columns
+
 ## upsert multiple rows returning inserted rows with specific columns in compact form
+
 ```lua
 usr:upsert({{username ='u28'},{username ='u29'}}, 'username'):returning('username'):flat()
 ```
@@ -1143,14 +1196,13 @@ RETURNING
 ```
 
 ```js
-[
-  "u28",
-  "u29",
-]
+["u28", "u29"];
 ```
 
 ok 63 - Xodel:upsert(rows:table[], key?:string|string[], columns?:string[]) upsert multiple rows returning inserted rows with specific columns in compact form
+
 ## upsert multiple rows returning inserted rows with array key
+
 ```lua
 evaluate:upsert({{usr_id=1, year=2021, rank='A'},{usr_id=1, year=2022, rank='B'}}, {'usr_id', 'year'}):returning('rank'):flat()
 ```
@@ -1170,17 +1222,19 @@ RETURNING
 ```
 
 ```js
-[
-  "A",
-  "B",
-]
+["A", "B"];
 ```
 
 ok 64 - Xodel:upsert(rows:table[], key?:string|string[], columns?:string[]) upsert multiple rows returning inserted rows with array key
+
 ## upsert multiple rows validate max failed
+
 ok 65 - Xodel:upsert(rows:table[], key?:string|string[], columns?:string[]) upsert multiple rows validate max failed
+
 # Xodel.update
+
 ## update one user
+
 ```lua
  usr:update{permission=2}:where{id=1}:exec()
 ```
@@ -1200,7 +1254,9 @@ WHERE
 ```
 
 ok 66 - Xodel.update update one user
+
 ## update one user returning one column
+
 ```lua
  usr:update{permission=3}:where{id=1}:returning('permission'):exec()
 ```
@@ -1220,11 +1276,13 @@ RETURNING
   {
     permission: 3,
   },
-]
+];
 ```
 
 ok 67 - Xodel.update update one user returning one column
+
 ## update users returning two columns in table form
+
 ```lua
  usr:update{permission=3}:where{id__lt=3}:returning{'permission','id'}:exec()
 ```
@@ -1243,18 +1301,20 @@ RETURNING
 ```js
 [
   {
-    id        : 1,
+    id: 1,
     permission: 3,
   },
   {
-    id        : 2,
+    id: 2,
     permission: 3,
   },
-]
+];
 ```
 
 ok 68 - Xodel.update update users returning two columns in table form
+
 ## update users returning one column in flatten form
+
 ```lua
  usr:update{permission=3}:where{id__lt=3}:returning{'username'}:flat()
 ```
@@ -1270,14 +1330,13 @@ RETURNING
 ```
 
 ```js
-[
-  "u1",
-  "u2",
-]
+["u1", "u2"];
 ```
 
 ok 69 - Xodel.update update users returning one column in flatten form
+
 ## update by where with foreignkey
+
 ```lua
 profile:update{age=11}:where{usr_id__username__contains='1'}:returning('age'):exec()
 ```
@@ -1300,11 +1359,13 @@ RETURNING
   {
     age: 11,
   },
-]
+];
 ```
 
 ok 70 - Xodel.update update by where with foreignkey
+
 ## update returning foreignkey
+
 ```lua
 profile:update { sex = 'm' }:where { id = 1 }:returning('id', 'usr_id__username'):exec()
 ```
@@ -1326,15 +1387,18 @@ RETURNING
 ```js
 [
   {
-    id              : 1,
+    id: 1,
     usr_id__username: "u1",
   },
-]
+];
 ```
 
 ok 71 - Xodel.update update returning foreignkey
+
 # Xodel:updates(rows:table[], key?:string|string[], columns?:string[])
+
 ## updates partial
+
 ```lua
 usr:updates({{permission=2, username ='u1'},{permission=3, username ='??'}}, 'username'):returning("*"):exec()
 ```
@@ -1360,15 +1424,17 @@ RETURNING
 ```js
 [
   {
-    id        : 1,
+    id: 1,
     permission: 2,
-    username  : "u1",
+    username: "u1",
   },
-]
+];
 ```
 
 ok 72 - Xodel:updates(rows:table[], key?:string|string[], columns?:string[]) updates partial
+
 ## updates all
+
 ```lua
 usr:updates({{permission=1, username ='u1'},{permission=3, username ='u3'}}, 'username'):returning("*"):exec()
 ```
@@ -1394,21 +1460,24 @@ RETURNING
 ```js
 [
   {
-    id        : 1,
+    id: 1,
     permission: 1,
-    username  : "u1",
+    username: "u1",
   },
   {
-    id        : 3,
+    id: 3,
     permission: 3,
-    username  : "u3",
+    username: "u3",
   },
-]
+];
 ```
 
 ok 73 - Xodel:updates(rows:table[], key?:string|string[], columns?:string[]) updates all
+
 # Xodel.where
+
 ## where basic
+
 ```lua
  usr:select('username','id'):where{id=1}:exec()
 ```
@@ -1426,14 +1495,16 @@ WHERE
 ```js
 [
   {
-    id      : 1,
+    id: 1,
     username: "u1",
   },
-]
+];
 ```
 
 ok 74 - Xodel.where where basic
+
 ## where condition by 2 args
+
 ```lua
  usr:select('id'):where('id', 3):exec()
 ```
@@ -1452,11 +1523,13 @@ WHERE
   {
     id: 3,
   },
-]
+];
 ```
 
 ok 75 - Xodel.where where condition by 2 args
+
 ## where condition by 3 args
+
 ```lua
  usr:select('id'):where('id', '<',  3):flat()
 ```
@@ -1471,14 +1544,13 @@ WHERE
 ```
 
 ```js
-[
-  1,
-  2,
-]
+[1, 2];
 ```
 
 ok 76 - Xodel.where where condition by 3 args
-## where by arithmetic operator: __lt
+
+## where by arithmetic operator: \_\_lt
+
 ```lua
 usr:where{id__lt=2}:select('id')
 ```
@@ -1492,8 +1564,10 @@ WHERE
   T.id < 2
 ```
 
-ok 77 - Xodel.where where by arithmetic operator: __lt
-## where by arithmetic operator: __lte
+ok 77 - Xodel.where where by arithmetic operator: \_\_lt
+
+## where by arithmetic operator: \_\_lte
+
 ```lua
 usr:where{id__lte=2}:select('id')
 ```
@@ -1507,8 +1581,10 @@ WHERE
   T.id <= 2
 ```
 
-ok 78 - Xodel.where where by arithmetic operator: __lte
-## where by arithmetic operator: __gt
+ok 78 - Xodel.where where by arithmetic operator: \_\_lte
+
+## where by arithmetic operator: \_\_gt
+
 ```lua
 usr:where{id__gt=2}:select('id')
 ```
@@ -1522,8 +1598,10 @@ WHERE
   T.id > 2
 ```
 
-ok 79 - Xodel.where where by arithmetic operator: __gt
-## where by arithmetic operator: __gte
+ok 79 - Xodel.where where by arithmetic operator: \_\_gt
+
+## where by arithmetic operator: \_\_gte
+
 ```lua
 usr:where{id__gte=2}:select('id')
 ```
@@ -1537,8 +1615,10 @@ WHERE
   T.id >= 2
 ```
 
-ok 80 - Xodel.where where by arithmetic operator: __gte
-## where by arithmetic operator: __eq
+ok 80 - Xodel.where where by arithmetic operator: \_\_gte
+
+## where by arithmetic operator: \_\_eq
+
 ```lua
 usr:where{id__eq=2}:select('id')
 ```
@@ -1552,8 +1632,10 @@ WHERE
   T.id = 2
 ```
 
-ok 81 - Xodel.where where by arithmetic operator: __eq
-## where by arithmetic operator: __ne
+ok 81 - Xodel.where where by arithmetic operator: \_\_eq
+
+## where by arithmetic operator: \_\_ne
+
 ```lua
 usr:where{id__ne=2}:select('id')
 ```
@@ -1567,8 +1649,10 @@ WHERE
   T.id <> 2
 ```
 
-ok 82 - Xodel.where where by arithmetic operator: __ne
+ok 82 - Xodel.where where by arithmetic operator: \_\_ne
+
 ## where in
+
 ```lua
 usr:where{username__in={'u1','u2'}}
 ```
@@ -1583,7 +1667,9 @@ WHERE
 ```
 
 ok 83 - Xodel.where where in
+
 ## where contains
+
 ```lua
 usr:where{username__contains='u'}
 ```
@@ -1598,7 +1684,9 @@ WHERE
 ```
 
 ok 84 - Xodel.where where contains
+
 ## where startswith
+
 ```lua
 usr:where{username__startswith='u'}
 ```
@@ -1613,7 +1701,9 @@ WHERE
 ```
 
 ok 85 - Xodel.where where startswith
+
 ## where endswith
+
 ```lua
 usr:where{username__endswith='u'}
 ```
@@ -1628,7 +1718,9 @@ WHERE
 ```
 
 ok 86 - Xodel.where where endswith
+
 ## where null true
+
 ```lua
 usr:where{username__null=true}
 ```
@@ -1643,7 +1735,9 @@ WHERE
 ```
 
 ok 87 - Xodel.where where null true
+
 ## where null false
+
 ```lua
 usr:where{username__null=false}
 ```
@@ -1658,7 +1752,9 @@ WHERE
 ```
 
 ok 88 - Xodel.where where null false
+
 ## where notin
+
 ```lua
 usr:where{username__notin={'u1','u2'}}
 ```
@@ -1673,7 +1769,9 @@ WHERE
 ```
 
 ok 89 - Xodel.where where notin
+
 ## where foreignkey eq
+
 ```lua
 profile:where{usr_id__username__eq='u1'}
 ```
@@ -1689,7 +1787,9 @@ WHERE
 ```
 
 ok 90 - Xodel.where where foreignkey eq
+
 ## where foreignkey in
+
 ```lua
 profile:where{usr_id__username__in={'u1','u2'}}
 ```
@@ -1705,7 +1805,9 @@ WHERE
 ```
 
 ok 91 - Xodel.where where foreignkey in
+
 ## where foreignkey contains
+
 ```lua
 profile:where{usr_id__username__contains='u'}
 ```
@@ -1721,7 +1823,9 @@ WHERE
 ```
 
 ok 92 - Xodel.where where foreignkey contains
+
 ## where foreignkey startswith
+
 ```lua
 profile:where{usr_id__username__startswith='u'}
 ```
@@ -1737,7 +1841,9 @@ WHERE
 ```
 
 ok 93 - Xodel.where where foreignkey startswith
+
 ## where foreignkey endswith
+
 ```lua
 profile:where{usr_id__username__endswith='u'}
 ```
@@ -1753,7 +1859,9 @@ WHERE
 ```
 
 ok 94 - Xodel.where where foreignkey endswith
+
 ## where foreignkey null true
+
 ```lua
 profile:where{usr_id__username__null=true}
 ```
@@ -1769,7 +1877,9 @@ WHERE
 ```
 
 ok 95 - Xodel.where where foreignkey null true
+
 ## where foreignkey null false
+
 ```lua
 profile:where{usr_id__username__null=false}
 ```
@@ -1785,7 +1895,9 @@ WHERE
 ```
 
 ok 96 - Xodel.where where foreignkey null false
+
 ## where foreignkey number operator lt
+
 ```lua
 profile:where{usr_id__permission__lt=2}
 ```
@@ -1801,7 +1913,9 @@ WHERE
 ```
 
 ok 97 - Xodel.where where foreignkey number operator lt
+
 ## where foreignkey number operator lte
+
 ```lua
 profile:where{usr_id__permission__lte=2}
 ```
@@ -1817,7 +1931,9 @@ WHERE
 ```
 
 ok 98 - Xodel.where where foreignkey number operator lte
+
 ## where foreignkey number operator gt
+
 ```lua
 profile:where{usr_id__permission__gt=2}
 ```
@@ -1833,7 +1949,9 @@ WHERE
 ```
 
 ok 99 - Xodel.where where foreignkey number operator gt
+
 ## where foreignkey number operator gte
+
 ```lua
 profile:where{usr_id__permission__gte=2}
 ```
@@ -1849,7 +1967,9 @@ WHERE
 ```
 
 ok 100 - Xodel.where where foreignkey number operator gte
+
 ## where foreignkey number operator eq
+
 ```lua
 profile:where{usr_id__permission__eq=2}
 ```
@@ -1865,7 +1985,9 @@ WHERE
 ```
 
 ok 101 - Xodel.where where foreignkey number operator eq
+
 ## where foreignkey number operator ne
+
 ```lua
 profile:where{usr_id__permission__ne=2}
 ```
@@ -1881,8 +2003,11 @@ WHERE
 ```
 
 ok 102 - Xodel.where where foreignkey number operator ne
+
 # Xodel.select
+
 ## select fk column
+
 ```lua
 profile:select('id', 'usr_id__username'):where { id = 1 }:exec()
 ```
@@ -1901,15 +2026,18 @@ WHERE
 ```js
 [
   {
-    id              : 1,
+    id: 1,
     usr_id__username: "u1",
   },
-]
+];
 ```
 
 ok 103 - Xodel.select select fk column
+
 # Xodel:get(cond?, op?, dval?)
+
 ## basic
+
 ```lua
 usr:get{id=3}
 ```
@@ -1934,7 +2062,9 @@ LIMIT
 ```
 
 ok 104 - Xodel:get(cond?, op?, dval?) basic
+
 ## model load foreign row
+
 ```sql
 SELECT
   *
@@ -1947,7 +2077,9 @@ LIMIT
 ```
 
 ok 105 - Xodel:get(cond?, op?, dval?) model load foreign row
+
 ## fetch extra foreignkey field from database on demand
+
 ```sql
 SELECT
   *
@@ -1960,7 +2092,9 @@ LIMIT
 ```
 
 ok 106 - Xodel:get(cond?, op?, dval?) fetch extra foreignkey field from database on demand
+
 ## model load foreign row with specified columns
+
 ```lua
 profile:load_fk('usr_id', 'username', 'permission'):get{id=1}
 ```
@@ -1989,7 +2123,9 @@ LIMIT
 ```
 
 ok 107 - Xodel:get(cond?, op?, dval?) model load foreign row with specified columns
-## model load foreign row with all columns by *
+
+## model load foreign row with all columns by \*
+
 ```lua
 profile:load_fk('usr_id', '*'):get{id=1}
 ```
@@ -2030,8 +2166,10 @@ LIMIT
   2
 ```
 
-ok 108 - Xodel:get(cond?, op?, dval?) model load foreign row with all columns by *
+ok 108 - Xodel:get(cond?, op?, dval?) model load foreign row with all columns by \*
+
 ## model load foreign row with specified columns two api are the same
+
 ```lua
 profile:select("sex"):load_fk('usr_id', 'username', 'permission'):get{id=1}
 ```
@@ -2091,7 +2229,9 @@ LIMIT
 ```
 
 ok 109 - Xodel:get(cond?, op?, dval?) model load foreign row with specified columns two api are the same
+
 ## Xodel:get(cond?, op?, dval?)
+
 ```lua
 usr:get{id__lt=3}
 ```
@@ -2108,8 +2248,11 @@ LIMIT
 ```
 
 ok 110 - Xodel:get(cond?, op?, dval?) Xodel:get(cond?, op?, dval?)
+
 # Xodel:get_or_create(params:table, defaults?:table, columns?:string[])
+
 ## basic
+
 ```lua
 usr:get_or_create{username='goc'}
 ```
@@ -2161,7 +2304,9 @@ UNION ALL
 ```
 
 ok 111 - Xodel:get_or_create(params:table, defaults?:table, columns?:string[]) basic
+
 ## model get_or_create with defaults
+
 ```lua
 usr:get_or_create({username='goc2'}, {permission = 5})
 ```
@@ -2218,7 +2363,9 @@ UNION ALL
 ```
 
 ok 112 - Xodel:get_or_create(params:table, defaults?:table, columns?:string[]) model get_or_create with defaults
+
 ## test chat model
+
 ```sql
 INSERT INTO
   message AS T (creator, target, content)
@@ -2236,7 +2383,9 @@ RETURNING
 ```
 
 ok 113 - Xodel api: test chat model
+
 ## go crazy with where clause with recursive join
+
 ```sql
 INSERT INTO
   message AS T (content, creator, target)
@@ -2297,14 +2446,19 @@ WHERE
 ```
 
 ok 114 - Xodel api: go crazy with where clause with recursive join
+
 # etc
+
 ## wrong fk name
+
 ```lua
 models.message:where {creator__usr_id__views=0}:exec()
 ```
 
 ok 115 - etc wrong fk name
+
 ## wrong fk name3
+
 ```lua
 models.message:select('creator__usr_id__views'):exec()
 ```
@@ -2312,6 +2466,7 @@ models.message:select('creator__usr_id__views'):exec()
 ok 116 - etc wrong fk name3
 
 ## test shortcuts join
+
 ```lua
 profile:join('dept_name'):get { id = 1 }
 ```
@@ -2345,7 +2500,9 @@ LIMIT
 ```
 
 ok 117 - etc test shortcuts join
+
 ## sql select_as
+
 ```lua
 usr:select_as('id', 'value'):select_as('username', 'label'):where { id = 2 }:exec()
 ```
@@ -2366,11 +2523,13 @@ WHERE
     label: "u2",
     value: 2,
   },
-]
+];
 ```
 
 ok 118 - etc sql select_as
+
 ## sql select_as foreignkey
+
 ```lua
 profile:select_as('usr_id__permission', 'uperm'):where { id = 2 }:exec()
 ```
@@ -2390,14 +2549,19 @@ WHERE
   {
     uperm: 3,
   },
-]
+];
 ```
 
 ok 119 - etc sql select_as foreignkey
+
 # sql injection
+
 ## where key
+
 ok 120 - sql injection where key
+
 ## where value
+
 ```sql
 SELECT
   *
@@ -2408,12 +2572,19 @@ WHERE
 ```
 
 ok 121 - sql injection where value
+
 ## order
+
 ok 122 - sql injection order
+
 ## select
+
 ok 123 - sql injection select
+
 # Xodel:delete(cond?, op?, dval?)
+
 ## model class delete all
+
 ```lua
 evaluate:delete{}:exec()
 ```
@@ -2429,7 +2600,9 @@ DELETE FROM evaluate T
 ```
 
 ok 124 - Xodel:delete(cond?, op?, dval?) model class delete all
+
 ## model instance delete
+
 ```sql
 DELETE FROM message T
 ```
@@ -2466,11 +2639,13 @@ RETURNING
   {
     id: 1,
   },
-]
+];
 ```
 
 ok 125 - Xodel:delete(cond?, op?, dval?) model instance delete
+
 ## model instance delete use non primary key
+
 ```sql
 SELECT
   *
@@ -2499,11 +2674,13 @@ RETURNING
   {
     username: "u1",
   },
-]
+];
 ```
 
 ok 126 - Xodel:delete(cond?, op?, dval?) model instance delete use non primary key
+
 ## create with foreign model returning all
+
 ```sql
 SELECT
   *
@@ -2531,17 +2708,19 @@ RETURNING
 ```js
 [
   {
-    age   : 12,
-    id    : 4,
+    age: 12,
+    id: 4,
     salary: 1000,
-    sex   : "f",
+    sex: "f",
     usr_id: 3,
   },
-]
+];
 ```
 
 ok 127 - Xodel:delete(cond?, op?, dval?) create with foreign model returning all
+
 ## insert from delete returning
+
 ```sql
 SELECT
   *
@@ -2584,19 +2763,14 @@ RETURNING
 ```js
 [
   {
-    action    : "delete",
-    delete_id : 2,
-    id        : 1,
+    action: "delete",
+    delete_id: 2,
+    id: 1,
     model_name: "usr",
   },
-]
+];
 ```
 
 ## TODO
 
 - ManyToManyField
-
-
-
-
-
