@@ -983,6 +983,9 @@ end
 ---@param names? string[]
 ---@return Record
 function Xodel:validate_create(input, names)
+  if next(input) == nil then
+    error("empty input for validate_create")
+  end
   ---@type Record
   local data = {}
   for _, name in ipairs(names or self.names) do

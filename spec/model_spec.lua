@@ -862,6 +862,11 @@ mdesc("Xodel:insert抛出异常的情况", function()
     end)
   end)
 
+  mit("唯一性错误", function()
+    assert.are.same(eval [[ BlogBin:insert{}:statement() ]],
+      "INSERT INTO blog_bin (id, name, tagline, note) VALUES (DEFAULT, DEFAULT, DEFAULT, DEFAULT)")
+  end)
+
   -- mit("传入非法字段", function()
   --   assert.contains_error(function()
   --     eval [[

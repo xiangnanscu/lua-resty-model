@@ -2,6 +2,12 @@
 
 Openresty super postgresql orm finally comes out! Inspired by django orm. Support arbitrary depth of automatic join, group by, reversed lookup, F, Q, annotate, etc.
 
+## etc
+
+- group 自动 select
+- nulls_first nulls_last 要先于order调用
+- count, exists, flat。必须最后调用。
+
 ## Install
 
 ```sh

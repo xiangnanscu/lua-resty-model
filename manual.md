@@ -1473,29 +1473,6 @@ local blogs = Blog:filter({tagline__contains = 'test'})
 local blogs = Blog:where({tagline__contains = 'test'}):exec()
 ```
 
-### meta_query(data)
-
-元查询（配置式查询）。
-
-```lua
--- 方式1: 配置式查询
-local results = Blog:meta_query({
-  select = {'name', 'tagline'},
-  where = {tagline__contains = 'test'},
-  order = {'-name'},
-  limit = 10
-})
-
--- 方式2: 包含聚合的元查询
-local results = Entry:meta_query({
-  select = {'blog_id'},
-  where = {rating__gt = 4},
-  group = {'blog_id'},
-  having = {rating__avg__gt = 4.5},
-  order = {'blog_id'}
-})
-```
-
 ### get_or_create(params, defaults?, columns?)
 
 获取或创建记录。

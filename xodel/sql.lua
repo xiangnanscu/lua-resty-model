@@ -2189,8 +2189,8 @@ end
 
 ---@param join_args string|Xodel
 ---@param key string|fun(ctx:table):string
----@param op string
----@param val DBValue
+---@param op? string
+---@param val? DBValue
 ---@return self
 function Sql:full_join(join_args, key, op, val)
   return self:_base_join("FULL", join_args, key, op, val)
@@ -2198,8 +2198,8 @@ end
 
 ---@param join_args string|Xodel
 ---@param key string|fun(ctx:table):string
----@param op string
----@param val DBValue
+---@param op? string
+---@param val? DBValue
 ---@return self
 function Sql:cross_join(join_args, key, op, val)
   return self:_base_join("CROSS", join_args, key, op, val)
@@ -2792,7 +2792,7 @@ end
 ---@return self
 function Sql:select_related_labels(names)
   self:join_type("LEFT")
-  for i, name in ipairs(names or self.model.names) do
+  for _, name in ipairs(names or self.model.names) do
     local field = self.model.fields[name]
     if field and field.type == 'foreignkey' and field.reference_label_column ~= field.reference_column then
       self:select_related(field.name, field.reference_label_column)
@@ -2820,7 +2820,7 @@ function Sql:select_related(fk_name, select_names, more_name, ...)
     fk_name = foreignfield.name
   end
   if foreignfield == nil then
-    error(fk_name .. " is not a valid forein key name for " .. self.table_name)
+    error(fk_name .. " is not a valid foreign key name for " .. self.table_name)
   end
   local fk_model = foreignfield.reference
   if not self._select_related then
@@ -2889,7 +2889,7 @@ end
 function Sql:where_recursive(name, value, select_names)
   local fk = self.model.foreignkey_fields[name]
   if fk == nil then
-    error(name .. " is not a valid forein key name for " .. self.table_name)
+    error(name .. " is not a valid foreign key name for " .. self.table_name)
   end
   local fkc = fk.reference_column
   local table_name = self.model.table_name
@@ -2942,52 +2942,6 @@ end
 function Sql:compact()
   self._compact = true
   return self
-end
-
-local select_args = {
-  'select', 'select_related', 'select_related_labels', 'where',
-  'order', 'group', 'having', 'limit', 'offset', 'distinct', 'raw', 'compact',
-  'flat', 'get', 'try_get', 'exists' }
-
----@class selectArgs
----@field select? table|string[] 要查询的字段
----@field select_related? string 要加载的外键
----@field select_related_labels? string[] 要加载的外键标签
----@field where? table 查询条件
----@field order? table|string[] 排序条件
----@field group? table|string[] 分组条件
----@field having? table 分组过滤条件
----@field limit? integer 限制返回数量
----@field offset? integer 跳过的数量
----@field distinct? boolean 是否去重
----@field get? table|string[] 获取单条记录的条件
----@field try_get? table|string[] 尝试获取单条记录的条件
----@field flat? string 扁平化返回的字段
----@field raw? boolean 是否返回原始数据
----@field exists? boolean 是否只检查存在性
----@field compact? boolean 是否返回紧凑格式
-
-local function ensure_array(o)
-  if type(o) ~= 'table' or o[1] == nil then
-    return { o }
-  end
-  return o
-end
-
----@param data selectArgs
----@return table
----@return number? num_queries
-function Sql:meta_query(data)
-  for i, arg_name in ipairs(select_args) do
-    if data[arg_name] ~= nil then
-      self = self[arg_name](self, unpack(ensure_array(data[arg_name])))
-    end
-  end
-  if data.get or data.try_get or data.flat or data.exists then
-    return self
-  else
-    return self:exec()
-  end
 end
 
 ---@param kwargs table
