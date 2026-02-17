@@ -7,6 +7,11 @@ local error = error
 local insert = table.insert
 local format = string.format
 local concat = table.concat
+
+-- =========================================================================
+-- Table & Core Utilities
+-- =========================================================================
+
 local clone, isempty, NULL, table_new, table_clear
 if ngx then
   clone = require "table.clone"
@@ -44,6 +49,98 @@ else
   NULL = newproxy(false)
 end
 
+---@param a table
+---@param b? table
+---@return Array
+local function list(a, b)
+  local t = clone(a)
+  if b then
+    for _, v in ipairs(b) do
+      t[#t + 1] = v
+    end
+  end
+  return Array(t)
+end
+
+---@param t1 table
+---@param t2? table
+---@return table
+local function dict(t1, t2)
+  local res = clone(t1 or {})
+  if t2 then
+    for key, value in pairs(t2) do
+      res[key] = value
+    end
+  end
+  return res
+end
+
+local function map(tbl, func)
+  local res = {}
+  for i = 1, #tbl do
+    res[i] = func(tbl[i])
+  end
+  return res
+end
+
+---@param rows Records
+---@param columns? string[]
+---@return string[]
+local function get_keys(rows, columns)
+  columns = columns or {}
+  for k, _ in pairs(rows[1] or rows) do
+    insert(columns, k)
+  end
+  return columns
+end
+
+-- =========================================================================
+-- String Utilities
+-- =========================================================================
+
+local function capitalize(s)
+  if s == "" then return s end
+  return s:sub(1, 1):upper() .. s:sub(2):lower()
+end
+
+local function to_camel_case(str)
+  local parts = {}
+  for part in str:gmatch("([^_]+)") do
+    if part ~= "" then
+      table.insert(parts, part)
+    end
+  end
+
+  local result = ""
+  for _, part in ipairs(parts) do
+    result = result .. capitalize(part)
+  end
+
+  return result
+end
+
+---@param s string
+---@return string[]
+local function split_string(s, pattern)
+  local parts = {}
+  local start = 1
+
+  while true do
+    local pos = s:find(pattern, start, true)
+    if not pos then
+      insert(parts, s:sub(start))
+      break
+    end
+    insert(parts, s:sub(start, pos - 1))
+    start = pos + 2
+  end
+
+  return parts
+end
+
+-- =========================================================================
+-- Constants (PostgreSQL/SQL)
+-- =========================================================================
 
 local PG_OPERATORS = {
   -- 比较运算符
@@ -241,6 +338,29 @@ local PG_SET_MAP = {
   _intersect_all = 'INTERSECT ALL'
 }
 
+-- https://docs.djangoproject.com/en/5.1/topics/db/queries/#containment-and-key-lookups
+local json_operators = {
+  eq = true,
+  has_key = true,
+  has_keys = true,
+  contains = true,
+  contained_by = true,
+  has_any_keys = true,
+}
+
+local NON_OPERATOR_CONTEXTS = {
+  select = true,
+  returning = true,
+  aggregate = true,
+  group_by = true,
+  order_by = true,
+  distinct = true,
+}
+
+-- =========================================================================
+-- SQL Construction & ORM Helpers
+-- =========================================================================
+
 local function smart_quote(s)
   if IS_PG_KEYWORDS[s:upper()] then
     return format('"%s"', s)
@@ -263,72 +383,6 @@ local function DEFAULT()
   return "DEFAULT"
 end
 
----@param a table
----@param b? table
----@return Array
-local function list(a, b)
-  local t = clone(a)
-  if b then
-    for _, v in ipairs(b) do
-      t[#t + 1] = v
-    end
-  end
-  return Array(t)
-end
-
----@param t1 table
----@param t2? table
----@return table
-local function dict(t1, t2)
-  local res = clone(t1 or {})
-  if t2 then
-    for key, value in pairs(t2) do
-      res[key] = value
-    end
-  end
-  return res
-end
-
-local function map(tbl, func)
-  local res = {}
-  for i = 1, #tbl do
-    res[i] = func(tbl[i])
-  end
-  return res
-end
-
-local function capitalize(s)
-  if s == "" then return s end
-  return s:sub(1, 1):upper() .. s:sub(2):lower()
-end
-
-local function to_camel_case(str)
-  local parts = {}
-  for part in str:gmatch("([^_]+)") do
-    if part ~= "" then
-      table.insert(parts, part)
-    end
-  end
-
-  local result = ""
-  for _, part in ipairs(parts) do
-    result = result .. capitalize(part)
-  end
-
-  return result
-end
-
----@param rows Records
----@param columns? string[]
----@return string[]
-local function get_keys(rows, columns)
-  columns = columns or {}
-  for k, _ in pairs(rows[1] or rows) do
-    insert(columns, k)
-  end
-  return columns
-end
-
 local function get_foreign_object(attrs, prefix)
   -- when in : attrs = {id=1, buyer__name='tom', buyer__id=2}, prefix = 'buyer__'
   -- when out: attrs = {id=1}, fk_instance = {name='tom', id=2}
@@ -341,25 +395,6 @@ local function get_foreign_object(attrs, prefix)
     end
   end
   return fk
-end
-
----@param s string
----@return string[]
-local function split_string(s, pattern)
-  local parts = {}
-  local start = 1
-
-  while true do
-    local pos = s:find(pattern, start, true)
-    if not pos then
-      insert(parts, s:sub(start))
-      break
-    end
-    insert(parts, s:sub(start, pos - 1))
-    start = pos + 2
-  end
-
-  return parts
 end
 
 ---@param sql_part string
@@ -515,6 +550,7 @@ local function get_list_tokens(a, b, ...)
     return concat(res, ", ")
   end
 end
+
 -- prefix column with `V`: column => V.column
 ---@param column string
 ---@return string
@@ -676,45 +712,35 @@ local function assemble_sql(opts)
   end
 end
 
--- https://docs.djangoproject.com/en/5.1/topics/db/queries/#containment-and-key-lookups
-local json_operators = {
-  eq = true,
-  has_key = true,
-  has_keys = true,
-  contains = true,
-  contained_by = true,
-  has_any_keys = true,
-}
-
-local NON_OPERATOR_CONTEXTS = {
-  select = true,
-  returning = true,
-  aggregate = true,
-  group_by = true,
-  order_by = true,
-  distinct = true,
-}
-
 return {
+  -- Table & Core Utilities
   clone = clone,
   isempty = isempty,
   NULL = NULL,
   table_new = table_new,
   table_clear = table_clear,
-  PG_OPERATORS = PG_OPERATORS,
-  IS_PG_KEYWORDS = IS_PG_KEYWORDS,
-  PG_SET_MAP = PG_SET_MAP,
-  smart_quote = smart_quote,
-  make_token = make_token,
-  DEFAULT = DEFAULT,
   list = list,
   dict = dict,
   map = map,
+  get_keys = get_keys,
+
+  -- String Utilities
   capitalize = capitalize,
   to_camel_case = to_camel_case,
-  get_keys = get_keys,
-  get_foreign_object = get_foreign_object,
   split_string = split_string,
+
+  -- Constants (PostgreSQL/SQL)
+  PG_OPERATORS = PG_OPERATORS,
+  IS_PG_KEYWORDS = IS_PG_KEYWORDS,
+  PG_SET_MAP = PG_SET_MAP,
+  json_operators = json_operators,
+  NON_OPERATOR_CONTEXTS = NON_OPERATOR_CONTEXTS,
+
+  -- SQL Construction & ORM Helpers
+  smart_quote = smart_quote,
+  make_token = make_token,
+  DEFAULT = DEFAULT,
+  get_foreign_object = get_foreign_object,
   extract_column_name = extract_column_name,
   extract_column_names = extract_column_names,
   as_literal = as_literal,
@@ -728,6 +754,4 @@ return {
   get_join_table_condition = get_join_table_condition,
   get_join_table_condition_select = get_join_table_condition_select,
   assemble_sql = assemble_sql,
-  json_operators = json_operators,
-  NON_OPERATOR_CONTEXTS = NON_OPERATOR_CONTEXTS,
 }

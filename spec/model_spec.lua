@@ -1,6 +1,4 @@
 local utils = require("resty.utils")
-local field = require "resty.fields"
-local array = require "resty.array"
 local migrate = require "resty.migrate"
 local Model = require("xodel.model")
 local format = string.format
