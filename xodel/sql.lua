@@ -3021,3 +3021,5 @@ end
 function Sql:filter(kwargs)
   return self:where(kwargs):exec()
 end
+
+return Sql
