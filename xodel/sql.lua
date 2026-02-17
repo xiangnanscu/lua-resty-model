@@ -1,3 +1,8 @@
+local Utils = require "xodel.utils"
+local Array = require "resty.array"
+local encode = require("cjson").encode
+local F = require "xodel.f"
+
 local setmetatable = setmetatable
 local ipairs = ipairs
 local tostring = tostring
@@ -9,6 +14,31 @@ local insert = table.insert
 local next = next
 local format = string.format
 local concat = table.concat
+local clone = Utils.clone
+local isempty = Utils.isempty
+local NULL = Utils.NULL
+local table_new = Utils.table_new
+local table_clear = Utils.table_clear
+local PG_OPERATORS = Utils.PG_OPERATORS
+local PG_SET_MAP = Utils.PG_SET_MAP
+local smart_quote = Utils.smart_quote
+local DEFAULT = Utils.DEFAULT
+local list = Utils.list
+local dict = Utils.dict
+local map = Utils.map
+local get_keys = Utils.get_keys
+local get_foreign_object = Utils.get_foreign_object
+local extract_column_names = Utils.extract_column_names
+local as_literal = Utils.as_literal
+local as_token = Utils.as_token
+local as_literal_without_brackets = Utils.as_literal_without_brackets
+local escape_like_value = Utils.escape_like_value
+local get_list_tokens = Utils.get_list_tokens
+local assemble_sql = Utils.assemble_sql
+local json_operators = Utils.json_operators
+local NON_OPERATOR_CONTEXTS = Utils.NON_OPERATOR_CONTEXTS
+local _get_join_token = Utils._get_join_token
+local _prefix_with_V = Utils._prefix_with_V
 
 ---@class SqlOptions
 ---@field table_name string
@@ -204,7 +234,7 @@ end
 local _debug = 0
 local function debug(...)
   if _debug == 1 then
-    loger(...)
+    print(...)
   end
 end
 
