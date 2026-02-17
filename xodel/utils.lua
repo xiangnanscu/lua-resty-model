@@ -1,3 +1,4 @@
+local Array = require "resty.array"
 local ipairs = ipairs
 local tostring = tostring
 local type = type

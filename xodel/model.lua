@@ -1,9 +1,4 @@
 ---@diagnostic disable: invisible
--- https://www.postgreSql.org/docs/current/sql-select.html
--- https://www.postgreSql.org/docs/current/sql-insert.html
--- https://www.postgreSql.org/docs/current/sql-update.html
--- https://www.postgreSql.org/docs/current/sql-delete.html
-local encode = require("cjson").encode
 local Array = require "resty.array"
 local Fields = require "xodel.fields"
 local Func = require "xodel.func"
@@ -12,7 +7,7 @@ local Q = require "xodel.q"
 local Query = require "xodel.query"
 local Utils = require "xodel.utils"
 local Sql = require "xodel.sql"
-local ngx = ngx
+
 
 local setmetatable = setmetatable
 local ipairs = ipairs
@@ -22,17 +17,12 @@ local pairs = pairs
 local assert = assert
 local error = error
 local insert = table.insert
-local ngx_localtime = ngx.localtime
-local next = next
 local format = string.format
-local concat = table.concat
-
 local Count = Func.Count
 local Sum = Func.Sum
 local Avg = Func.Avg
 local Max = Func.Max
 local Min = Func.Min
-
 local IS_PG_KEYWORDS = Utils.IS_PG_KEYWORDS
 local clone = Utils.clone
 local NULL = Utils.NULL
