@@ -133,18 +133,6 @@ function Sql:__tostring()
   return self:statement()
 end
 
----keeping args passed to Sql
----@param method_name string
----@param ... any
-function Sql:_keep_args(method_name, ...)
-  if self[method_name] then
-    self[method_name] = { self[method_name], ... }
-  else
-    self[method_name] = { ... }
-  end
-  return self
-end
-
 ---@private
 ---@param rows Sql|Record|Record[]
 ---@param columns? string[]
@@ -1734,6 +1722,10 @@ function Sql:_resolve_field_builder(f)
       self:_resolve_field_builder(f.right))
   end
 end
+
+-- =========================================================================
+-- Public APIs
+-- =========================================================================
 
 ---@param attrs? table
 ---@return self
