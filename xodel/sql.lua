@@ -2454,29 +2454,23 @@ function Sql:align(rows, key, columns)
   return self
 end
 
----@param row Record|Sql
+---@param row Record
 ---@param columns? string[]
 ---@return self
 function Sql:update(row, columns)
-  if not row.__SQL_BUILDER__ then
-    ---@cast row Record
-    if not columns then
-      columns = self.model.names -- get_keys(row, { self.model.auto_now_name })
-    end
-    local safe_row = {}
-    for k, v in pairs(row) do
-      safe_row[k] = self:_resolve_F(v)
-    end
-    row = safe_row
-    if not self._skip_validate then
-      row = self.model:validate_update(row, columns)
-    end
-    row = self.model:_prepare_db_rows(row, columns)
-    return Sql._base_update(self, row, columns)
-  else
-    ---@cast row Sql
-    return Sql._base_update(self, row, columns)
+  if not columns then
+    columns = self.model.names -- get_keys(row, { self.model.auto_now_name })
   end
+  local safe_row = {}
+  for k, v in pairs(row) do
+    safe_row[k] = self:_resolve_F(v)
+  end
+  row = safe_row
+  if not self._skip_validate then
+    row = self.model:validate_update(row, columns)
+  end
+  row = self.model:_prepare_db_rows(row, columns)
+  return Sql._base_update(self, row, columns)
 end
 
 ---@param rows Record[] rows to be merged into the table
