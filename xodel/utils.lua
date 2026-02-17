@@ -88,10 +88,24 @@ end
 ---@return string[]
 local function get_keys(rows, columns)
   columns = columns or {}
-  for k, _ in pairs(rows[1] or rows) do
-    insert(columns, k)
+  if rows[1] then
+    local res = {}
+    for _, row in ipairs(rows) do
+      for k, _ in pairs(row) do
+        res[k] = true
+      end
+    end
+    return get_keys(res)
+  else
+    for k, _ in pairs(rows) do
+      insert(columns, k)
+    end
   end
   return columns
+end
+
+local function is_empty_value(value)
+  return value == nil or value == "" or value == NULL
 end
 
 -- =========================================================================
@@ -723,6 +737,7 @@ return {
   dict = dict,
   map = map,
   get_keys = get_keys,
+  is_empty_value = is_empty_value,
 
   -- String Utilities
   capitalize = capitalize,

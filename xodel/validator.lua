@@ -1,6 +1,6 @@
 local cjson_encode = require "cjson.safe".encode
 local cjson_decode = require "cjson.safe".decode
-local NULL = require "cjson".null
+local is_empty_value = require "xodel.utils".is_empty_value
 local ENCODE_AS_ARRAY = require "cjson".empty_array_mt
 
 local match, gsub
@@ -23,7 +23,7 @@ end
 local function required(message)
   message = message or "此项必填"
   local function required_validator(v)
-    if v == nil or v == "" then
+    if is_empty_value(v) then
       return nil, message
     else
       return v
@@ -34,7 +34,7 @@ local function required(message)
 end
 
 local function not_required(v)
-  if v == nil or v == "" or v == NULL then
+  if is_empty_value(v) then
     return
   else
     return v

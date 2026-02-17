@@ -16,7 +16,7 @@ local format = string.format
 local concat = table.concat
 local clone = Utils.clone
 local isempty = Utils.isempty
-local NULL = Utils.NULL
+local is_empty_value = Utils.is_empty_value
 local table_new = Utils.table_new
 local table_clear = Utils.table_clear
 local PG_OPERATORS = Utils.PG_OPERATORS
@@ -652,17 +652,17 @@ function Sql:_rows_to_array(rows, columns)
   for i, col in ipairs(columns) do
     for j = 1, n do
       local v = rows[j][col]
-      if v ~= nil and v ~= '' then
+      if not is_empty_value(v) then
         res[j][i] = v
       elseif fields[col] then
         local default = fields[col].default
         if default ~= nil then
           res[j][i] = fields[col]:get_default()
         else
-          res[j][i] = NULL
+          res[j][i] = DEFAULT
         end
       else
-        res[j][i] = NULL
+        res[j][i] = DEFAULT
       end
     end
   end
@@ -2397,7 +2397,7 @@ function Sql:insert(rows, columns)
   if not rows.__SQL_BUILDER__ then
     ---@cast rows Record|Record[]
     if not columns then
-      columns = self.model.names -- self.model.names -- get_keys(rows)
+      columns = self.model.names -- get_keys(rows)
     end
     if not self._skip_validate then
       rows = self.model:_validate_create_data(rows, columns)
@@ -2463,9 +2463,11 @@ function Sql:update(row, columns)
     if not columns then
       columns = self.model.names -- get_keys(row, { self.model.auto_now_name })
     end
+    local safe_row = {}
     for k, v in pairs(row) do
-      row[k] = self:_resolve_F(v)
+      safe_row[k] = self:_resolve_F(v)
     end
+    row = safe_row
     if not self._skip_validate then
       row = self.model:validate_update(row, columns)
     end
