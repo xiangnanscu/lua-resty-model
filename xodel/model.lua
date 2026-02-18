@@ -197,11 +197,8 @@ local function create_model_proxy(ModelClass)
       return function(cls, ...)
         if cls == proxy then
           return model_k(ModelClass, ...)
-        elseif k == 'query' then
-          -- ModelClass.query(statement, compact?), cls is statement in this case
-          return model_k(cls, ...)
         else
-          error(format("calling model proxy method `%s` with first argument not being itself is not allowed", k))
+          error(format("Invalid call to model proxy method %s: the first argument must be itself.", k))
         end
       end
     else
@@ -325,7 +322,7 @@ end
 
 function Xodel:atomic(func)
   return function(request)
-    return Xodel:transaction(function()
+    return self:transaction(function()
       return func(request)
     end)
   end
@@ -336,6 +333,7 @@ end
 function Xodel:make_field_from_json(options)
   assert(not options[1])
   assert(options.name, "no name provided")
+  options = clone(options)
   if not options.type then
     if options.reference then
       options.type = "foreignkey"
@@ -359,7 +357,18 @@ end
 
 ---@return Sql
 function Xodel:create_sql()
-  return Sql:new { model = self, table_name = self._table_name_token or smart_quote(self.table_name), _as = 'T' }
+  local table_token = self._table_name_token
+
+  if not table_token then
+    local table_name = self.table_name or error("table_name not set")
+    table_token = smart_quote(table_name)
+  end
+
+  return Sql:new {
+    model = self,
+    table_name = table_token,
+    _as = "T"
+  }
 end
 
 ---@param table_name string
@@ -680,7 +689,7 @@ function Xodel:resolve_foreignkey_related()
       --   reference = self,                                     -- Entry / PollLog
       --   reference_column = name                              -- blog_id / poll_id
       -- }
-      --define:   {name='blog_id',  reference=Blog,    related_query_name=entry, }
+      --define: Entry.blog_id   {name='blog_id',  reference=Blog,    related_query_name=entry, }
       --reversed: {name='entry',    reference=Entry,   reference_column='blog_id'}
     end
   end
@@ -703,6 +712,7 @@ function Xodel:materialize_with_table_name(opts)
   self.abstract = false
   if not self.primary_key and self.auto_primary_key then
     local pk_name = DEFAULT_PRIMARY_KEY
+    assert(not self.fields[pk_name], format("field '%s' already exists", pk_name))
     self.primary_key = pk_name
     self.fields[pk_name] = Fields.integer:create_field { name = pk_name, primary_key = true, serial = true }
     insert(self.field_names, 1, pk_name)
@@ -726,17 +736,12 @@ end
 ---@param models ModelOpts[]
 ---@return ModelOpts
 function Xodel:merge_models(models)
-  if #models < 2 then
-    error("provide at least two models to merge")
-  elseif #models == 2 then
-    return self:merge_model(unpack(models))
-  else
-    local merged = models[1]
-    for i = 2, #models do
-      merged = self:merge_model(merged, models[i])
-    end
-    return merged
+  assert(#models >= 2, "provide at least two models to merge")
+  local merged = models[1]
+  for i = 2, #models do
+    merged = self:merge_model(merged, models[i])
   end
+  return merged
 end
 
 ---@param a ModelOpts
@@ -1136,7 +1141,7 @@ end
 ---@param key Keys
 function Xodel:_check_upsert_key_error(rows, key)
   assert(key, "no key for upsert")
-  if rows[1] then
+  if #rows > 0 then
     ---@cast rows Record[]
     if type(key) == "string" then
       for i, row in ipairs(rows) do
@@ -1181,7 +1186,7 @@ end
 ---@param index? integer error row index returned by TableField's validate function
 ---@return ValidateError
 function Xodel:make_field_error(name, err, index)
-  local field = assert(self.fields[name], "invalid feild name: " .. name)
+  local field = assert(self.fields[name], "invalid field name: " .. name)
   return {
     type = 'field_error',
     message = err,
@@ -1197,12 +1202,8 @@ function Xodel:load(data)
   for _, name in ipairs(self.names) do
     local field = self.fields[name]
     local value = data[name]
-    if value ~= nil then
-      if not field.load then
-        data[name] = value
-      else
-        data[name] = field:load(value)
-      end
+    if value ~= nil and field.load then
+      data[name] = field:load(value)
     end
   end
   return self:create_record(data)
