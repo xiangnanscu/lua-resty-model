@@ -2473,7 +2473,8 @@ function Sql:update(row, columns)
     row = self.model:validate_update(row, columns)
   end
   row = self.model:_prepare_db_rows(row, columns)
-  return Sql._base_update(self, row, columns)
+  self._update = self:_get_update_token(row, columns)
+  return self
 end
 
 ---@param rows Record[] rows to be merged into the table
