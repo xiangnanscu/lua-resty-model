@@ -253,46 +253,22 @@ Blog:where(Q{name__contains='Blog'} / Q{id__in={1,2,3}}):exec()
 
 ## 跨表查询 (自动 JOIN)
 
-where 的 table 键中使用 `__` 分隔，可以跨越外键关系:
-
-### 正向查询 (从外键字段到引用表)
+where 的 table 键中使用 `__` 分隔，可以跨越外键关系。详见 [05-auto-join.md](05-auto-join.md)。
 
 ```lua
--- Entry.blog_id → Blog.name
+-- 正向: Entry.blog_id → Blog.name
 Entry:where{blog_id__name='First Blog'}:exec()
--- WHERE T1."name" = 'First Blog'
--- FROM entry T INNER JOIN blog T1 ON (T."blog_id" = T1."id")
+-- WHERE T1."name" = 'First Blog' (自动 INNER JOIN blog)
 
--- 多级跨表
+-- 多级: ViewLog → Entry → Blog
 ViewLog:where{entry_id__blog_id__name='First Blog'}:exec()
--- WHERE T2."name" = 'First Blog'
--- FROM view_log T
---   INNER JOIN entry T1 ON (T."entry_id" = T1."id")
---   INNER JOIN blog T2 ON (T1."blog_id" = T2."id")
 
--- 冗余后缀自动跳过: blog_id__id 等价于 blog_id
-Entry:where{blog_id__id=1}:exec()
--- WHERE T."blog_id" = 1  (不会 JOIN，因为 id 就是外键引用列)
-```
-
-### 反向查询 (从引用表到外键表)
-
-通过 `related_query_name` 反向查询:
-
-```lua
--- Blog ← Entry (related_query_name = 'entry')
-Blog:where{entry__rating=4}:exec()
--- WHERE T1."rating" = 4
--- FROM blog T INNER JOIN entry T1 ON (T."id" = T1."blog_id")
-
--- 反向查询 + 操作符后缀
+-- 反向: Blog ← Entry (via related_query_name='entry')
 Blog:where{entry__rating__gt=3}:exec()
--- WHERE T1."rating" > 3
--- FROM blog T INNER JOIN entry T1 ON (T."id" = T1."blog_id")
+-- WHERE T1."rating" > 3 (自动 INNER JOIN entry)
 
-Blog:where{entry__headline__contains='First'}:exec()
--- WHERE T1."headline" LIKE '%First%' ESCAPE '\'
--- FROM blog T INNER JOIN entry T1 ON (T."id" = T1."blog_id")
+-- 跨表 + 操作符后缀组合
+Entry:where{blog_id__name__contains='Blog'}:exec()
 ```
 
 ---

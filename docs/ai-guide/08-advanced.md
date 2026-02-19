@@ -66,21 +66,16 @@ Blog:with_values('V', { {id=1, name='a'}, {id=2, name='b'} })
 ```
 
 ```lua
--- 使用递归 CTE 构建树形查询
-local seed = Category:select('id', 'parent_id', 'name'):where{parent_id=1}
-local recurse = Category:select('id', 'parent_id', 'name')
-  :join('category_tree', 'T.parent_id = category_tree.id')
-
-Category:with_recursive('category_tree', seed:union_all(recurse))
-  :from('category_tree AS category')
-  :exec()
--- WITH RECURSIVE category_tree AS (
+-- 使用 where_recursive 快捷方式（推荐，见下方）
+-- 或手动构建递归 CTE
+Category:where_recursive('parent_id', 1, {'name'}):exec()
+-- WITH RECURSIVE category_recursive AS (
 --   SELECT T."id", T."parent_id", T."name" FROM category T WHERE T."parent_id" = 1
 --   UNION ALL
 --   SELECT T."id", T."parent_id", T."name" FROM category T
---     INNER JOIN category_tree ON (T.parent_id = category_tree.id)
+--     INNER JOIN category_recursive ON (T."parent_id" = category_recursive."id")
 -- )
--- SELECT * FROM category_tree AS category
+-- SELECT * FROM category_recursive AS category
 ```
 
 ---

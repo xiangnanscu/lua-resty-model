@@ -4,17 +4,17 @@
 
 ## 目录
 
-| 文档                                             | 内容                                                       |
-| ------------------------------------------------ | ---------------------------------------------------------- |
-| [01-model-definition.md](01-model-definition.md) | Model 定义、字段类型、继承与 Mixin                         |
-| [02-model-crud.md](02-model-crud.md)             | Model 层 CRUD：create / save / validate                    |
-| [03-query-basics.md](03-query-basics.md)         | 查询基础：select / where / order / limit / offset          |
-| [04-where-deep-dive.md](04-where-deep-dive.md)   | where 深度解析：操作符后缀、跨表查询、Q 对象               |
-| [05-join-and-related.md](05-join-and-related.md) | JOIN 与关联查询：join / select_related                     |
-| [06-aggregation.md](06-aggregation.md)           | 聚合与注解：annotate / group_by / having / F / Count / Sum |
-| [07-upsert-merge.md](07-upsert-merge.md)         | 批量操作：insert / upsert / merge / updates / align / gets |
-| [08-advanced.md](08-advanced.md)                 | 高级用法：set 操作、CTE、递归查询、事务                    |
-| [09-exec-and-helpers.md](09-exec-and-helpers.md) | 执行与辅助：exec / get / count / exists / flat / compact   |
+| 文档                                             | 内容                                                             |
+| ------------------------------------------------ | ---------------------------------------------------------------- |
+| [01-model-definition.md](01-model-definition.md) | Model 定义、字段类型、继承与 Mixin                               |
+| [02-model-crud.md](02-model-crud.md)             | Model 层 CRUD：create / save / validate                          |
+| [03-query-basics.md](03-query-basics.md)         | 查询基础：select / where / order / limit / offset                |
+| [04-where-deep-dive.md](04-where-deep-dive.md)   | where 深度解析：操作符后缀、跨表查询、Q 对象                     |
+| [05-auto-join.md](05-auto-join.md)               | 双下划线自动 JOIN：跨表查询、反向查询、JSON 路径、select_related |
+| [06-aggregation.md](06-aggregation.md)           | 聚合与注解：annotate / group_by / having / F / Count / Sum       |
+| [07-upsert-merge.md](07-upsert-merge.md)         | 批量操作：insert / upsert / merge / updates / align / gets       |
+| [08-advanced.md](08-advanced.md)                 | 高级用法：set 操作、CTE、递归查询、事务                          |
+| [09-exec-and-helpers.md](09-exec-and-helpers.md) | 执行与辅助：exec / get / count / exists / flat / compact         |
 
 ---
 
@@ -88,17 +88,16 @@ Blog:create_sql():where{name='test'}:exec()
 
 **核心查询:**
 
-| API                                                            | 说明     |
-| -------------------------------------------------------------- | -------- |
-| `:select(...)`                                                 | 选择字段 |
-| `:where(cond, op?, dval?)`                                     | 过滤条件 |
-| `:order(...)` / `:order_by(...)`                               | 排序     |
-| `:limit(n)`                                                    | 限制数量 |
-| `:offset(n)`                                                   | 偏移     |
-| `:group(...)` / `:group_by(...)`                               | 分组     |
-| `:having(cond)`                                                | 分组过滤 |
-| `:distinct(...)`                                               | 去重     |
-| `:join(...) / left_join / right_join / full_join / cross_join` | 连接     |
+| API                              | 说明     |
+| -------------------------------- | -------- |
+| `:select(...)`                   | 选择字段 |
+| `:where(cond, op?, dval?)`       | 过滤条件 |
+| `:order(...)` / `:order_by(...)` | 排序     |
+| `:limit(n)`                      | 限制数量 |
+| `:offset(n)`                     | 偏移     |
+| `:group(...)` / `:group_by(...)` | 分组     |
+| `:having(cond)`                  | 分组过滤 |
+| `:distinct(...)`                 | 去重     |
 
 **写入操作:**
 
