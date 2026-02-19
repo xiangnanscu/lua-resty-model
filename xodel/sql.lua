@@ -2152,60 +2152,6 @@ function Sql:get_table()
   end
 end
 
----@param join_args string|Xodel join model or foreign key
----@param key string|fun(ctx:table):string join condition or left part of join cond or join callback
----@param op? string
----@param val? DBValue
----@return self
-function Sql:join(join_args, key, op, val)
-  return self:_base_join("INNER", join_args, key, op, val)
-end
-
----@param join_args string|Xodel
----@param key string|fun(ctx:table):string
----@param op? string
----@param val? DBValue
----@return self
-function Sql:inner_join(join_args, key, op, val)
-  return self:_base_join("INNER", join_args, key, op, val)
-end
-
----@param join_args string|Xodel
----@param key string|fun(ctx:table):string
----@param op? string
----@param val? DBValue
----@return self
-function Sql:left_join(join_args, key, op, val)
-  return self:_base_join("LEFT", join_args, key, op, val)
-end
-
----@param join_args string|Xodel
----@param key string|fun(ctx:table):string
----@param op? string
----@param val? DBValue
----@return self
-function Sql:right_join(join_args, key, op, val)
-  return self:_base_join("RIGHT", join_args, key, op, val)
-end
-
----@param join_args string|Xodel
----@param key string|fun(ctx:table):string
----@param op? string
----@param val? DBValue
----@return self
-function Sql:full_join(join_args, key, op, val)
-  return self:_base_join("FULL", join_args, key, op, val)
-end
-
----@param join_args string|Xodel
----@param key string|fun(ctx:table):string
----@param op? string
----@param val? DBValue
----@return self
-function Sql:cross_join(join_args, key, op, val)
-  return self:_base_join("CROSS", join_args, key, op, val)
-end
-
 ---@param n integer|string
 ---@return self
 function Sql:limit(n)
@@ -2250,7 +2196,6 @@ function Sql:offset(n)
   return self
 end
 
--- remove type QClass for luaLS's bug
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
