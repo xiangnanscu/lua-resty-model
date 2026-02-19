@@ -1,0 +1,121 @@
+这是一个pg的orm库，充分借鉴了django ORM思想。@seed.lua 根据这个初始化设定给我编写API文档。每个API对应一个文档,文件名就是API的名字。
+
+注意，你不要有任何想当然的假设，必须从源码出发，确定所有公共api(没有以下划线开头的方法), 对于每个api,结合函数签名和注释，分析调用链，掌握api的全部用法，为每一种调用情形编写使用示例.
+
+提示, API总体有两大类,  一类是Model模型的定义和数据校验. 一类是Sql的各类查询. Sql查询可以通过Model代理.
+
+比如对于Sql:where这个API, 你首先看到函数签名和注释:
+```
+---@param cond table|string|fun(ctx:table):string
+---@param op? string
+---@param dval? DBValue
+---@return self
+function Sql:where(cond, op, dval)
+```
+知道大概会有几种调用情形, 比如:
+Sql:where{id=1}
+Sql:where("id=1")
+Sql:where("id", 1)
+Sql:where("id", ">", 1)
+Sql:where(function(ctx) return "" end)
+
+用深度优先的策略分析where调用链, 得到:
+```md
+Sql:where(cond, op, dval)                               # L2257
+│
+├── 分支 ①: cond 是 table 且不是逻辑构建器 (普通键值对, 如 {name='Tom', age__gt=18})
+│   │
+│   ├── Sql:_get_condition_token_from_table(cond)        # L1118
+│   │   │
+│   │   │  遍历 kwargs 中的每一个 key-value 对:
+│   │   │
+│   │   ├── Sql:_parse_column(key)                       # L1507 ⭐ 核心列解析器
+│   │   │   │
+│   │   │   │  用 "__" 分割 key, 逐段解析 token:
+│   │   │   │
+│   │   │   ├── 1.1 普通字段 (如 "name")
+│   │   │   │   └── 返回: "T"."name", op="eq"
+│   │   │   │
+│   │   │   ├── 1.2 JSON字段属性 (如 "data__a")
+│   │   │   │   └── 返回: "T"."data" #> ['a'], op="json_eq"
+│   │   │   │
+│   │   │   ├── 1.4.2 外键字段跳转 (如 "blog_id__name")
+│   │   │   │   └── Sql:_handle_manual_join(...)         # L471 注册 JOIN
+│   │   │   │       └── Sql:_ensure_context()            # 确保 join 上下文
+│   │   │   │   └── 返回: "blog_alias"."name", op="eq"
+│   │   │   │
+│   │   │   ├── 4. 反向外键 (如 "entry__rating")
+│   │   │   │   └── Sql:_handle_manual_join(...)         # L471 注册反向 JOIN
+│   │   │   │   └── 返回: "entry_alias"."id", op="eq"
+│   │   │   │
+│   │   │   └── 5. 操作符后缀 (如 "age__gt" → op="gt")
+│   │   │       └── 返回: "T"."age", op="gt"
+│   │   │
+│   │   ├── Sql:_get_expr_token(value, key, op)          # L1375
+│   │   │   │
+│   │   │   ├── Sql:_resolve_F(value)                    # L1200
+│   │   │   │   │  如果 value 是 F() 表达式:
+│   │   │   │   └── Sql:_resolve_field_builder(f)        # L1714
+│   │   │   │       └── Sql:_parse_column(f.column)      # 递归解析列名
+│   │   │   │
+│   │   │   └── EXPR_OPERATORS[op](<key, value>)           # L1269-1368
+│   │   │       │  根据 op 生成最终 SQL 片段:
+│   │   │       ├── eq  → "key = literal"
+│   │   │       ├── lt  → "key < literal"
+│   │   │       ├── gt  → "key > literal"
+│   │   │       ├── in  → "key IN literal"
+│   │   │       ├── contains → "key LIKE '%val%'"
+│   │   │       ├── null → "key IS NULL"
+│   │   │       ├── range → "key BETWEEN a AND b"
+│   │   │       ├── json_contains → "(key) @> 'json'"
+│   │   │       └── ... (共 22 种操作符)
+│   │   │
+│   │   └── 返回: 用 " AND " 连接所有 token
+│   │
+│   └── Sql:_handle_where_token(where_token, "(%s) AND (%s)")  # L1103
+│       │  将生成的 token 合并到 self._where:
+│       ├── 如果 token 为空 → 跳过
+│       ├── 如果 self._where 为 nil → 直接赋值
+│       └── 否则 → format("(%s) AND (%s)", 旧条件, 新条件)
+│
+├── 分支 ②: cond 是 table 且是逻辑构建器 (Q 对象, 如 Q{name='a'} | Q{name='b'})
+│   │
+│   ├── Sql:_resolve_Q(cond)                             # L1454 🔄 递归解析
+│   │   │
+│   │   ├── q.logic == "NOT"
+│   │   │   └── "NOT (" .. Sql:_resolve_Q(q.left) .. ")"  # 递归
+│   │   │
+│   │   ├── q.left AND q.right (复合逻辑)
+│   │   │   ├── Sql:_resolve_Q(q.left)                    # 递归左子树
+│   │   │   ├── Sql:_resolve_Q(q.right)                   # 递归右子树
+│   │   │   └── "(left) logic (right)"
+│   │   │
+│   │   └── 叶子节点 (包含 q.cond)
+│   │       └── Sql:_get_condition_token_from_table(q.cond, q.logic)  # 回到分支①的逻辑
+│   │
+│   └── Sql:_handle_where_token(where_token, "(%s) AND (%s)")  # 同上
+│
+└── 分支 ③: cond 不是 table (string 或 function)
+    │
+    ├── Sql:_get_condition_token(cond, op, dval)          # L1135
+    │   │
+    │   ├── op == nil (只传了一个参数)
+    │   │   ├── cond 是 table → _get_condition_token_from_table(cond)  # 回到分支①
+    │   │   └── cond 是 string/function → _base_get_condition_token(cond)  # L605
+    │   │       ├── string → 直接返回原始 SQL 字符串
+    │   │       └── function → cond(self._join_proxy_models) 回调
+    │   │
+    │   ├── op ~= nil, dval == nil (两个参数, 如 :where("name", "Tom"))
+    │   │   ├── Sql:_parse_column(cond, "select")         # 解析列名
+    │   │   ├── as_literal(op)                            # 值转字面量
+    │   │   └── 返回: "T"."name" = 'Tom'
+    │   │
+    │   └── 三个参数都有 (如 :where("age", ">", 18))
+    │       ├── Sql:_parse_column(cond, "select")         # 解析列名
+    │       ├── assert(PG_OPERATORS[op])                  # 验证操作符合法性
+    │       ├── as_literal(dval)                          # 值转字面量
+    │       └── 返回: "T"."age" > 18
+    │
+    └── Sql:_handle_where_token(where_token, "(%s) AND (%s)")  # 同上
+```
+最后结合seed.lua的设定,为where API的每一种调用情形编写使用示例。然后保存在`./docs/api/where.md`. 先写第一个文件, 让我看看效果, 可以了再完成剩余的.

@@ -1478,7 +1478,7 @@ function Sql:_base_gets(keys, columns)
   local join_cond = self:_get_join_condition_from_key(columns, "V", self._as or self.table_name)
   local cte_name = format("V(%s)", concat(columns, ", "))
   local cte_values = format("(VALUES %s)", as_token(keys))
-  return self:with(cte_name, cte_values):right_join("V", join_cond)
+  return self:with(cte_name, cte_values):_base_join("RIGHT", "V", join_cond)
 end
 
 function Sql:_array_to_values(row, columns, no_check, type_suffix)
