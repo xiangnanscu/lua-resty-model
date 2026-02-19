@@ -1,6 +1,6 @@
-# 07 — 批量操作
+# 07 — 写入操作
 
-> insert / upsert / merge / updates / align / gets / merge_gets 的详细用法。
+> insert / update / upsert / merge / updates / align / gets / merge_gets / get_or_create 的详细用法。
 
 ## Sql:insert(rows, columns?) — 插入
 

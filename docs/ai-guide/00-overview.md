@@ -4,17 +4,18 @@
 
 ## 目录
 
-| 文档                                             | 内容                                                             |
-| ------------------------------------------------ | ---------------------------------------------------------------- |
-| [01-model-definition.md](01-model-definition.md) | Model 定义、字段类型、继承与 Mixin                               |
-| [02-model-crud.md](02-model-crud.md)             | Model 层 CRUD：create / save / validate                          |
-| [03-query-basics.md](03-query-basics.md)         | 查询基础：select / where / order / limit / offset                |
-| [04-where-deep-dive.md](04-where-deep-dive.md)   | where 深度解析：操作符后缀、跨表查询、Q 对象                     |
-| [05-auto-join.md](05-auto-join.md)               | 双下划线自动 JOIN：跨表查询、反向查询、JSON 路径、select_related |
-| [06-aggregation.md](06-aggregation.md)           | 聚合与注解：annotate / group_by / having / F / Count / Sum       |
-| [07-upsert-merge.md](07-upsert-merge.md)         | 批量操作：insert / upsert / merge / updates / align / gets       |
-| [08-advanced.md](08-advanced.md)                 | 高级用法：set 操作、CTE、递归查询、事务                          |
-| [09-exec-and-helpers.md](09-exec-and-helpers.md) | 执行与辅助：exec / get / count / exists / flat / compact         |
+| 文档                                                                 | 内容                                                                |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| [01-model-definition.md](01-model-definition.md)                     | Model 定义、字段类型、继承与 Mixin                                  |
+| [02-model-crud.md](02-model-crud.md)                                 | Model 层 CRUD：create / save / validate                             |
+| [03-query-basics.md](03-query-basics.md)                             | 查询基础：select / where / order / limit / offset                   |
+| [04-where-deep-dive.md](04-where-deep-dive.md)                       | where 深度解析：操作符后缀、跨表查询、Q 对象                        |
+| [05-auto-join.md](05-auto-join.md)                                   | 双下划线自动 JOIN：跨表查询、反向查询、JSON 路径、select_related    |
+| [06-aggregation.md](06-aggregation.md)                               | 聚合与注解：annotate / group_by / having / F / Count / Sum          |
+| [07-insert-update-upsert-merge.md](07-insert-update-upsert-merge.md) | 写入操作：insert / update / upsert / merge / updates / align / gets |
+| [08-advanced.md](08-advanced.md)                                     | 高级用法：set 操作、CTE、递归查询、事务                             |
+| [09-exec-and-helpers.md](09-exec-and-helpers.md)                     | 执行与辅助：exec / get / count / exists / flat / compact            |
+| [10-subquery.md](10-subquery.md)                                     | 子查询：Sql 对象作为值、where_in 子查询、INSERT SELECT、嵌套        |
 
 ---
 
