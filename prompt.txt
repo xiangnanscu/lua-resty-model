@@ -1,4 +1,8 @@
-这是一个pg的orm库，充分借鉴了django ORM思想。@seed.lua 根据这个初始化设定给我编写API文档。每个API对应一个文档,文件名就是API的名字。
+这是一个pg的orm库，充分借鉴了django ORM思想。@seed.lua 根据这个初始化设定给我编写用于投喂AI的文档。
+
+要总体和局部相结合，既能让AI快速浏览掌握最常用最核心的API，也能让AI阅读某个子文档深入了解用法。
+
+要从使用者的角度合理组织API。
 
 注意，你不要有任何想当然的假设，必须从源码出发，确定所有公共api(没有以下划线开头的方法), 对于每个api,结合函数签名和注释，分析调用链，掌握api的全部用法，为每一种调用情形编写使用示例.
 
@@ -19,7 +23,7 @@ Sql:where("id", 1)
 Sql:where("id", ">", 1)
 Sql:where(function(ctx) return "" end)
 
-用深度优先的策略分析where调用链, 得到:
+用深度优先的策略分析where调用链, 这部分不用输出到文档，只是告诉你要这样思考。:
 ```md
 Sql:where(cond, op, dval)                               # L2257
 │
@@ -118,4 +122,4 @@ Sql:where(cond, op, dval)                               # L2257
     │
     └── Sql:_handle_where_token(where_token, "(%s) AND (%s)")  # 同上
 ```
-最后结合seed.lua的设定,为where API的每一种调用情形编写使用示例。然后保存在`./docs/api/where.md`. 先写第一个文件, 让我看看效果, 可以了再完成剩余的.
+最后结合seed.lua的设定,为每一种调用情形编写使用示例。
