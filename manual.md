@@ -7,7 +7,7 @@
 ### 测试模型结构
 
 ```lua
-local Model = require("resty.model")
+local Model = require("model")
 
 -- Blog 模型
 local Blog = Model:create_model {
