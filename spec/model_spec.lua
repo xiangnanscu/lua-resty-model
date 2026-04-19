@@ -544,8 +544,8 @@ local function main()
     end)
 
     mdesc("where author payload nested key equals", function()
-      local res = eval [[ Author:where { payload__meta__score = 99 } ]]
-      assert.are.same(res, [[SELECT * FROM author T WHERE (T.payload #> ARRAY['meta', 'score']) = '99']])
+      local res = eval [[ Author:where { payload__2__score = 99 } ]]
+      assert.are.same(res, [[SELECT * FROM author T WHERE (T.payload #> ARRAY['2', 'score']) = '99']])
     end)
 
     mdesc("where author payload contains", function()
