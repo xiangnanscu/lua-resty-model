@@ -23,6 +23,8 @@ local Sum = Func.Sum
 local Avg = Func.Avg
 local Max = Func.Max
 local Min = Func.Min
+local StdDev = Func.StdDev
+local Variance = Func.Variance
 local IS_PG_KEYWORDS = Utils.IS_PG_KEYWORDS
 local clone = Utils.clone
 local NULL = Utils.NULL
@@ -277,6 +279,8 @@ local Model = {
   Avg = Avg,
   Max = Max,
   Min = Min,
+  StdDev = StdDev,
+  Variance = Variance,
 }
 setmetatable(Model, {
   __call = function(t, ...)
@@ -288,6 +292,7 @@ Model.__index = Model
 
 ---@class ModelOpts
 ---@field private __normalized__? boolean
+---@field app_label? string
 ---@field extends? table
 ---@field mixins? table[]
 ---@field abstract? boolean
@@ -297,7 +302,7 @@ Model.__index = Model
 ---@field class_name? string
 ---@field label? string
 ---@field fields? {[string]:table}
----@field field_names? string[]
+---@field field_names? Array<string>
 ---@field auto_primary_key? boolean
 ---@field primary_key? string
 ---@field unique_together? string[]|string[][]

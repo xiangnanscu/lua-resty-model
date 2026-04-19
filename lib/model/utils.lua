@@ -714,8 +714,20 @@ local function assemble_sql(opts)
     local distinct = opts.distinct and "DISTINCT " or
         opts.distinct_on and format("DISTINCT ON(%s) ", opts.distinct_on) or ""
     local select = opts.select or "*"
-    statement = format("SELECT %s%s FROM %s%s%s%s%s%s%s",
-      distinct, select, from, where, group, having, order, limit, offset)
+    local for_update = ""
+    if opts.for_update then
+      for_update = opts.for_update_no_key and " FOR NO KEY UPDATE" or " FOR UPDATE"
+      if opts.for_update_of then
+        for_update = for_update .. " OF " .. opts.for_update_of
+      end
+      if opts.for_update_nowait then
+        for_update = for_update .. " NOWAIT"
+      elseif opts.for_update_skip_locked then
+        for_update = for_update .. " SKIP LOCKED"
+      end
+    end
+    statement = format("SELECT %s%s FROM %s%s%s%s%s%s%s%s",
+      distinct, select, from, where, group, having, order, limit, offset, for_update)
   end
   if opts.with and opts.with_recursive then
     return format("WITH RECURSIVE %s, %s %s", opts.with_recursive, opts.with, statement)

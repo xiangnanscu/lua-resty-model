@@ -22,6 +22,8 @@ local Sum = Func:class { name = "SUM", suffix = "_sum" }
 local Avg = Func:class { name = "AVG", suffix = "_avg" }
 local Max = Func:class { name = "MAX", suffix = "_max" }
 local Min = Func:class { name = "MIN", suffix = "_min" }
+local StdDev = Func:class { name = "STDDEV_SAMP", suffix = "_stddev" }
+local Variance = Func:class { name = "VAR_SAMP", suffix = "_variance" }
 
 return {
   Func = Func,
@@ -29,5 +31,7 @@ return {
   Sum = Sum,
   Avg = Avg,
   Max = Max,
-  Min = Min
+  Min = Min,
+  StdDev = StdDev,
+  Variance = Variance,
 }
