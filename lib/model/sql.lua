@@ -62,6 +62,11 @@ local _prefix_with_V = Utils._prefix_with_V
 ---@field where? string
 ---@field returning?  string
 ---@field join_args? string[][]
+---@field for_update? boolean
+---@field for_update_nowait? boolean
+---@field for_update_skip_locked? boolean
+---@field for_update_of? string
+---@field for_update_no_key? boolean
 
 
 local SqlMeta = {}
@@ -124,6 +129,13 @@ end
 ---@field private _return_all? boolean
 ---@field private _raw? boolean
 ---@field private _set_operation? boolean
+---@field private _for_update? boolean
+---@field private _for_update_nowait? boolean
+---@field private _for_update_skip_locked? boolean
+---@field private _for_update_of? string
+---@field private _for_update_of_raw? string[]
+---@field private _for_update_no_key? boolean
+---@field private _annotate? table<string,string>
 local Sql = setmetatable({}, SqlMeta)
 Sql.__index = Sql
 Sql.__SQL_BUILDER__ = true
@@ -1271,6 +1283,9 @@ local EXPR_OPERATORS = {
   eq = function(key, value)
     return format("%s = %s", key, as_literal(value))
   end,
+  iexact = function(key, value)
+    return format("%s ILIKE %s", key, as_literal(value))
+  end,
   lt = function(key, value)
     return format("%s < %s", key, as_literal(value))
   end,
@@ -1331,6 +1346,33 @@ local EXPR_OPERATORS = {
   end,
   day = function(key, value)
     return format("EXTRACT('day' FROM %s) = %s", key, as_literal(value))
+  end,
+  hour = function(key, value)
+    return format("EXTRACT('hour' FROM %s) = %s", key, as_literal(value))
+  end,
+  minute = function(key, value)
+    return format("EXTRACT('minute' FROM %s) = %s", key, as_literal(value))
+  end,
+  second = function(key, value)
+    return format("EXTRACT('second' FROM %s) = %s", key, as_literal(value))
+  end,
+  week = function(key, value)
+    return format("EXTRACT('week' FROM %s) = %s", key, as_literal(value))
+  end,
+  week_day = function(key, value)
+    return format("EXTRACT('dow' FROM %s) + 1 = %s", key, as_literal(value))
+  end,
+  iso_week_day = function(key, value)
+    return format("EXTRACT('isodow' FROM %s) = %s", key, as_literal(value))
+  end,
+  iso_year = function(key, value)
+    return format("EXTRACT('isoyear' FROM %s) = %s", key, as_literal(value))
+  end,
+  quarter = function(key, value)
+    return format("EXTRACT('quarter' FROM %s) = %s", key, as_literal(value))
+  end,
+  time = function(key, value)
+    return format("%s::time = %s", key, as_literal(value))
   end,
   regex = function(key, value)
     return format("%s ~ '%s'", key, value:gsub("'", "''"))
@@ -1593,7 +1635,7 @@ function Sql:_parse_column(key, context)
       if field.reference then
         model = field.reference
       end
-      if field.model or field.type == 'json' or field.type == 'jsonb' then
+      if field.model or field.type == 'jsonb' then
         json_keys = {}
       end
     elseif self._annotate and self._annotate[token] then
@@ -1794,7 +1836,12 @@ function Sql:statement()
     having = self._having,
     order = self._order,
     limit = self._limit,
-    offset = self._offset
+    offset = self._offset,
+    for_update = self._for_update,
+    for_update_nowait = self._for_update_nowait,
+    for_update_skip_locked = self._for_update_skip_locked,
+    for_update_of = self._for_update_of_raw and self:_resolve_for_update_of() or nil,
+    for_update_no_key = self._for_update_no_key,
   }
   if self._set_operation then
     if self._intersect then
@@ -2139,6 +2186,41 @@ end
 
 function Sql:order_by(...) return self:order(...) end
 
+---@private
+---@param order_str string
+---@return string
+function Sql:_reverse_order_token(order_str)
+  local parts = {}
+  for part in order_str:gmatch("[^,]+") do
+    part = part:match("^%s*(.-)%s*$")
+    local nulls = ""
+    if part:match("NULLS FIRST") then
+      part = part:gsub("%s*NULLS FIRST", "")
+      nulls = " NULLS LAST"
+    elseif part:match("NULLS LAST") then
+      part = part:gsub("%s*NULLS LAST", "")
+      nulls = " NULLS FIRST"
+    end
+    if part:match("DESC$") then
+      part = part:gsub("DESC$", "ASC")
+    elseif part:match("ASC$") then
+      part = part:gsub("ASC$", "DESC")
+    else
+      part = part .. " DESC"
+    end
+    parts[#parts + 1] = part .. nulls
+  end
+  return concat(parts, ", ")
+end
+
+---@return self
+function Sql:reverse()
+  if self._order then
+    self._order = self:_reverse_order_token(self._order)
+  end
+  return self
+end
+
 ---@param ... string
 function Sql:using(...)
   return self:_base_using(...)
@@ -2168,16 +2250,8 @@ end
 ---@param n integer|string
 ---@return self
 function Sql:limit(n)
-  if n == nil then
-    return self
-  end
-
   if type(n) == "string" then
-    ---@diagnostic disable-next-line: cast-local-type
-    n = tonumber(n)
-    if n == nil then
-      error("invalid limit value: not a valid number")
-    end
+    n = assert(tonumber(n), "invalid limit value: not a valid number")
   end
 
   if type(n) ~= "number" or n ~= math.floor(n) or n <= 0 or n > self.MAX_LIMIT then
@@ -2190,16 +2264,9 @@ end
 ---@param n integer|string
 ---@return self
 function Sql:offset(n)
-  if n == nil then
-    return self
-  end
-
   -- 如果是字符串类型，尝试转换为数字
   if type(n) == "string" then
-    n = tonumber(n)
-    if n == nil then
-      error("invalid offset value: not a valid number")
-    end
+    n = assert(tonumber(n), "invalid offset value: not a valid number")
   end
 
   if type(n) ~= "number" or n ~= math.floor(n) or n < 0 then
@@ -2207,6 +2274,28 @@ function Sql:offset(n)
   end
   self._offset = n
   return self
+end
+
+---@param cond table|string|fun(ctx:table):string
+---@param op? string
+---@param dval? DBValue
+---@return self
+function Sql:exclude(cond, op, dval)
+  local where_token
+  if type(cond) == 'table' then
+    if not cond.__IS_LOGICAL_BUILDER__ then
+      where_token = Sql._get_condition_token_from_table(self, cond)
+    else
+      ---@cast cond QClass
+      where_token = self:_resolve_Q(cond)
+    end
+  else
+    where_token = self:_get_condition_token(cond, op, dval)
+  end
+  if where_token ~= "" then
+    where_token = format("NOT (%s)", where_token)
+  end
+  return self:_handle_where_token(where_token, "(%s) AND (%s)")
 end
 
 ---@param cond table|string|fun(ctx:table):string
@@ -2293,6 +2382,60 @@ function Sql:distinct_on(...)
   return self
 end
 
+---@return self
+function Sql:none()
+  self._where = "FALSE"
+  return self
+end
+
+---@param opts? {nowait?: boolean, skip_locked?: boolean, of?: string|string[], no_key?: boolean}
+---@return self
+function Sql:select_for_update(opts)
+  opts = opts or {}
+  self._for_update = true
+  self._for_update_nowait = opts.nowait
+  self._for_update_skip_locked = opts.skip_locked
+  self._for_update_no_key = opts.no_key
+  local of = opts.of
+  if of then
+    if type(of) == 'string' then
+      self._for_update_of_raw = { of }
+    else
+      ---@cast of string[]
+      self._for_update_of_raw = of
+    end
+  end
+  return self
+end
+
+---@private
+---@return string
+function Sql:_resolve_for_update_of()
+  local raw = self._for_update_of_raw
+  if not raw then
+    return ""
+  end
+  local resolved = {}
+  for i, name in ipairs(raw) do
+    if name == 'self' then
+      resolved[i] = smart_quote(self._as or self.table_name)
+    elseif self._join_keys and self._join_keys[name] then
+      resolved[i] = self._join_keys[name]
+    else
+      if type(name) ~= 'string' or not name:match("^[%w_]+$") then
+        error("invalid select_for_update `of` target: " .. tostring(name))
+      end
+      resolved[i] = name
+    end
+  end
+  return concat(resolved, ", ")
+end
+
+---@return self
+function Sql:all()
+  return self
+end
+
 ---@param name string|table
 ---@param amount? number
 ---@return self
@@ -2349,6 +2492,54 @@ function Sql:annotate(kwargs)
     end
   end
   return self
+end
+
+---@param kwargs {[string]:table}
+---@return self
+function Sql:alias(kwargs)
+  if not self._annotate then
+    self._annotate = {}
+  end
+  for alias, func in pairs(kwargs) do
+    if type(alias) == 'number' then
+      alias = func.column .. func.suffix
+    end
+    if self.model.fields[alias] then
+      error(format("alias name '%s' is conflict with model field", alias))
+    elseif func.__IS_FUNCTION__ then
+      local prefixed_column = self:_parse_column(func.column, "aggregate")
+      self._annotate[alias] = format("%s(%s)", func.name, prefixed_column)
+    elseif func.__IS_FIELD_BUILDER__ then
+      self._annotate[alias] = self:_resolve_field_builder(func)
+    end
+  end
+  return self
+end
+
+---@param kwargs {[string]:table}
+---@return table
+function Sql:aggregate(kwargs)
+  local select_parts = {}
+  for alias, func in pairs(kwargs) do
+    if type(alias) == 'number' then
+      alias = func.column .. func.suffix
+    end
+    if func.__IS_FUNCTION__ then
+      local prefixed_column = self:_parse_column(func.column, "aggregate")
+      select_parts[#select_parts + 1] = format("%s(%s) AS %s", func.name, prefixed_column, alias)
+    elseif func.__IS_FIELD_BUILDER__ then
+      local exp_token = self:_resolve_field_builder(func)
+      select_parts[#select_parts + 1] = format("%s AS %s", exp_token, alias)
+    else
+      error("aggregate values must be Func or F instances")
+    end
+  end
+  self._select = concat(select_parts, ", ")
+  local records = self:raw():exec()
+  if records and records[1] then
+    return records[1]
+  end
+  return {}
 end
 
 ---@param rows Record|Record[]|Sql
@@ -2706,6 +2897,106 @@ function Sql:flat(col)
   end
 end
 
+---@param ... string field names to include
+---@return Array<ModelInstance>
+---@return number num_queries
+function Sql:values(...)
+  if select('#', ...) > 0 then
+    self._select = nil
+    self:select(...)
+  end
+  return self:raw():exec()
+end
+
+---@param fields string|string[] field names
+---@param opts? {flat?: boolean}
+---@return Array
+function Sql:values_list(fields, opts)
+  if type(fields) == 'string' then
+    fields = { fields }
+  end
+  if fields and #fields > 0 then
+    self._select = nil
+    self:select(unpack(fields))
+  end
+  local records = self:compact():execr()
+  if opts and opts.flat then
+    return records:flat()
+  end
+  return records
+end
+
+---@param ... string field names to load
+---@return self
+function Sql:only(...)
+  self._select = nil
+  return self:select(...)
+end
+
+---@param ... string field names to exclude
+---@return self
+function Sql:defer(...)
+  local excluded = {}
+  for i = 1, select('#', ...) do
+    excluded[select(i, ...)] = true
+  end
+  local fields = {}
+  for _, name in ipairs(self.model.field_names) do
+    if not excluded[name] then
+      fields[#fields + 1] = name
+    end
+  end
+  self._select = nil
+  return self:select(unpack(fields))
+end
+
+---@param field string
+---@param kind "year"|"month"|"week"|"day"
+---@param order? "ASC"|"DESC"
+---@return Array
+function Sql:dates(field, kind, order)
+  local trunc_map = {
+    year = "DATE_TRUNC('year', %s)::date",
+    month = "DATE_TRUNC('month', %s)::date",
+    week = "DATE_TRUNC('week', %s)::date",
+    day = "%s::date",
+  }
+  local tpl = trunc_map[kind]
+  if not tpl then
+    error("invalid kind for dates(): " .. tostring(kind))
+  end
+  local col = self:_parse_column(field, "select")
+  local expr = format(tpl, col)
+  self._select = format("DISTINCT %s AS dateval", expr)
+  self._order = format("dateval %s", order == "DESC" and "DESC" or "ASC")
+  return self:compact():execr():flat()
+end
+
+---@param field string
+---@param kind "year"|"month"|"week"|"day"|"hour"|"minute"|"second"
+---@param order? "ASC"|"DESC"
+---@return Array
+function Sql:datetimes(field, kind, order)
+  local trunc_map = {
+    year = "DATE_TRUNC('year', %s)",
+    month = "DATE_TRUNC('month', %s)",
+    week = "DATE_TRUNC('week', %s)",
+    day = "DATE_TRUNC('day', %s)",
+    hour = "DATE_TRUNC('hour', %s)",
+    minute = "DATE_TRUNC('minute', %s)",
+    second = "DATE_TRUNC('second', %s)",
+  }
+  local tpl = trunc_map[kind]
+  if not tpl then
+    error("invalid kind for datetimes(): " .. tostring(kind))
+  end
+  local col = self:_parse_column(field, "select")
+  local expr = format(tpl, col)
+  self._select = format("DISTINCT %s AS datetimeval", expr)
+  self._order = format("datetimeval %s", order == "DESC" and "DESC" or "ASC")
+  return self:compact():execr():flat()
+end
+
 ---@param cond? table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
@@ -2733,6 +3024,112 @@ function Sql:get(cond, op, dval)
   else
     return false
   end
+end
+
+---@return ModelInstance|nil
+function Sql:first()
+  if not self._order then
+    self:order(self.model.primary_key)
+  end
+  local records = self:limit(1):exec()
+  return records[1]
+end
+
+---@return ModelInstance|nil
+function Sql:last()
+  if not self._order then
+    self:order('-' .. self.model.primary_key)
+  else
+    self._order = self:_reverse_order_token(self._order)
+  end
+  local records = self:limit(1):exec()
+  return records[1]
+end
+
+---@param ... string
+---@return ModelInstance|nil
+function Sql:latest(...)
+  local n = select('#', ...)
+  if n == 0 then
+    error("latest() requires at least one field argument")
+  end
+  local order_fields = {}
+  for i = 1, n do
+    local field = select(i, ...)
+    order_fields[i] = '-' .. field
+  end
+  self._order = nil
+  return self:order(order_fields):first()
+end
+
+---@param ... string
+---@return ModelInstance|nil
+function Sql:earliest(...)
+  local n = select('#', ...)
+  if n == 0 then
+    error("earliest() requires at least one field argument")
+  end
+  local order_fields = { ... }
+  self._order = nil
+  return self:order(order_fields):first()
+end
+
+---@param obj table
+---@return boolean
+function Sql:contains(obj)
+  local pk = self.model.primary_key
+  local pk_value = obj[pk]
+  if pk_value == nil then
+    error("contains() requires an object with a primary key value")
+  end
+  return self:where({ [pk] = pk_value }):exists()
+end
+
+---@param opts? table {analyze?=boolean, verbose?=boolean, format?=string}
+---@return any
+function Sql:explain(opts)
+  opts = opts or {}
+  local explain_options = {}
+  if opts.analyze then
+    explain_options[#explain_options + 1] = "ANALYZE"
+  end
+  if opts.verbose then
+    explain_options[#explain_options + 1] = "VERBOSE"
+  end
+  if opts.format then
+    local fmt = tostring(opts.format):upper()
+    local allowed = { TEXT = true, XML = true, JSON = true, YAML = true }
+    if not allowed[fmt] then
+      error("invalid EXPLAIN format: " .. tostring(opts.format))
+    end
+    explain_options[#explain_options + 1] = "FORMAT " .. fmt
+  end
+  local options_str = ""
+  if #explain_options > 0 then
+    options_str = " (" .. concat(explain_options, ", ") .. ")"
+  end
+  local statement = format("EXPLAIN%s %s", options_str, self:statement())
+  local res, err = self.model.query(statement, false)
+  if res == nil then
+    error(err)
+  end
+  return res
+end
+
+---@param ids? table
+---@param field_name? string
+---@return table<any, ModelInstance>
+function Sql:in_bulk(ids, field_name)
+  field_name = field_name or self.model.primary_key
+  if ids and #ids > 0 then
+    self:where({ [field_name .. '__in'] = ids })
+  end
+  local records = self:exec()
+  local result = {}
+  for _, record in ipairs(records) do
+    result[record[field_name]] = record
+  end
+  return result
 end
 
 ---@return Set
@@ -2890,10 +3287,36 @@ function Sql:get_or_create(params, defaults, columns)
     error("multiple records returned")
   end
   local ins = records[1]
-  ---@diagnostic disable-next-line: undefined-field
+  ---@diagnostic disable-next-line: invisible
   local created = ins.__is_inserted__
+  ---@diagnostic disable-next-line: invisible
   ins.__is_inserted__ = nil
   return ins, created
+end
+
+---@param params table lookup conditions
+---@param defaults? table values to create/update with
+---@param columns? string[] columns to return
+---@return ModelInstance, boolean
+function Sql:update_or_create(params, defaults, columns)
+  defaults = defaults or {}
+  local existing = self.model:create_sql():where(params):limit(2):exec()
+  if #existing > 1 then
+    error("multiple records matched for update_or_create")
+  end
+  if #existing == 1 then
+    local record = existing[1]
+    if next(defaults) ~= nil then
+      self.model:create_sql():where(params):update(defaults):exec()
+      for k, v in pairs(defaults) do
+        record[k] = v
+      end
+    end
+    return record, false
+  else
+    local ins = self.model:create_sql():insert(dict(params, defaults)):returning(columns or '*'):execr()
+    return ins[1], true
+  end
 end
 
 ---@return self
