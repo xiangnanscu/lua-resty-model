@@ -44,10 +44,11 @@ local Resume = Model:create_model {
 local Author = Model {
   table_name = 'author',
   fields = {
-    { "name",   maxlength = 200 },
-    { "email",  type = 'email' },
-    { "age",    type = 'integer' },
-    { "resume", model = Resume },
+    { "name",    maxlength = 200 },
+    { "email",   type = 'email' },
+    { "age",     type = 'integer' },
+    { "payload", type = 'json' },
+    { "resume",  model = Resume },
   }
 }
 
@@ -154,13 +155,18 @@ Blog:update { name = F('name') .. ' updated' }
 Entry:where { headline = F('blog_id__name') }
 Entry:update { rating = F('rating') + 1 }
 Entry:update { headline = F('blog_id__name') }
--- json field search
-Author:where { resume__has_key = 'start_date' }
+-- json field search (payload is a plain json field)
+Author:where { payload__status = 'active' }
+Author:where { payload__meta__score = 99 }
+Author:where { payload__contains = { status = 'active' } }
+Author:where { payload__has_key = 'status' }
+-- json field search (resume is a json array field, index first)
+Author:where { resume__0__has_key = 'start_date' }
 Author:where { resume__0__has_keys = { 'a', 'b' } }
-Author:where { resume__has_any_keys = { 'a', 'b' } }
-Author:where { resume__start_date__time = '12:00:00' }
-Author:where { resume__contains = { start_date = '2025-01-01' } }
-Author:where { resume__contained_by = { start_date = '2025-01-01' } }
+Author:where { resume__0__has_any_keys = { 'a', 'b' } }
+Author:where { resume__0__start_date__time = '12:00:00' }
+Author:where { resume__1__contains = { start_date = '2025-01-01' } }
+Author:where { resume__2__contained_by = { start_date = '2025-01-01' } }
 -- select
 ViewLog:where('entry_id__blog_id', 1)
 ViewLog:where { entry_id__blog_id__gt = 1 }

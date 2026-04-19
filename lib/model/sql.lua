@@ -1679,7 +1679,9 @@ function Sql:_parse_column(key, context)
     i = b + 1
   end
   if json_keys then
-    if #json_keys > 0 then
+    if #json_keys == 1 then
+      final_column = format("%s -> %s", prefix .. '.' .. smart_quote(column), as_literal(json_keys[1]))
+    elseif #json_keys > 1 then
       final_column = format("%s #> ARRAY[%s]", prefix .. '.' .. smart_quote(column),
         as_literal_without_brackets(json_keys))
     end
