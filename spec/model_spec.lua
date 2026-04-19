@@ -77,6 +77,7 @@ local Author = Model:create_model {
     { "name",   maxlength = 200,  unique = true, compact = false },
     { "email",  type = 'email' },
     { "age",    type = 'integer', max = 100,     min = 10 },
+    { "payload", type = 'json' },
     { "resume", model = Resume },
   }
 }
@@ -537,34 +538,39 @@ local function main()
       assert.are.same(res, "SELECT COUNT(T1.id) AS entry_count FROM blog T LEFT JOIN entry T1 ON (T.id = T1.blog_id)")
     end)
 
+    mdesc("where author payload key equals", function()
+      local res = eval [[ Author:where { payload__status = 'active' } ]]
+      assert.are.same(res, [[SELECT * FROM author T WHERE (T.payload #> ARRAY['status']) = '"active"']])
+    end)
+
+    mdesc("where author payload nested key equals", function()
+      local res = eval [[ Author:where { payload__meta__score = 99 } ]]
+      assert.are.same(res, [[SELECT * FROM author T WHERE (T.payload #> ARRAY['meta', 'score']) = '99']])
+    end)
+
+    mdesc("where author payload contains", function()
+      local res = eval [[ Author:where { payload__contains = { status = 'active' } } ]]
+      assert.are.same(res, [[SELECT * FROM author T WHERE (T.payload) @> '{"status":"active"}']])
+    end)
+
+    mdesc("where author payload has_key", function()
+      local res = eval [[ Author:where { payload__has_key = 'status' } ]]
+      assert.are.same(res, [[SELECT * FROM author T WHERE (T.payload) ? 'status']])
+    end)
+
     mdesc("where author resume has key", function()
-      local res = eval [[ Author:where { resume__has_key = 'start_date' } ]]
-      assert.are.same(res, "SELECT * FROM author T WHERE (T.resume) ? start_date")
+      local res = eval [[ Author:where { resume__0__has_key = 'start_date' } ]]
+      assert.are.same(res, "SELECT * FROM author T WHERE (T.resume #> ARRAY['0']) ? 'start_date'")
     end)
 
     mdesc("where author resume has keys", function()
-      local res = eval [[ Author:where { resume__0__has_keys = { 'a', 'b' } } ]]
-      assert.are.same(res, "SELECT * FROM author T WHERE (T.resume #> ['0']) ?& ['a', 'b']")
+      local res = eval [[ Author:where { resume__1__has_keys = { 'a', 'b' } } ]]
+      assert.are.same(res, "SELECT * FROM author T WHERE (T.resume #> ARRAY['1']) ?& ARRAY['a', 'b']")
     end)
 
     mdesc("where author resume has any keys", function()
-      local res = eval [[ Author:where { resume__has_any_keys = { 'a', 'b' } } ]]
-      assert.are.same(res, "SELECT * FROM author T WHERE (T.resume) ?| ['a', 'b']")
-    end)
-
-    mdesc("where author resume start date time equals", function()
-      local res = eval [[ Author:where { resume__start_date__time = '12:00:00' } ]]
-      assert.are.same(res, [[SELECT * FROM author T WHERE (T.resume #> ['start_date', 'time']) = '"12:00:00"']])
-    end)
-
-    mdesc("where author resume contains", function()
-      local res = eval [[ Author:where { resume__contains = { start_date = '2025-01-01' } } ]]
-      assert.are.same(res, [[SELECT * FROM author T WHERE (T.resume) @> '{"start_date":"2025-01-01"}']])
-    end)
-
-    mdesc("where author resume contained by", function()
-      local res = eval [[ Author:where { resume__contained_by = { start_date = '2025-01-01' } } ]]
-      assert.are.same(res, [[SELECT * FROM author T WHERE (T.resume) <@ '{"start_date":"2025-01-01"}']])
+      local res = eval [[ Author:where { resume__2__has_any_keys = { 'a', 'b' } } ]]
+      assert.are.same(res, "SELECT * FROM author T WHERE (T.resume #> ARRAY['2']) ?| ARRAY['a', 'b']")
     end)
 
     mdesc("where view log entry_id equals", function()

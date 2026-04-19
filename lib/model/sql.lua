@@ -1356,10 +1356,10 @@ local EXPR_OPERATORS = {
     return format("(%s) ? %s", key, as_literal(value))
   end,
   has_keys = function(key, value)
-    return format("(%s) ?& [%s]", key, as_literal_without_brackets(value))
+    return format("(%s) ?& ARRAY[%s]", key, as_literal_without_brackets(value))
   end,
   has_any_keys = function(key, value)
-    return format("(%s) ?| [%s]", key, as_literal_without_brackets(value))
+    return format("(%s) ?| ARRAY[%s]", key, as_literal_without_brackets(value))
   end,
   json_contains = function(key, value)
     return format("(%s) @> '%s'", key, encode(value))
@@ -1593,7 +1593,7 @@ function Sql:_parse_column(key, context)
       if field.reference then
         model = field.reference
       end
-      if field.model then
+      if field.model or field.type == 'json' or field.type == 'jsonb' then
         json_keys = {}
       end
     elseif self._annotate and self._annotate[token] then
@@ -1680,7 +1680,7 @@ function Sql:_parse_column(key, context)
   end
   if json_keys then
     if #json_keys > 0 then
-      final_column = format("%s #> [%s]", prefix .. '.' .. smart_quote(column),
+      final_column = format("%s #> ARRAY[%s]", prefix .. '.' .. smart_quote(column),
         as_literal_without_brackets(json_keys))
     end
     if op == 'contains' then
