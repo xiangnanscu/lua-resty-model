@@ -1635,7 +1635,7 @@ function Sql:_parse_column(key, context)
       if field.reference then
         model = field.reference
       end
-      if field.model or field.type == 'jsonb' then
+      if field.model or field.db_type == 'jsonb' then
         json_keys = {}
       end
     elseif self._annotate and self._annotate[token] then
