@@ -12,6 +12,7 @@
     "postpush": "while true; do git push origin master && { echo 'Git push succeeded'; break; } || echo 'Git push failed, retrying in 1 seconds'; sleep 1; done",
     "pull": "while true; do git pull origin master && { echo 'Git pull succeeded'; break; } || echo 'Git pull failed, retrying in 1 seconds'; sleep 1; done",
     "test": "yarn resty -I spec bin/ngx_busted.lua -o TAP",
+    "sync": "cp -rf ~/create/template/lualib/model lib;cp -rf ~/create/template/docs/orm-* docs;",
     "sql.md": "yarn resty -I spec bin/ngx_busted.lua -o TAP | node ./bin/sqlf.mjs > sql.md"
   },
   "author": "",

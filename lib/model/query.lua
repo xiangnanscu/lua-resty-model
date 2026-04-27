@@ -22,7 +22,7 @@ local ngx           = ngx
 ---@field SOCKET_TYPE? string the type of socket to use, one of: "nginx", "luasocket", cqueues (default: "nginx" if in nginx, "luasocket" otherwise)
 ---@field APPLICATION_NAME? string
 ---@field BACKLOG? number OpenResty only, specify the size of the connection pool. If omitted and no backlog option was provided, no pool will be created. If omitted but backlog was provided, the pool will be created with a default size equal to the value of the lua_socket_pool_size directive
----@field DEBUG? boolean|function
+---@field DEBUG? fun(statement: string): nil
 
 ---@class ConnOpts
 ---@field database string
@@ -41,7 +41,6 @@ local ngx           = ngx
 ---@field socket_type string the type of socket to use, one of: "nginx", "luasocket", cqueues (default: "nginx" if in nginx, "luasocket" otherwise)
 ---@field application_name string set the name of the connection as displayed in pg_stat_activity. (default: "pgmoon")
 ---@field backlog number OpenResty only, specify the size of the connection pool. If omitted and no backlog option was provided, no pool will be created. If omitted but backlog was provided, the pool will be created with a default size equal to the value of the lua_socket_pool_size directive
----@field debug boolean|function
 
 ---@class PgmoonConn
 ---@field sock_type string
@@ -71,7 +70,6 @@ local function get_connect_table(options)
     socket_type = options.SOCKET_TYPE,
     application_name = options.APPLICATION_NAME,
     backlog = options.BACKLOG,
-    debug = options.DEBUG,
   }
   if not res.pool_name then
     res.pool_name = tostring(res.host) ..
@@ -111,6 +109,7 @@ end
 ---@class ConnProxy
 ---@field conn PgmoonConn
 ---@field options ConnOpts
+---@field debug fun(statement: string): nil
 local ConnProxy = {}
 ConnProxy.__index = ConnProxy
 
@@ -154,7 +153,7 @@ function ConnProxy:query(statement, compact)
     statement = process_statement_table(statement)
   end
   if ENV_CONFIG.DEBUG_SQL == 'on' then
-    print(statement)
+    self.debug(statement)
   end
   self.conn.compact = compact
   local result, num_queries, notifications, notices = self.conn:query(statement)
@@ -195,6 +194,7 @@ local function Query(options)
   options = options or {}
   local connect_table = get_connect_table(options)
   local connect_timeout = connect_table.connect_timeout
+  local debug_func = options.DEBUG or print
   -- local max_idle_timeout = connect_table.max_idle_timeout
   -- local pool_size = connect_table.pool_size
 
@@ -206,7 +206,7 @@ local function Query(options)
     if not ok then
       error(err)
     end
-    return ConnProxy:new { conn = conn, options = connect_table }
+    return ConnProxy:new { conn = conn, options = connect_table, debug = debug_func }
   end
 
   local function get_conn()
