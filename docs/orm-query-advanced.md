@@ -1,51 +1,6 @@
 # 高级查询
 
-## 数据模型参考
-
-```lua
-local Blog = Model:create_model {
-  table_name = 'blog',
-  fields = {
-    { "name",    maxlength = 20, unique = true, compact = false },
-    { "tagline", type = 'text',  default = 'default tagline' },
-  }
-}
-
-local Author = Model:create_model {
-  table_name = 'author',
-  fields = {
-    { "name",  maxlength = 200, unique = true },
-    { "email", type = 'email' },
-    { "age",   type = 'integer', max = 100, min = 10 },
-  }
-}
-
-local Entry = Model:create_model {
-  table_name = 'entry',
-  fields = {
-    { 'blog_id',             reference = Blog, related_query_name = 'entry' },
-    { 'reposted_blog_id',   reference = Blog, related_query_name = 'reposted_entry' },
-    { "headline",            maxlength = 255 },
-    { "body_text",           type = 'text' },
-    { "pub_date",            type = 'date' },
-    { "number_of_comments",  type = 'integer' },
-    { "rating",              type = 'integer' },
-  }
-}
-
-local Book = Model:create_model {
-  table_name = 'book',
-  fields = {
-    { "name",         maxlength = 300 },
-    { "pages",        type = 'integer' },
-    { "price",        type = 'float' },
-    { "rating",       type = 'float' },
-    { "author",       reference = Author },
-    { 'publisher_id', reference = Publisher },
-    { "pubdate",      type = 'date' },
-  }
-}
-```
+> **示例模型** 见 [orm-models-reference.md](orm-models-reference.md)（与 [`spec/model_spec.lua`](../spec/model_spec.lua) 一致）。本文出现的 `Blog` / `Entry` / `Book` / `Author` / `ViewLog` / `BlogBin` / `Publisher` 等均按该 schema 定义。
 
 ---
 
@@ -391,44 +346,62 @@ q1:union_all(q2):union_all(q3):exec()
 
 ## JSON 字段查询
 
-当模型字段类型为 `json`、`table` 或有 `model` 属性时，支持 JSON 路径查询：
+`json` / `table` 字段（以及任何带 `model` 属性的字段）支持 JSON 路径查询。**键名/数字下标**作为中间层时会被翻译为 PostgreSQL 的 `->` 或 `#>` 运算符；最末端的 lookup（默认 `eq`、或 `has_key` / `contains` 等）作用在该子节点上。
+
+### Author 模型示例
 
 ```lua
--- Author.resume 是一个 table 字段（存为 jsonb）
--- 假设 resume 的子模型有 company 字段
+-- payload 是 json 字段
+Author:where { payload__status = 'active' }:exec()
+-- WHERE (T.payload -> 'status') = '"active"'
 
--- JSON 属性查询
-Author:where { resume__company = 'Google' }:exec()
--- WHERE (T.resume -> 'company') = '"Google"'
+-- 数字下标：进入 jsonb 数组的第 2 个元素再读 score 键
+Author:where { payload__2__score = 99 }:exec()
+-- WHERE (T.payload #> ARRAY['2', 'score']) = '99'
 
--- 嵌套 JSON 属性
-Author:where { resume__address__city = 'Beijing' }:exec()
--- WHERE (T.resume #> ARRAY['address', 'city']) = '"Beijing"'
+-- 整体包含
+Author:where { payload__contains = { status = 'active' } }:exec()
+-- WHERE (T.payload) @> '{"status":"active"}'
 
--- JSON contains
-Author:where { resume__company__contains = 'oo' }:exec()
--- WHERE (T.resume -> 'company') @> '"oo"'
+Author:where { payload__contained_by = { status = 'active' } }:exec()
+-- WHERE (T.payload) <@ '{"status":"active"}'
 
--- has_key
-Author:where { data__has_key = 'email' }:exec()
--- WHERE (T.data) ? 'email'
-
--- has_keys
-Author:where { data__has_keys = {'email', 'phone'} }:exec()
--- WHERE (T.data) ?& ARRAY['email', 'phone']
-
--- has_any_keys
-Author:where { data__has_any_keys = {'email', 'phone'} }:exec()
--- WHERE (T.data) ?| ARRAY['email', 'phone']
-
--- json_contains (完整对象匹配)
-Author:where { resume__contains = {company='Google'} }:exec()
--- WHERE (T.resume) @> '{"company":"Google"}'
-
--- contained_by
-Author:where { data__contained_by = {a=1, b=2, c=3} }:exec()
--- WHERE (T.data) <@ '{"a":1,"b":2,"c":3}'
+-- 顶层 key 检查
+Author:where { payload__has_key = 'status' }:exec()
+-- WHERE (T.payload) ? 'status'
 ```
+
+### table 字段（结构化 jsonb 数组）
+
+`Author.resume` 是 `table` 字段，存为 `jsonb` 数组（每个元素由 `Resume` 子模型校验）。下标 `0`、`1`、`2`…按数组位置访问。
+
+```lua
+Author:where { resume__0__has_key      = 'start_date' }:exec()
+-- WHERE (T.resume -> '0') ? 'start_date'
+
+Author:where { resume__1__has_keys     = { 'a', 'b' } }:exec()
+-- WHERE (T.resume -> '1') ?& ARRAY['a', 'b']
+
+Author:where { resume__2__has_any_keys = { 'a', 'b' } }:exec()
+-- WHERE (T.resume -> '2') ?| ARRAY['a', 'b']
+
+Author:where { resume__1__contains     = { start_date = '2025-01-01' } }:exec()
+-- WHERE (T.resume -> '1') @> '{"start_date":"2025-01-01"}'
+
+Author:where { resume__2__contained_by = { start_date = '2025-01-01' } }:exec()
+-- WHERE (T.resume -> '2') <@ '{"start_date":"2025-01-01"}'
+```
+
+### 支持的 lookup 速查
+
+| lookup           | SQL                              |
+| ---------------- | -------------------------------- |
+| (默认) `eq`      | `(field -> 'k') = '"v"'`         |
+| `contains`       | `(field -> 'k') @> '...'`        |
+| `contained_by`   | `(field -> 'k') <@ '...'`        |
+| `has_key`        | `(field -> 'k') ? 'x'`           |
+| `has_keys`       | `(field -> 'k') ?& ARRAY[...]`   |
+| `has_any_keys`   | `(field -> 'k') ?\| ARRAY[...]`  |
 
 ---
 
@@ -467,6 +440,7 @@ Blog:insert(
 ### UPSERT 子查询
 
 ```lua
+-- 1) 来源是 UPDATE + RETURNING：把变化"同步"到目标表
 Blog:upsert(
   BlogBin:update{ tagline = 'synced' }:returning{'name', 'tagline'}
 ):returning{'id', 'name'}:exec()
@@ -474,6 +448,15 @@ Blog:upsert(
 -- INSERT INTO blog AS T (name, tagline) SELECT name, tagline FROM V
 -- ON CONFLICT (name) DO UPDATE SET tagline = EXCLUDED.tagline
 -- RETURNING T.id, T.name
+
+-- 2) 来源是 SELECT：只插入目标表"还没有"的 name
+--    (NOT IN + DISTINCT 的常见配方)
+Blog:upsert(
+  BlogBin
+    :where { name__notin = Blog:select{'name'}:distinct() }
+    :select { 'name', 'tagline' }
+    :distinct('name')
+):returning{ 'id', 'name', 'tagline' }:exec()
 ```
 
 ### UPDATES 子查询

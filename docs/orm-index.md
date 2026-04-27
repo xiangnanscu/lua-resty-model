@@ -4,11 +4,12 @@ Model 是一个基于 Lua 的 PostgreSQL ORM 库，设计理念深受 Django ORM
 
 ## 目录
 
-- [INDEX.md](INDEX.md) — 总览与快速参考 (本文档)
-- [model-definition.md](model-definition.md) — 模型定义与数据校验
-- [query-basics.md](query-basics.md) — 基础 CRUD 查询
-- [query-advanced.md](query-advanced.md) — 高级查询 (JOIN / 聚合 / CTE / 集合操作)
-- [expressions.md](expressions.md) — F 表达式 / Q 对象 / 聚合函数
+- [orm-index.md](orm-index.md) — 总览与快速参考 (本文档)
+- [orm-models-reference.md](orm-models-reference.md) — **示例模型 Schema (Reference)** — 其它文档共享同一套模型，先读这个
+- [orm-model-definition.md](orm-model-definition.md) — 模型定义、字段类型、数据校验、记录操作、事务
+- [orm-query-basics.md](orm-query-basics.md) — 基础 CRUD 查询、字段查找语法、执行控制
+- [orm-query-advanced.md](orm-query-advanced.md) — 高级查询 (JOIN / 聚合 / CTE / 集合操作 / 行级锁)
+- [orm-expressions.md](orm-expressions.md) — F 表达式 / Q 对象 / 聚合函数
 
 ---
 
@@ -91,7 +92,7 @@ Sql
   ├── 关联查询: select_related, select_related_labels, where_recursive
   ├── 集合操作: union, union_all, except, except_all, intersect, intersect_all
   ├── CTE:      with, with_recursive, with_values
-  ├── 行级锁:   select_for_update (需在事务内，见 query-advanced.md)
+  ├── 行级锁:   select_for_update (需在事务内，见 orm-query-advanced.md)
   ├── 调试:     explain
   ├── 空集:     none, all
   ├── 执行:     exec, execr, statement, compact, raw, skip_validate
@@ -144,8 +145,14 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Model:transaction(callback)`                  | 事务                                         |
 | `Model:atomic(func)`                           | 将函数包装为原子操作                         |
 | `Model:to_json(names?)`                        | 将模型元数据导出为 JSON                      |
+| `Model:save_cascade_update(input, names?, key?)` | 级联更新（同时同步 table 字段子表）        |
 | `Model:create_sql()`                           | 创建 Sql 构建器实例                          |
 | `Model:create_sql_as(table_name, rows)`        | 创建带 CTE 的 Sql 构建器                     |
+| `Model:make_field_from_json(options)`          | 根据描述动态实例化字段                       |
+| `Model:check_unique_key(key)`                  | 校验字段是否为主键或唯一键                   |
+| `Model:is_model_class(model)`                  | 是否为模型类                                 |
+| `Model:is_instance(row)`                       | 是否为 Sql builder 实例                      |
+| `Model:merge_models(opts[])` / `merge_model(a, b)` | 合并模型选项 (供 mixins/extends 使用)    |
 
 ### 查询构建
 
@@ -172,6 +179,18 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Sql:nulls_last()`                  | 排序 NULLS LAST                     |
 | `Sql:from(...)`                     | FROM                                |
 | `Sql:as(alias)`                     | 表别名                              |
+| `Sql:exclude(cond, op?, dval?)`     | `WHERE NOT (...)`                   |
+| `Sql:reverse()`                     | 翻转当前 ORDER BY 方向              |
+| `Sql:only(...)`                     | 覆盖式选择列                        |
+| `Sql:defer(...)`                    | 排除指定列                          |
+| `Sql:values(...)`                   | 返回字典数组（不经 model:load）     |
+| `Sql:values_list(fields, opts?)`    | 返回元组数组（`flat=true` 自动展平）|
+| `Sql:join_type(jtype)`              | 设置后续自动 JOIN 类型              |
+| `Sql:select_for_update(opts?)`      | 行级写锁 `FOR UPDATE` (需事务)      |
+| `Sql:using(...)`                    | DELETE 的 USING 子句                |
+| `Sql:get_table()`                   | 获取 `表名 + 别名` 字符串           |
+| `Sql:none()`                        | 恒空查询 (`WHERE FALSE`)            |
+| `Sql:all()`                         | 兼容 Django 的空操作                |
 
 ### CUD 操作
 
@@ -203,6 +222,12 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Sql:flat(col?)`                                 | 扁平化结果                      |
 | `Sql:as_set()`                                   | 转为 Set                        |
 | `Sql:get_or_create(params, defaults?, columns?)` | 获取或创建                      |
+| `Sql:update_or_create(params, defaults?, ...)`   | 更新或创建（命中即 UPDATE）     |
+| `Sql:first()` / `Sql:last()`                     | 单条记录（无 order 时按主键）   |
+| `Sql:latest(...)` / `Sql:earliest(...)`          | 按指定字段取最新/最早一条       |
+| `Sql:contains(obj)`                              | 集合是否包含指定对象            |
+| `Sql:in_bulk(ids?, field_name?)`                 | 按主键/指定列取字典             |
+| `Sql:explain(opts?)`                             | 返回 PostgreSQL 查询计划         |
 
 ### 集合操作
 
@@ -230,7 +255,11 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Sql:select_related(fk, names, ...)`       | 关联查询外键字段   |
 | `Sql:select_related_labels(names?)`        | 关联查询外键 label |
 | `Sql:where_recursive(name, value, names?)` | 递归查询（树结构） |
-| `Sql:annotate(kwargs)`                     | 聚合注解           |
+| `Sql:annotate(kwargs)`                     | 聚合注解（加入 SELECT）|
+| `Sql:alias(kwargs)`                        | 注解但不加入 SELECT |
+| `Sql:aggregate(kwargs)`                    | 终端聚合，返回字典 |
+| `Sql:dates(field, kind, order?)`           | 去重日期值数组（DATE_TRUNC）|
+| `Sql:datetimes(field, kind, order?)`       | 去重日期时间值数组 |
 
 ### 执行与配置
 
@@ -247,6 +276,8 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Sql:clear()`              | 清空构建器                    |
 | `Sql:prepend(...)`         | 前置 SQL 语句                 |
 | `Sql:append(...)`          | 追加 SQL 语句                 |
+| `Sql:exec_statement(stmt)` | 直接执行原始 SQL 字符串       |
+| `Sql:commit(bool?)`        | 是否提交（默认 true）         |
 | `Sql:meta_query(data)`     | 声明式查询                    |
 
 ### 表达式
@@ -255,11 +286,17 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | ------------ | -------------- |
 | `F(column)`  | 字段引用表达式 |
 | `Q{cond}`    | 逻辑条件构建器 |
-| `Count(col)` | COUNT 聚合     |
-| `Sum(col)`   | SUM 聚合       |
-| `Avg(col)`   | AVG 聚合       |
-| `Max(col)`   | MAX 聚合       |
-| `Min(col)`   | MIN 聚合       |
+| `Count(col)`    | COUNT 聚合          |
+| `Sum(col)`      | SUM 聚合            |
+| `Avg(col)`      | AVG 聚合            |
+| `Max(col)`      | MAX 聚合            |
+| `Min(col)`      | MIN 聚合            |
+| `StdDev(col)`   | STDDEV_SAMP（样本） |
+| `Variance(col)` | VAR_SAMP（样本）    |
+| `Model.NULL`    | SQL `NULL` 占位     |
+| `Model.DEFAULT` | SQL `DEFAULT` 占位  |
+| `Model.token(s)`| 原始 SQL token 工厂 |
+| `Model.as_token(v)` / `Model.as_literal(v)` | Lua 值转 SQL token / 字面量 |
 
 ---
 

@@ -1,5 +1,7 @@
 # 模型定义与数据校验
 
+> **示例模型** 见 [orm-models-reference.md](orm-models-reference.md)，与 [`spec/model_spec.lua`](../spec/model_spec.lua) 一致。本文涉及 `Blog` / `Author` / `Resume` / `BlogBin` 等，均按该 schema 定义。
+
 ## 创建模型
 
 ### Model:create_model(options)
@@ -181,6 +183,52 @@ local Store = Model {
 | `on_delete`              | 'CASCADE'              | 删除策略                  |
 | `on_update`              | 'CASCADE'              | 更新策略                  |
 
+#### email / password / id_card / uuid
+
+字符串子类，自带专用校验：
+
+```lua
+{ "email",   type = 'email' }      -- 校验合法邮箱（默认 maxlength = 255）
+{ "secret",  type = 'password' }   -- StringField 子类，maxlength = 255
+{ "id_no",   type = 'id_card' }    -- 校验中国大陆 18 位身份证（含日期/校验位）
+{ "trace",   type = 'uuid' }       -- db_type = uuid，前端默认 disabled
+```
+
+继承自 `StringField`，因此 `compact` / `trim` / `pattern` / `minlength` / `maxlength` 等选项均可用。
+
+#### year / month / year_month
+
+```lua
+{ "y",  type = 'year' }       -- IntegerField 子类，min=1000, max=9999
+{ "m",  type = 'month' }      -- IntegerField 子类，min=1, max=12
+{ "ym", type = 'year_month' } -- StringField 子类，maxlength=7，校验 'YYYY-MM' / 'YYYY.MM'
+```
+
+#### time
+
+```lua
+{ "open_at", type = 'time', precision = 0, timezone = true }
+-- 校验 'HH:MM:SS' 格式
+```
+
+#### alioss / alioss_image / alioss_list / alioss_image_list
+
+阿里云 OSS 文件字段，需要环境变量 `ALIOSS_URL`、`ALIOSS_SIZE`、`ALIOSS_LIFETIME` 等支持：
+
+```lua
+{ "avatar",  type = 'alioss_image', size = '1M', compress = '200K' }
+{ "files",   type = 'alioss_list',  size = '5M' }
+```
+
+| 选项                | 说明                                   |
+| ------------------- | -------------------------------------- |
+| `size`              | 单文件大小上限，支持 `'1M'`, `'200K'`  |
+| `compress`          | 自动压缩到目标大小（仅 image）         |
+| `lifetime`          | 直传签名有效期（秒）                   |
+| `key_id` / `key_secret` | OSS 凭证（默认从环境变量读取）     |
+| `prefix`            | OSS 上传 key 前缀                      |
+| `media_type`        | `image` / `video` 等                   |
+
 #### table (结构化子表)
 
 用于在 JSON 字段中存储结构化数据，基于子模型校验：
@@ -329,18 +377,102 @@ local data = Blog:validate_update { name = 'Updated Blog' }
 
 ### 校验错误
 
-校验失败会 `error()` 一个 `ValidateError` 表：
+所有校验失败都会 `error()` 一个 `ValidateError` 表，**类型恒为 `field_error`**。表格根据出错位置的不同会带额外字段：
+
+| 字段          | 何时出现                              | 含义                            |
+| ------------- | ------------------------------------- | ------------------------------- |
+| `type`        | 总是                                  | 恒为 `'field_error'`            |
+| `name`        | 总是                                  | 出错字段名                      |
+| `label`       | 总是                                  | 字段 `label`（默认等于 `name`） |
+| `message`     | 总是                                  | 错误描述（中文，可用 `error_messages` 覆盖） |
+| `index`       | `table` / `array` 字段子元素出错时    | 出错的 1-based 行号             |
+| `batch_index` | `insert` / `merge` / `upsert` / `updates` 批量调用时 | 出错的 1-based 行号 |
+
+#### 单条 insert / update 出错
 
 ```lua
--- ValidateError 结构:
-{
-  type = 'field_error',
-  name = 'age',         -- 字段名
-  label = '年龄',       -- 字段标签
-  message = '最大值为100', -- 错误信息
-  index = nil,          -- 仅 table 字段, 表示错误行号
-  batch_index = nil,    -- 仅批量操作, 表示错误行号
-}
+-- Blog.name maxlength = 20
+Blog:insert{ name = 'This name is way too long ...' }:exec()
+-- error: {
+--   type    = 'field_error',
+--   name    = 'name',
+--   label   = 'name',
+--   message = '字数不能多于20个',
+-- }
+```
+
+#### 批量 insert / merge / upsert / updates 出错
+
+错误包含 `batch_index` 指出第几行：
+
+```lua
+-- 第 2 行 age 超出 max
+Author:upsert {
+  { name = 'Tom',   age = 11  },
+  { name = 'Jerry', age = 101 },   -- 第 2 行
+}:exec()
+-- error: {
+--   type        = 'field_error',
+--   name        = 'age',
+--   label       = 'age',
+--   message     = '值不能大于100',
+--   batch_index = 2,
+-- }
+```
+
+#### `table` 字段子元素出错（嵌套 message）
+
+`table` 字段（如 `Author.resume`）中的某行子记录出错时，外层是 table 字段的错误，**内层 `message` 自身就是子记录的 `field_error`**，并带上 `index` 表示子数组的行号。
+
+```lua
+-- Resume.company maxlength = 20
+Author:insert{ resume = { { company = string.rep('1', 30) } } }:exec()
+-- error: {
+--   type    = 'field_error',
+--   name    = 'resume',
+--   label   = 'resume',
+--   index   = 1,                     -- resume 数组第 1 项
+--   message = {
+--     type    = 'field_error',
+--     name    = 'company',
+--     label   = 'company',
+--     message = '字数不能多于20个',
+--   },
+-- }
+```
+
+如果该 insert 又是批量调用，外层再叠加 `batch_index`：
+
+```lua
+Author:insert{ { resume = { { company = string.rep('1', 30) } } } }:exec()
+-- error: {
+--   type        = 'field_error',
+--   name        = 'resume',
+--   label       = 'resume',
+--   batch_index = 1,        -- 批量第 1 行
+--   index       = 1,        -- resume 数组第 1 项
+--   message     = { ... 同上 },
+-- }
+```
+
+#### `merge` / `upsert` / `updates` 缺少 key
+
+这些方法的"冲突键 / 主键"必须存在且非空，否则报 "<label>不能为空"：
+
+```lua
+-- updates 默认 key = primary_key (id)，下面这条没给 id
+Blog:updates{ { tagline = 'Missing ID' } }:exec()
+-- error: { type='field_error', name='id', label='id',
+--          message='id不能为空', batch_index=1 }
+```
+
+#### 非法字段名
+
+`insert` / `update` / `updates` 中提供模型未声明的字段时，会立即抛出（不是 `field_error` 表，是字符串）：
+
+```lua
+Author:updates({ { name = 'John Doe', age2 = 9 } }):exec()
+-- error: invalid field name 'age2' for model 'author'
 ```
 
 ---
@@ -502,6 +634,20 @@ local sql = Blog:create_sql_as('custom_table', {
   { id = 2, name = 'b' },
 })
 ```
+
+### Model:make_field_from_json(options)
+
+根据描述对象（来自 `to_json`、外部配置等）实例化一个字段对象。常用于动态构建模型或工具脚本：
+
+```lua
+local AnyField = Author:make_field_from_json {
+  name      = 'phone',
+  type      = 'string',
+  maxlength = 20,
+}
+```
+
+`options.type` 为空时会按 `reference` / `model` 推断为 `foreignkey` / `table`，否则默认 `string`。`string` / `alioss` 类型若未给 `maxlength`，会自动设为 256。
 
 ### Model:to_json(names?)
 

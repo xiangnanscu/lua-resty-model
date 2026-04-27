@@ -1,32 +1,8 @@
 # 基础 CRUD 查询
 
-所有 Sql 方法均可通过 Model 代理直接调用，以下示例中 `Blog`、`Entry` 等均为 Model 实例。
+所有 Sql 方法均可通过 Model 代理直接调用，以下示例中 `Blog`、`Entry`、`Author`、`Book`、`ViewLog`、`BlogBin` 等均为 Model 实例。
 
-## 数据模型参考
-
-以下示例基于此数据模型：
-
-```lua
-local Blog = Model:create_model {
-  table_name = 'blog',
-  fields = {
-    { "name",    maxlength = 20, unique = true },
-    { "tagline", type = 'text',  default = 'default tagline' },
-  }
-}
-
-local Entry = Model:create_model {
-  table_name = 'entry',
-  fields = {
-    { 'blog_id',             reference = Blog, related_query_name = 'entry' },
-    { "headline",            maxlength = 255 },
-    { "body_text",           type = 'text' },
-    { "pub_date",            type = 'date' },
-    { "number_of_comments",  type = 'integer' },
-    { "rating",              type = 'integer' },
-  }
-}
-```
+> **示例模型** 见 [orm-models-reference.md](orm-models-reference.md)，全部示例均基于该 schema，对应 [`spec/model_spec.lua`](../spec/model_spec.lua) 中可执行的测试用例。如非特别说明，本文档所有 SQL 输出与 spec 中的断言一致。
 
 ---
 
@@ -242,6 +218,10 @@ Entry:where("rating", ">", 3):exec()
 
 Entry:where("headline", "LIKE", '%lua%'):exec()
 -- WHERE T.headline LIKE '%lua%'
+
+-- 字段名同样支持双下划线跨表语法 (与 table 形式一致)
+ViewLog:where('entry_id__blog_id', 1):exec()
+-- INNER JOIN entry T1 ON ... WHERE T1.blog_id = 1
 ```
 
 #### 情形 6: 回调函数 (JOIN 上下文)
@@ -366,9 +346,26 @@ Entry:exclude(Q{rating=5} / Q{headline__contains='draft'}):exec()
 | JSON | `has_key` | `field ? 'k'` | 顶层含某 key |
 | JSON | `has_keys` | `field ?& [...]` | 含所有 key |
 | JSON | `has_any_keys` | `field ?\| [...]` | 含任一 key |
-| JSON | `json_contains` | `field @> '{...}'` | JSON 包含 |
-| JSON | `json_eq` | `field = '{...}'` | JSON 等值 |
-| JSON | `contained_by` | `field <@ '{...}'` | 被 JSON 包含 |
+| JSON | `contains` (在 json/jsonb 字段上) | `field @> '...'` | JSON 包含 |
+| JSON | `contained_by` | `field <@ '...'` | 被 JSON 包含 |
+
+**JSON 路径**：键名/数字下标作为中间层时，会被解析为 PG 的 `->` / `#>` 运算符，最末端的 lookup（`eq` / `has_key` / `contains` 等）作用在该子节点上。
+
+```lua
+-- payload 是 json 字段；2 表示数字下标 (json 数组)
+Author:where { payload__status = 'active' }       -- (T.payload -> 'status') = '"active"'
+Author:where { payload__2__score = 99 }            -- (T.payload #> ARRAY['2','score']) = '99'
+Author:where { payload__contains    = { status = 'active' } } -- (T.payload) @> '{"status":"active"}'
+Author:where { payload__contained_by = { status = 'active' } } -- (T.payload) <@ '{"status":"active"}'
+Author:where { payload__has_key = 'status' }       -- (T.payload) ? 'status'
+
+-- resume 是 table 字段（jsonb 数组），下标 0/1/2 选取数组元素
+Author:where { resume__0__has_key      = 'start_date' }    -- (T.resume -> '0') ? 'start_date'
+Author:where { resume__1__has_keys     = { 'a', 'b' } }    -- (T.resume -> '1') ?& ARRAY['a','b']
+Author:where { resume__2__has_any_keys = { 'a', 'b' } }    -- (T.resume -> '2') ?| ARRAY['a','b']
+Author:where { resume__1__contains     = { start_date = '2025-01-01' } }
+-- (T.resume -> '1') @> '{"start_date":"2025-01-01"}'
+```
 
 ```lua
 -- 一些新增 lookup 的示例
@@ -550,14 +547,61 @@ Blog:insert {
 -- INSERT INTO blog AS T (name, tagline) VALUES ('Blog 1', 'Hello'), ('Blog 2', 'World')
 ```
 
-#### 子查询插入
+#### 子查询插入（SELECT / UPDATE / DELETE）
+
+`insert` 的第一个参数也可以是另一个 `Sql` 实例。如果该子查询是 UPDATE/DELETE 加 `RETURNING`，本 ORM 会自动包成一个 CTE（`WITH D(...) AS (...)`）再 `INSERT ... SELECT ... FROM D`。
 
 ```lua
--- 从另一个表的查询结果插入
-Blog:insert(
-  BlogBin:select{'name', 'tagline'}:where{name__contains='copy'}
+-- 1) 从 SELECT 结果插入
+BlogBin:insert(
+  Blog:where{ name = 'Second Blog' }:select{'name', 'tagline'}
 ):exec()
--- INSERT INTO blog AS T (name, tagline) SELECT T.name, T.tagline FROM blog_bin T WHERE ...
+
+-- 2) 从 SELECT + select_literal 插入（必须显式给出列名，否则 PG 报错）
+BlogBin:insert(
+  Blog:where{ name = 'First Blog' }
+      :select{'name', 'tagline'}
+      :select_literal('select from another blog'),
+  { 'name', 'tagline', 'note' }    -- 显式列名
+):exec()
+
+-- 3) 从 UPDATE + RETURNING 插入；source 表自身也会被更新
+BlogBin:insert(
+  Blog:update{ name = 'update returning 2' }
+      :where{ name = 'update returning' }
+      :returning{ 'name', 'tagline' }
+      :returning_literal('update from another blog'),
+  { 'name', 'tagline', 'note' }
+):returning{ 'name', 'tagline', 'note' }:exec()
+-- 等价 SQL: WITH D(name, tagline, note) AS (UPDATE blog ... RETURNING ...)
+--          INSERT INTO blog_bin AS T (name, tagline, note) SELECT name, tagline, note FROM D
+--          RETURNING T.name, T.tagline, T.note
+
+-- 4) 从 DELETE + RETURNING 插入（典型场景：搬运到归档表）
+BlogBin:insert(
+  Blog:delete{ name = 'delete returning' }
+      :returning{ 'name', 'tagline' }
+      :returning_literal('deleted from another blog'),
+  { 'name', 'tagline', 'note' }
+):returning{ 'name', 'tagline', 'note' }:exec()
+```
+
+#### 子查询列数与目标列不一致
+
+PostgreSQL 在 `INSERT ... SELECT` 列数与目标列不一致时直接报错。本 ORM 把 SQL 原样下发，不做客户端校验：
+
+```lua
+-- 子查询 2 列、目标 1 列 → ERROR: INSERT has more expressions than target columns
+BlogBin:insert(
+  Blog:where{ name = 'First Blog' }:select{ 'name', 'tagline' },
+  { 'name' }
+):exec()
+
+-- 子查询 2 列、目标 3 列 → ERROR: INSERT has more target columns than expressions
+BlogBin:insert(
+  Blog:where{ name = 'First Blog' }:select{ 'name', 'tagline' },
+  { 'name', 'tagline', 'note' }
+):exec()
 ```
 
 #### 配合 RETURNING
@@ -571,7 +615,13 @@ local ids = Blog:insert{
   { name = 'A' }, { name = 'B' }
 }:returning('id'):exec()
 -- result = { {id=1}, {id=2} }
+
+-- vararg 与 table 等价：以下两行生成的 SQL 完全一致
+Blog:insert{ name = 'A' }:returning{'id', 'name'}:statement()
+Blog:insert{ name = 'A' }:returning('id', 'name'):statement()
 ```
+
+> **约定**：`select` / `returning` / `order` / `group` / `distinct` 等接受列名的方法都同时支持 vararg 与 table 两种形式，效果完全一致。文档其余地方按可读性自由选择，不再单独列出对照。
 
 #### 跳过校验
 

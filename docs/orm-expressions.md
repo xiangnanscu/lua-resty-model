@@ -1,5 +1,7 @@
 # F 表达式 / Q 对象 / 聚合函数
 
+> **示例模型** 见 [orm-models-reference.md](orm-models-reference.md)（与 [`spec/model_spec.lua`](../spec/model_spec.lua) 一致）。本文出现的 `Blog` / `Entry` / `Book` / `Author` 等均按该 schema 定义。
+
 ## F 表达式
 
 `F` 用于引用数据库字段值，可以构建字段间运算表达式。灵感来自 [Django F()](https://docs.djangoproject.com/en/dev/ref/models/expressions/#django.db.models.F)。
