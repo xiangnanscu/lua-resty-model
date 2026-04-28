@@ -600,6 +600,31 @@ local function main()
         "should retain 'company' key in path, got: " .. sql)
     end)
 
+    it("非法链路报错信息包含上下文 (issue #4)", function()
+      -- name 是普通字符串字段, 不能再传递: name__rating 应当报错且信息可读
+      local ok, err = pcall(function()
+        Entry:where { headline__rating = 1 }:statement()
+      end)
+      assert.is_false(ok)
+      err = tostring(err)
+      assert.is_truthy(err:find('rating', 1, true), "error should mention failing token, got: " .. err)
+      assert.is_truthy(err:find('headline', 1, true), "error should mention previous segment, got: " .. err)
+      assert.is_truthy(err:find('Entry', 1, true) or err:find('entry', 1, true),
+        "error should mention model class, got: " .. err)
+    end)
+
+    it("having 支持普通字段 (issue #8)", function()
+      -- 普通字段也允许出现在 having 中 (前提是出现在 GROUP BY 或聚合允许的上下文)
+      local sql = Entry:group { 'blog_id' }:annotate { cnt = Count('id') }
+          :having { cnt__gte = 1, blog_id__gt = 0 }:statement()
+      -- annotate 别名命中
+      assert.is_truthy(sql:find("cnt", 1, true), "should reference annotate alias: " .. sql)
+      -- 普通字段 blog_id 也要被解析为合法的 having 列
+      assert.is_truthy(sql:find("HAVING", 1, true), "should have HAVING clause: " .. sql)
+      assert.is_truthy(sql:find('blog_id') and sql:find('> 0'),
+        "should resolve blog_id as a regular column: " .. sql)
+    end)
+
     it("exclude 单条件", function()
       local r = Entry:exclude { rating = 5 }:exec()
       assert.are.same(#r, 2)

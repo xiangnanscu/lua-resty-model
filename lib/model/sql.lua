@@ -612,6 +612,16 @@ function Sql:_ensure_context()
 end
 
 ---@private
+---Materialize a JOIN. The new proxy is appended to `_join_proxy_models` and
+---registered under `join_key` (and the auto alias `T<n>`) BEFORE `callback`
+---runs, so callers can index `ctx[join_key]` / `ctx[#ctx]` from inside the
+---callback.
+---
+---IMPORTANT contract: `callback` is invoked **synchronously and exactly once**
+---before this function returns. _parse_column relies on this — its closures
+---capture loop-local upvalues (`last_token`, `join_key`, `last_field`, ...)
+---that get overwritten on the next iteration. Do NOT change this to lazy /
+---deferred invocation without revisiting every caller.
 ---@param join_type string
 ---@param fk_model Model
 ---@param callback fun(ctx:table):string
@@ -1289,11 +1299,13 @@ function Sql:_get_condition_token(cond, op, dval)
       return Sql._base_get_condition_token(self, cond)
     end
   elseif dval == nil then
-    -- use select context because it's a column name, the operator is =
+    -- 2-arg form: where('col', value). Operator is explicit (=), so we pass a
+    -- non-where context to suppress _parse_column's `__op` operator detection;
+    -- 'select' is used because it lives in NON_OPERATOR_CONTEXTS.
     ---@cast cond string
     return format("%s = %s", self:_parse_column(cond, "select"), as_literal(op))
   else
-    -- use select context because it's a column name, the operator is op
+    -- 3-arg form: where('col', op, value). Same reason as above for 'select'.
     ---@cast cond string
     ---@cast op string
     assert(PG_OPERATORS[op:upper()], "invalid PostgreSQL operator: " .. op)
@@ -1630,7 +1642,12 @@ function Sql:_parse_column(key, context)
           end
         end
       else
-        error("1.5 invalid field name: " .. token)
+        -- 1.5: token IS a valid field on `model`, but the previous segment
+        -- (`last_token`) is not a foreignkey / jsonb / reverse-fk, so the
+        -- traversal is malformed.
+        error(format(
+          "cannot traverse to '%s' through '%s' on model '%s' (previous segment is not a foreignkey, jsonb, or reverse-fk)",
+          token, last_token, last_model.class_name))
       end
       last_model = model
       if field.reference then
@@ -1780,7 +1797,16 @@ function Sql:_get_having_column(key)
       return res
     end
   end
-  error(format("invalid alias for having: '%s'", key))
+  -- fall back to a regular model column reference, so usages like
+  --   :group_by{'name'}:having{name__startswith='a'}
+  -- or HAVING expressions over plain columns (Postgres allows this when
+  -- the column appears in GROUP BY) work without going through annotate.
+  local field = self.model.fields[key]
+  if field then
+    local prefix = self._as or self.model._table_name_token
+    return prefix .. '.' .. (field._column_token or smart_quote(key))
+  end
+  error(format("invalid alias or column for having: '%s'", key))
 end
 
 ---@private
