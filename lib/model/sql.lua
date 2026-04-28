@@ -136,6 +136,7 @@ end
 ---@field private _for_update_of_raw? string[]
 ---@field private _for_update_no_key? boolean
 ---@field private _annotate? table<string,string>
+---@field private _where_recursive? boolean
 local Sql = setmetatable({}, SqlMeta)
 Sql.__index = Sql
 Sql.__SQL_BUILDER__ = true
@@ -3245,23 +3246,38 @@ end
 ---@param select_names? string[]
 ---@return self
 function Sql:where_recursive(name, value, select_names)
+  if self._where_recursive then
+    error("where_recursive can only be called once on the same Sql")
+  end
   local fk = self.model.foreignkey_fields[name]
   if fk == nil then
     error(name .. " is not a valid foreign key name for " .. self.table_name)
   end
+  if fk.reference ~= self.model then
+    error(name .. " is not a self-referencing foreign key on " .. self.table_name)
+  end
+  if self._from then
+    error("where_recursive must be called before from()/join() on the same Sql")
+  end
   local fkc = fk.reference_column
   local table_name = self.model.table_name
-  local t_alias = table_name .. '_recursive'
+  local t_alias = smart_quote(table_name .. '_recursive')
   local seed_sql = self.model:create_sql():select(fkc, name):where(name, value)
   local recursive_sql = self.model:create_sql():select(fkc, name)
-  local join_cond = format("%s.%s = %s.%s", recursive_sql._as or smart_quote(table_name), name, t_alias, fkc)
+  local join_cond = format("%s.%s = %s.%s",
+    recursive_sql._as or smart_quote(table_name),
+    smart_quote(name),
+    t_alias,
+    smart_quote(fkc))
   recursive_sql:_base_join('INNER', t_alias, join_cond)
   if select_names then
     seed_sql:select(select_names)
     recursive_sql:select(select_names)
   end
   self:with_recursive(t_alias, seed_sql:union_all(recursive_sql))
-  return self:from(t_alias .. ' AS ' .. (self._as or smart_quote(table_name)))
+  self._from = t_alias .. ' AS ' .. (self._as or smart_quote(table_name))
+  self._where_recursive = true
+  return self
 end
 
 ---@param params table
