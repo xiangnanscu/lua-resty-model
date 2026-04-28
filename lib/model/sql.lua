@@ -40,6 +40,140 @@ local json_operators = Utils.json_operators
 local NON_OPERATOR_CONTEXTS = Utils.NON_OPERATOR_CONTEXTS
 local _get_join_token = Utils._get_join_token
 local _prefix_with_V = Utils._prefix_with_V
+local EXPR_OPERATORS = {
+  eq = function(key, value)
+    return format("%s = %s", key, as_literal(value))
+  end,
+  iexact = function(key, value)
+    return format("%s ILIKE %s", key, as_literal(value))
+  end,
+  lt = function(key, value)
+    return format("%s < %s", key, as_literal(value))
+  end,
+  lte = function(key, value)
+    return format("%s <= %s", key, as_literal(value))
+  end,
+  gt = function(key, value)
+    return format("%s > %s", key, as_literal(value))
+  end,
+  gte = function(key, value)
+    return format("%s >= %s", key, as_literal(value))
+  end,
+  ne = function(key, value)
+    return format("%s <> %s", key, as_literal(value))
+  end,
+  ['in'] = function(key, value)
+    return format("%s IN %s", key, as_literal(value))
+  end,
+  notin = function(key, value)
+    return format("%s NOT IN %s", key, as_literal(value))
+  end,
+  contains = function(key, value)
+    local esc = escape_like_value(value)
+    return format("%s LIKE '%%%s%%' ESCAPE '\\'", key, esc)
+  end,
+  icontains = function(key, value)
+    local esc = escape_like_value(value)
+    return format("%s ILIKE '%%%s%%' ESCAPE '\\'", key, esc)
+  end,
+  startswith = function(key, value)
+    local esc = escape_like_value(value)
+    return format("%s LIKE '%s%%' ESCAPE '\\'", key, esc)
+  end,
+  istartswith = function(key, value)
+    local esc = escape_like_value(value)
+    return format("%s ILIKE '%s%%' ESCAPE '\\'", key, esc)
+  end,
+  endswith = function(key, value)
+    local esc = escape_like_value(value)
+    return format("%s LIKE '%%%s' ESCAPE '\\'", key, esc)
+  end,
+  iendswith = function(key, value)
+    local esc = escape_like_value(value)
+    return format("%s ILIKE '%%%s' ESCAPE '\\'", key, esc)
+  end,
+  range = function(key, value)
+    return format("%s BETWEEN %s AND %s", key, as_literal(value[1]), as_literal(value[2]))
+  end,
+  date = function(key, value)
+    return format("%s::date = %s", key, as_literal(value))
+  end,
+  year = function(key, value)
+    local y = tostring(value):gsub("'", "''")
+    return format("%s BETWEEN '%s-01-01' AND '%s-12-31'", key, y, y)
+  end,
+  month = function(key, value)
+    return format("EXTRACT('month' FROM %s) = %s", key, as_literal(value))
+  end,
+  day = function(key, value)
+    return format("EXTRACT('day' FROM %s) = %s", key, as_literal(value))
+  end,
+  hour = function(key, value)
+    return format("EXTRACT('hour' FROM %s) = %s", key, as_literal(value))
+  end,
+  minute = function(key, value)
+    return format("EXTRACT('minute' FROM %s) = %s", key, as_literal(value))
+  end,
+  second = function(key, value)
+    return format("EXTRACT('second' FROM %s) = %s", key, as_literal(value))
+  end,
+  week = function(key, value)
+    return format("EXTRACT('week' FROM %s) = %s", key, as_literal(value))
+  end,
+  week_day = function(key, value)
+    return format("EXTRACT('dow' FROM %s) + 1 = %s", key, as_literal(value))
+  end,
+  iso_week_day = function(key, value)
+    return format("EXTRACT('isodow' FROM %s) = %s", key, as_literal(value))
+  end,
+  iso_year = function(key, value)
+    return format("EXTRACT('isoyear' FROM %s) = %s", key, as_literal(value))
+  end,
+  quarter = function(key, value)
+    return format("EXTRACT('quarter' FROM %s) = %s", key, as_literal(value))
+  end,
+  time = function(key, value)
+    return format("%s::time = %s", key, as_literal(value))
+  end,
+  regex = function(key, value)
+    return format("%s ~ '%s'", key, value:gsub("'", "''"))
+  end,
+  iregex = function(key, value)
+    return format("%s ~* '%s'", key, value:gsub("'", "''"))
+  end,
+  null = function(key, value)
+    if value then
+      return format("%s IS NULL", key)
+    else
+      return format("%s IS NOT NULL", key)
+    end
+  end,
+  isnull = function(key, value)
+    if value then
+      return format("%s IS NULL", key)
+    else
+      return format("%s IS NOT NULL", key)
+    end
+  end,
+  has_key = function(key, value)
+    return format("(%s) ? %s", key, as_literal(value))
+  end,
+  has_keys = function(key, value)
+    return format("(%s) ?& ARRAY[%s]", key, as_literal_without_brackets(value))
+  end,
+  has_any_keys = function(key, value)
+    return format("(%s) ?| ARRAY[%s]", key, as_literal_without_brackets(value))
+  end,
+  json_contains = function(key, value)
+    return format("(%s) @> '%s'", key, encode(value))
+  end,
+  json_eq = function(key, value)
+    return format("(%s) = '%s'", key, encode(value))
+  end,
+  contained_by = function(key, value)
+    return format("(%s) <@ '%s'", key, encode(value))
+  end,
+}
 
 ---@class SqlOptions
 ---@field table_name string
@@ -143,6 +277,7 @@ Sql.__SQL_BUILDER__ = true
 Sql.as_token = as_token
 Sql.as_literal = as_literal
 Sql.MAX_LIMIT = 10000
+Sql.EXPR_OPERATORS = EXPR_OPERATORS
 
 function Sql:__tostring()
   return self:statement()
@@ -1280,141 +1415,6 @@ function Sql:_clean_bulk_params(rows, key, columns, is_update)
   return rows, key, columns
 end
 
-local EXPR_OPERATORS = {
-  eq = function(key, value)
-    return format("%s = %s", key, as_literal(value))
-  end,
-  iexact = function(key, value)
-    return format("%s ILIKE %s", key, as_literal(value))
-  end,
-  lt = function(key, value)
-    return format("%s < %s", key, as_literal(value))
-  end,
-  lte = function(key, value)
-    return format("%s <= %s", key, as_literal(value))
-  end,
-  gt = function(key, value)
-    return format("%s > %s", key, as_literal(value))
-  end,
-  gte = function(key, value)
-    return format("%s >= %s", key, as_literal(value))
-  end,
-  ne = function(key, value)
-    return format("%s <> %s", key, as_literal(value))
-  end,
-  ['in'] = function(key, value)
-    return format("%s IN %s", key, as_literal(value))
-  end,
-  notin = function(key, value)
-    return format("%s NOT IN %s", key, as_literal(value))
-  end,
-  contains = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s LIKE '%%%s%%' ESCAPE '\\'", key, esc)
-  end,
-  icontains = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s ILIKE '%%%s%%' ESCAPE '\\'", key, esc)
-  end,
-  startswith = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s LIKE '%s%%' ESCAPE '\\'", key, esc)
-  end,
-  istartswith = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s ILIKE '%s%%' ESCAPE '\\'", key, esc)
-  end,
-  endswith = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s LIKE '%%%s' ESCAPE '\\'", key, esc)
-  end,
-  iendswith = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s ILIKE '%%%s' ESCAPE '\\'", key, esc)
-  end,
-  range = function(key, value)
-    return format("%s BETWEEN %s AND %s", key, as_literal(value[1]), as_literal(value[2]))
-  end,
-  date = function(key, value)
-    return format("%s::date = %s", key, as_literal(value))
-  end,
-  year = function(key, value)
-    local y = tostring(value):gsub("'", "''")
-    return format("%s BETWEEN '%s-01-01' AND '%s-12-31'", key, y, y)
-  end,
-  month = function(key, value)
-    return format("EXTRACT('month' FROM %s) = %s", key, as_literal(value))
-  end,
-  day = function(key, value)
-    return format("EXTRACT('day' FROM %s) = %s", key, as_literal(value))
-  end,
-  hour = function(key, value)
-    return format("EXTRACT('hour' FROM %s) = %s", key, as_literal(value))
-  end,
-  minute = function(key, value)
-    return format("EXTRACT('minute' FROM %s) = %s", key, as_literal(value))
-  end,
-  second = function(key, value)
-    return format("EXTRACT('second' FROM %s) = %s", key, as_literal(value))
-  end,
-  week = function(key, value)
-    return format("EXTRACT('week' FROM %s) = %s", key, as_literal(value))
-  end,
-  week_day = function(key, value)
-    return format("EXTRACT('dow' FROM %s) + 1 = %s", key, as_literal(value))
-  end,
-  iso_week_day = function(key, value)
-    return format("EXTRACT('isodow' FROM %s) = %s", key, as_literal(value))
-  end,
-  iso_year = function(key, value)
-    return format("EXTRACT('isoyear' FROM %s) = %s", key, as_literal(value))
-  end,
-  quarter = function(key, value)
-    return format("EXTRACT('quarter' FROM %s) = %s", key, as_literal(value))
-  end,
-  time = function(key, value)
-    return format("%s::time = %s", key, as_literal(value))
-  end,
-  regex = function(key, value)
-    return format("%s ~ '%s'", key, value:gsub("'", "''"))
-  end,
-  iregex = function(key, value)
-    return format("%s ~* '%s'", key, value:gsub("'", "''"))
-  end,
-  null = function(key, value)
-    if value then
-      return format("%s IS NULL", key)
-    else
-      return format("%s IS NOT NULL", key)
-    end
-  end,
-  isnull = function(key, value)
-    if value then
-      return format("%s IS NULL", key)
-    else
-      return format("%s IS NOT NULL", key)
-    end
-  end,
-  has_key = function(key, value)
-    return format("(%s) ? %s", key, as_literal(value))
-  end,
-  has_keys = function(key, value)
-    return format("(%s) ?& ARRAY[%s]", key, as_literal_without_brackets(value))
-  end,
-  has_any_keys = function(key, value)
-    return format("(%s) ?| ARRAY[%s]", key, as_literal_without_brackets(value))
-  end,
-  json_contains = function(key, value)
-    return format("(%s) @> '%s'", key, encode(value))
-  end,
-  json_eq = function(key, value)
-    return format("(%s) = '%s'", key, encode(value))
-  end,
-  contained_by = function(key, value)
-    return format("(%s) <@ '%s'", key, encode(value))
-  end,
-}
-
 ---@private
 ---@param value DBValue
 ---@param key string
@@ -1662,6 +1662,26 @@ function Sql:_parse_column(key, context)
         -- 4. reversed foreignkey, join from current loop
         -- token = entry, reversed_name = blog_id
         debug('4', model.class_name, token)
+        -- Fix: if the previous segment was a forward FK whose target wasn't
+        -- materialized yet (1.3 path skipped the join because at that point we
+        -- only needed the FK column itself), we MUST add the forward join now,
+        -- otherwise the reverse join below would anchor on the wrong table.
+        -- Example: Blog:where{entry__blog_id__entry__rating=5} requires a
+        -- Blog T2 join between entry T1 and the second entry T3 (Django parity:
+        -- 3 joins total).
+        if last_field and last_field.reference == model then
+          local fk_join_key = (join_key and (join_key .. "__" .. last_token)) or last_token
+          if not self._join_keys or not self._join_keys[fk_join_key] then
+            local left_anchor = join_key
+            local function fk_join_cb(ctx)
+              return format("%s = %s",
+                ctx[left_anchor or 1][last_token],
+                ctx[fk_join_key][last_field.reference_column])
+            end
+            self:_handle_manual_join(self._join_type or "INNER", model, fk_join_cb, fk_join_key)
+          end
+          join_key = fk_join_key
+        end
         local reversed_model = reversed_field:get_model() -- Entry
         -- loger(token, model.table_name, reversed_model.table_name, reversed_field.name)
         if not join_key then

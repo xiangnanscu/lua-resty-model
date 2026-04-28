@@ -227,20 +227,6 @@ local PG_OPERATORS = {
 }
 
 local IS_PG_KEYWORDS = {
-  -- operator reserve because _parse_column logic
-  EQ = true,
-  -- IN = true,
-  NOTIN = true,
-  CONTAINS = true,
-  STARTSWITH = true,
-  ENDSWITH = true,
-  -- NULL = true,
-  LT = true,
-  LTE = true,
-  GT = true,
-  GTE = true,
-  NE = true,
-  -- operator reserve because _parse_column logic
   ALL = true,
   ANALYSE = true,
   ANALYZE = true,

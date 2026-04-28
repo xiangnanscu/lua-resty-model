@@ -526,6 +526,80 @@ local function main()
       assert.are.same(#r, 2)
     end)
 
+    it("反向 FK + 正向 FK + 反向 FK 链路 (Django parity, 三次 JOIN)", function()
+      -- Django: Blog.objects.filter(entry__blog__entry__rating=5) joins 3 times:
+      --   INNER JOIN entry T1 ON blog.id = T1.blog_id
+      --   INNER JOIN blog  T2 ON T1.blog_id = T2.id
+      --   INNER JOIN entry T3 ON T2.id = T3.blog_id
+      -- 之前的 bug 只 join 两次, 第二次条件错列 (T1.id = T2.blog_id).
+      local sql = Blog:where { entry__blog_id__entry__rating = 5 }:statement()
+      -- 必须出现 blog 表的中间 join
+      local _, blog_join_count = sql:gsub('JOIN%s+blog%f[%W]', '')
+      assert.are.equal(1, blog_join_count, "expected 1 blog join, got: " .. blog_join_count .. " in: " .. sql)
+      -- 必须有两次 entry 的 join
+      local _, entry_join_count = sql:gsub('JOIN%s+entry%f[%W]', '')
+      assert.are.equal(2, entry_join_count, "expected 2 entry joins, got: " .. entry_join_count .. " in: " .. sql)
+      -- 关键: 中间 join 的条件必须是 T1.blog_id = T?.id (不是 T1.id = T?.blog_id)
+      assert.is_truthy(sql:find('T1%."blog_id"%s*=%s*T2%."id"') or sql:find('T1%.blog_id%s*=%s*T2%.id'),
+        "middle join must be T1.blog_id = T2.id, got: " .. sql)
+      -- 第三次 join 应是 T2.id = T3.blog_id
+      assert.is_truthy(sql:find('T2%."id"%s*=%s*T3%."blog_id"') or sql:find('T2%.id%s*=%s*T3%.blog_id'),
+        "third join must be T2.id = T3.blog_id, got: " .. sql)
+      -- 谓词应落在 T3 上
+      assert.is_truthy(sql:find('T3%."rating"') or sql:find('T3%.rating'),
+        "predicate should be on T3, got: " .. sql)
+      -- 结果集也要正确: 只有 Blog 2 (Second Blog) 有一条 rating=5 的 entry
+      local r = Blog:where { entry__blog_id__entry__rating = 5 }:exec()
+      assert.are.same(#r, 1)
+      assert.are.same(r[1].name, 'Second Blog')
+    end)
+
+    it("正向 FK + 反向 FK 链路 (case 4 修复在 1.4.2 cascade 也成立)", function()
+      -- ViewLog -> Entry -> Blog -> entry(reverse)
+      -- 期望生成 4 个表别名 + 三次跨表 join, 谓词落在最后一个 entry 上
+      local sql = ViewLog:where { entry_id__blog_id__entry__rating = 5 }:statement()
+      -- 必须出现 entry / blog / entry 三次跨表 join
+      local _, entry_count = sql:gsub('JOIN%s+entry%f[%W]', '')
+      local _, blog_count = sql:gsub('JOIN%s+blog%f[%W]', '')
+      assert.are.equal(2, entry_count, "expected 2 entry joins, got: " .. entry_count .. " in: " .. sql)
+      assert.are.equal(1, blog_count, "expected 1 blog join, got: " .. blog_count .. " in: " .. sql)
+      -- 实际语义: 找有 view_log 的 entry, 其 blog 又包含一篇 rating=5 的 entry.
+      local r = ViewLog:where { entry_id__blog_id__entry__rating = 5 }:exec()
+      -- view_log seed: entry_id 1 (Blog 1) 和 entry_id 2 (Blog 2)
+      -- Blog 2 有 rating=5 的 entry => entry_id=2 这条匹配
+      assert.are.same(#r, 1)
+    end)
+
+    it("链路缓存: 同一条 chain 多次 where 不重复建 join", function()
+      -- 复用 _join_keys 缓存: 第二次 where 不应该重复建 join
+      local sql = Blog:where { entry__blog_id__entry__rating = 5 }
+          :where { entry__blog_id__entry__headline__contains = 'Second' }:statement()
+      local _, entry_count = sql:gsub('JOIN%s+entry%f[%W]', '')
+      local _, blog_count = sql:gsub('JOIN%s+blog%f[%W]', '')
+      assert.are.equal(2, entry_count, "expected 2 entry joins (cached), got: " .. entry_count .. " in: " .. sql)
+      assert.are.equal(1, blog_count, "expected 1 blog join (cached), got: " .. blog_count .. " in: " .. sql)
+    end)
+
+    it("简单反向 FK 不受 case 4 修复影响 (regression)", function()
+      -- 不应在 last_field=nil 时误触发 forward-FK 物化
+      local sql = Blog:where { entry__rating = 5 }:statement()
+      local _, entry_count = sql:gsub('JOIN%s+entry%f[%W]', '')
+      assert.are.equal(1, entry_count, "expected 1 entry join, got: " .. entry_count .. " in: " .. sql)
+      assert.is_nil(sql:find('JOIN%s+blog%f[%W]'), "should not join blog: " .. sql)
+    end)
+
+    it("跨 jsonb / model 字段链路保留 json_keys (issue #5 regression)", function()
+      -- payload 是 jsonb, resume 有 model=Resume; 路径 payload__resume__company
+      -- 之前 bug 会在 iter2 重置 json_keys, 导致最终只有 -> 'company' 而丢掉 'resume'.
+      local sql = Author:where { payload__resume__company = 'X' }:statement()
+      assert.is_truthy(sql:find("#>", 1, true),
+        "multi-segment json path should use #>, got: " .. sql)
+      assert.is_truthy(sql:find("'resume'", 1, true),
+        "should retain 'resume' key in path, got: " .. sql)
+      assert.is_truthy(sql:find("'company'", 1, true),
+        "should retain 'company' key in path, got: " .. sql)
+    end)
+
     it("exclude 单条件", function()
       local r = Entry:exclude { rating = 5 }:exec()
       assert.are.same(#r, 2)

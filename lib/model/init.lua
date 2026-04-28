@@ -25,7 +25,6 @@ local Max = Func.Max
 local Min = Func.Min
 local StdDev = Func.StdDev
 local Variance = Func.Variance
-local IS_PG_KEYWORDS = Utils.IS_PG_KEYWORDS
 local clone = Utils.clone
 local NULL = Utils.NULL
 local smart_quote = Utils.smart_quote
@@ -396,8 +395,10 @@ end
 ---@param name string
 function Model:check_field_name(name)
   check_conflicts(name);
-  assert(not IS_PG_KEYWORDS[name:upper()],
+  assert(not Utils.IS_PG_KEYWORDS[name:upper()],
     format("%s is a postgresql reserved word, can't be used as a table or column name", name))
+  assert(not Sql.EXPR_OPERATORS[name:upper()],
+    format("%s is a sql expression operator, can't be used as a table or column name", name))
   if (self[name] ~= nil and name ~= 'class') then
     error(format("field name '%s' conflicts with model class attributes", name))
   end
