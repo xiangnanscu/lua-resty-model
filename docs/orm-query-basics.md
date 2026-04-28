@@ -2,7 +2,7 @@
 
 所有 Sql 方法均可通过 Model 代理直接调用，以下示例中 `Blog`、`Entry`、`Author`、`Book`、`ViewLog`、`BlogBin` 等均为 Model 实例。
 
-> **示例模型** 见 [orm-models-reference.md](orm-models-reference.md)，全部示例均基于该 schema，对应 [`spec/model_spec.lua`](../spec/model_spec.lua) 中可执行的测试用例。如非特别说明，本文档所有 SQL 输出与 spec 中的断言一致。
+> **示例模型** 见 [orm-models-reference.md](orm-models-reference.md)，全部示例均基于该 schema。
 
 ---
 

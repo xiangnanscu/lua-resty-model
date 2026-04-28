@@ -2,22 +2,22 @@
 
 本仓库的 ORM 文档共享同一套示例模型，便于阅读、复制和与 `spec/model_spec.lua` 中的可执行测试用例对照。其它文档（`orm-query-basics.md` / `orm-query-advanced.md` / `orm-expressions.md` / `orm-model-definition.md`）的所有 SQL 示例均假设以下模型已经定义。
 
-> 这些定义来源于 [`spec/model_spec.lua`](../spec/model_spec.lua)。如需运行对应的 SQL 输出，请直接参考该测试文件。
+> 这些定义来源于 [`spec/model_spec.lua`](../spec/model_spec.lua)。
 
 ---
 
 ## 1. 模型清单
 
-| 模型        | 表名        | 用途                                           |
-| ----------- | ----------- | ---------------------------------------------- |
-| `Blog`      | `blog`      | 博客主表，演示基础 CRUD、`unique` 字段         |
-| `BlogBin`   | `blog_bin`  | 通过 `mixins = { Blog }` 演示混入与字段覆盖    |
+| 模型        | 表名        | 用途                                             |
+| ----------- | ----------- | ------------------------------------------------ |
+| `Blog`      | `blog`      | 博客主表，演示基础 CRUD、`unique` 字段           |
+| `BlogBin`   | `blog_bin`  | 通过 `mixins = { Blog }` 演示混入与字段覆盖      |
 | `Resume`    | `resume`    | 抽象/无主键的子模型，作为 `Author.resume` 的结构 |
-| `Author`    | `author`    | 含 `email`、`integer`、`json`、`table` 字段     |
-| `Entry`     | `entry`     | 通过 `blog_id` 演示外键 / 反向外键 / 多外键    |
-| `ViewLog`   | `view_log`  | 演示多级嵌套外键查询                           |
-| `Publisher` | `publisher` | `Book` 的关联表                                |
-| `Book`      | `book`      | 演示聚合、F 表达式、跨表 join                  |
+| `Author`    | `author`    | 含 `email`、`integer`、`json`、`table` 字段      |
+| `Entry`     | `entry`     | 通过 `blog_id` 演示外键 / 反向外键 / 多外键      |
+| `ViewLog`   | `view_log`  | 演示多级嵌套外键查询                             |
+| `Publisher` | `publisher` | `Book` 的关联表                                  |
+| `Book`      | `book`      | 演示聚合、F 表达式、跨表 join                    |
 | `Store`     | `store`     | 演示 `Model(opts)` 简写（自带 `id/ctime/utime`） |
 
 ---
@@ -189,11 +189,11 @@ Blog ────┐                           Resume (无主键, 联合唯一)
 
 非抽象模型如果不显式设置 `auto_primary_key = false`，会自动追加：
 
-| 字段    | 类型             | 说明                                              |
-| ------- | ---------------- | ------------------------------------------------- |
-| `id`    | `integer serial` | 主键（自增）                                      |
-| `ctime` | `datetime`       | `auto_now_add = true`，由 `ngx.localtime()` 填充  |
-| `utime` | `datetime`       | `auto_now = true`，每次 update 时刷新             |
+| 字段    | 类型             | 说明                                             |
+| ------- | ---------------- | ------------------------------------------------ |
+| `id`    | `integer serial` | 主键（自增）                                     |
+| `ctime` | `datetime`       | `auto_now_add = true`，由 `ngx.localtime()` 填充 |
+| `utime` | `datetime`       | `auto_now = true`，每次 update 时刷新            |
 
 `Model(opts)` 是 `Model:mix(BaseModel, opts)` 的简写：会显式混入这三个字段。`Model:create_model(opts)` 也会自动添加 `id`（除非手动指定 `primary_key`），但不会添加 `ctime/utime`。`Resume` 通过 `auto_primary_key = false` 关闭了主键自动注入。
 
