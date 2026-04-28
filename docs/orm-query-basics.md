@@ -1030,7 +1030,15 @@ qs:filter{ status = 'active' }  -- 非管理员返回 []
 
 ### Sql:all()
 
-空操作（返回 self），仅为 API 兼容 Django。实际无需使用。
+返回当前 Sql 构建器的**副本**（等价于 `:copy()`），对齐 Django 的 `QuerySet.all()`。常用于"以一个基础查询为起点，分叉出多条互不影响的过滤链"：
+
+```lua
+local base = Blog:where { id__gt = 0 }
+
+local actives  = base:all():filter { status = 'active' }
+local archived = base:all():filter { status = 'archived' }
+-- base 不会被这两次 filter 污染
+```
 
 ### Sql:explain(opts?)
 

@@ -190,7 +190,7 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Sql:using(...)`                    | DELETE 的 USING 子句                |
 | `Sql:get_table()`                   | 获取 `表名 + 别名` 字符串           |
 | `Sql:none()`                        | 恒空查询 (`WHERE FALSE`)            |
-| `Sql:all()`                         | 兼容 Django 的空操作                |
+| `Sql:all()`                         | 返回 builder 副本（等价 `:copy()`，对齐 Django） |
 
 ### CUD 操作
 

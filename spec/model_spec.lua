@@ -1477,6 +1477,19 @@ local function main()
       assert.are.same(#base:exec(), 2)
     end)
 
+    it("all 返回 builder 副本 (对齐 Django QuerySet.all)", function()
+      local base = Blog:where { id__gt = 0 }
+      local a = base:all():where { name = 'First Blog' }
+      local b = base:all():where { name = 'Second Blog' }
+      -- a / b 是不同实例，互不影响
+      assert.is_true(a ~= b)
+      assert.is_true(base ~= a)
+      assert.are.same(#a:exec(), 1)
+      assert.are.same(#b:exec(), 1)
+      -- base 不受 a/b 的过滤影响
+      assert.are.same(#base:exec(), 2)
+    end)
+
     it("clear 清空 builder", function()
       local sql = Blog:where { id = 1 }:select('name')
       sql:clear()

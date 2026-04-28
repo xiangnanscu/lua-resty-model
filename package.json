@@ -13,7 +13,7 @@
     "pull": "while true; do git pull origin master && { echo 'Git pull succeeded'; break; } || echo 'Git pull failed, retrying in 1 seconds'; sleep 1; done",
     "test": "yarn resty -I spec bin/ngx_busted.lua -o TAP",
     "sync": "cp -rf ~/create/template/lualib/model lib;cp -rf ~/create/template/docs/orm-* docs;",
-    "sync-back": "cp -rf lib/* ~/create/template/lualib;cp -rf docs/orm-* ~/create/template/docs;",
+    "syncback": "cp -rf lib/* ~/create/template/lualib;cp -rf docs/orm-* ~/create/template/docs;",
     "sql": "yarn resty -I spec bin/ngx_busted.lua -o TAP | node ./bin/sqlf.mjs > sql.md"
   },
   "author": "",

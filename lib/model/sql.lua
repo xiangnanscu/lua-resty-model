@@ -2431,9 +2431,12 @@ function Sql:_resolve_for_update_of()
   return concat(resolved, ", ")
 end
 
+---Returns a *copy* of the current Sql builder, mirroring Django's `QuerySet.all()`:
+---useful when you want to fork a base query and apply different filters on each
+---branch without mutating the original.
 ---@return self
 function Sql:all()
-  return self
+  return self:copy()
 end
 
 ---@param name string|table
