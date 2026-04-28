@@ -34,7 +34,7 @@ Model.auto_primary_key = true
 local Blog = Model:create_model {
   table_name = 'blog',
   fields = {
-    { "name",    maxlength = 20, minlength = 2, unique = true, compact = false },
+    { "name",    maxlength = 20, minlength = 2,              unique = true, compact = false },
     { "tagline", type = 'text',  default = 'default tagline' },
   }
 }
@@ -65,9 +65,9 @@ local Resume = Model:create_model {
 local Author = Model:create_model {
   table_name = 'author',
   fields = {
-    { "name",    maxlength = 200, unique = true, compact = false },
+    { "name",    maxlength = 200,  unique = true, compact = false },
     { "email",   type = 'email' },
-    { "age",     type = 'integer', max = 100, min = 10 },
+    { "age",     type = 'integer', max = 100,     min = 10 },
     { "payload", type = 'json' },
     { "resume",  model = Resume },
   }
@@ -110,7 +110,7 @@ local Publisher = Model:create_model {
 local Book = Model:create_model {
   table_name = 'book',
   fields = {
-    { "name",         maxlength = 300, compact = false },
+    { "name",         maxlength = 300,      compact = false },
     { "pages",        type = 'integer' },
     { "price",        type = 'float' },
     { "rating",       type = 'float' },
@@ -133,8 +133,8 @@ local Category = Model:create_model {
   table_name = 'category',
   fields = {
     -- compact = false：保留 name 中的空格（默认 StringField 会把所有空白删掉）
-    { "name",      maxlength = 50, compact = false },
-    { "parent_id", reference = 'self', null = true, related_query_name = 'children' },
+    { "name",      maxlength = 50,     compact = false },
+    { "parent_id", reference = 'self', null = true,    related_query_name = 'children' },
   }
 }
 
@@ -186,9 +186,9 @@ local function seed_data()
 
   -- Entry
   Entry:insert {
-    { blog_id = 1, headline = 'First Entry',  body_text = 'This is the first entry in my blog.',     pub_date = '2023-01-01', mod_date = '2023-01-02', number_of_comments = 5, number_of_pingbacks = 2, rating = 4 },
+    { blog_id = 1, headline = 'First Entry',  body_text = 'This is the first entry in my blog.',       pub_date = '2023-01-01', mod_date = '2023-01-02', number_of_comments = 5, number_of_pingbacks = 2, rating = 4 },
     { blog_id = 2, headline = 'Second Entry', body_text = 'This is the second entry in another blog.', pub_date = '2023-01-03', mod_date = '2023-01-04', number_of_comments = 3, number_of_pingbacks = 1, rating = 5 },
-    { blog_id = 1, headline = 'Third Entry',  body_text = 'This is the third entry in my blog.',     pub_date = '2023-02-01', mod_date = '2023-02-02', number_of_comments = 5, number_of_pingbacks = 2, rating = 4 },
+    { blog_id = 1, headline = 'Third Entry',  body_text = 'This is the third entry in my blog.',       pub_date = '2023-02-01', mod_date = '2023-02-02', number_of_comments = 5, number_of_pingbacks = 2, rating = 4 },
   }:exec()
 
   ViewLog:insert {
@@ -220,12 +220,12 @@ local function seed_data()
   Category:insert { name = 'Grandchild A1', parent_id = child_a.id }:exec()
 
   -- 缓存 SEED 中常用的 id（按种子顺序）
-  SEED.blogs       = Blog:order('id'):exec()
-  SEED.authors     = Author:order('id'):exec()
-  SEED.entries     = Entry:order('id'):exec()
-  SEED.publishers  = Publisher:order('id'):exec()
-  SEED.books       = Book:order('id'):exec()
-  SEED.categories  = Category:order('id'):exec()
+  SEED.blogs      = Blog:order('id'):exec()
+  SEED.authors    = Author:order('id'):exec()
+  SEED.entries    = Entry:order('id'):exec()
+  SEED.publishers = Publisher:order('id'):exec()
+  SEED.books      = Book:order('id'):exec()
+  SEED.categories = Category:order('id'):exec()
 end
 
 ---------------------------------------------------------------------
@@ -394,7 +394,8 @@ local function main()
     end)
 
     it("select 反向外键 + order_by ASC", function()
-      local r = Blog:select('id', 'name', 'entry__headline'):where { name = 'First Blog' }:order_by { 'entry__headline' }:exec()
+      local r = Blog:select('id', 'name', 'entry__headline'):where { name = 'First Blog' }:order_by { 'entry__headline' }
+          :exec()
       assert.are.same(r, {
         { id = 1, name = 'First Blog', entry__headline = 'First Entry' },
         { id = 1, name = 'First Blog', entry__headline = 'Third Entry' },
@@ -402,7 +403,8 @@ local function main()
     end)
 
     it("select 反向外键 + order_by DESC", function()
-      local r = Blog:select('id', 'name', 'entry__headline'):where { name = 'First Blog' }:order_by { '-entry__headline' }:exec()
+      local r = Blog:select('id', 'name', 'entry__headline'):where { name = 'First Blog' }:order_by { '-entry__headline' }
+          :exec()
       assert.are.same(r, {
         { id = 1, name = 'First Blog', entry__headline = 'Third Entry' },
         { id = 1, name = 'First Blog', entry__headline = 'First Entry' },
@@ -459,7 +461,8 @@ local function main()
       assert.are.same(Entry:where { rating__null = false }:count(), 3)
       assert.are.same(Entry:where { rating__null = true }:count(), 0)
       -- 临时插入一行 rating=NULL
-      Entry:insert { blog_id = 1, headline = 'null-rating', body_text = '', pub_date = '2023-01-01', mod_date = '2023-01-01', number_of_comments = 0, number_of_pingbacks = 0 }:exec()
+      Entry:insert { blog_id = 1, headline = 'null-rating', body_text = '', pub_date = '2023-01-01', mod_date = '2023-01-01', number_of_comments = 0, number_of_pingbacks = 0 }
+          :exec()
       assert.are.same(Entry:where { rating__null = true }:count(), 1)
       Entry:delete { headline = 'null-rating' }:exec()
     end)
@@ -480,7 +483,8 @@ local function main()
     end)
 
     it("跨表 + 同一查询多次 where (AND)", function()
-      local r = ViewLog:where { entry_id__blog_id__name = 'First Blog' }:where { entry_id__headline = 'First Entry' }:exec()
+      local r = ViewLog:where { entry_id__blog_id__name = 'First Blog' }:where { entry_id__headline = 'First Entry' }
+          :exec()
       assert.are.same(#r, 1)
     end)
 
@@ -592,7 +596,8 @@ local function main()
     end)
 
     it("nulls_last / nulls_first", function()
-      Entry:insert { blog_id = 1, headline = 'noRating', body_text = '', pub_date = '2023-04-01', mod_date = '2023-04-01', number_of_comments = 0, number_of_pingbacks = 0 }:exec()
+      Entry:insert { blog_id = 1, headline = 'noRating', body_text = '', pub_date = '2023-04-01', mod_date = '2023-04-01', number_of_comments = 0, number_of_pingbacks = 0 }
+          :exec()
       local last = Entry:nulls_last():order('-rating'):exec()
       assert.are.same(last[#last].headline, 'noRating')
       local first = Entry:nulls_first():order('-rating'):exec()
@@ -820,7 +825,7 @@ local function main()
       Blog:insert { name = 'ur-src', tagline = 'orig' }:exec()
       local r = BlogBin:insert(
         Blog:update { name = 'ur-renamed' }:where { name = 'ur-src' }
-            :returning { 'name', 'tagline' }:returning_literal('from update'),
+        :returning { 'name', 'tagline' }:returning_literal('from update'),
         { 'name', 'tagline', 'note' }
       ):returning { 'name', 'tagline', 'note' }:exec()
       assert.are.same(#r, 1)
@@ -861,7 +866,7 @@ local function main()
     it("插入抛错: 批量行长度超限 (batch_index)", function()
       local ok, err = pcall(function()
         Blog:insert {
-          { name = 'Valid', tagline = 'x' },
+          { name = 'Valid',             tagline = 'x' },
           { name = string.rep('y', 30), tagline = 'x' },
         }:exec()
       end)
@@ -1009,8 +1014,8 @@ local function main()
       }:exec()
       local r = Blog:upsert(
         BlogBin:where { name__notin = Blog:select { 'name' }:distinct() }
-            :select { 'name', 'tagline' }
-            :distinct('name')
+        :select { 'name', 'tagline' }
+        :distinct('name')
       ):returning { 'id', 'name', 'tagline' }:exec()
       assert.are.same(#r, 2)
       local names = {}
@@ -1058,7 +1063,7 @@ local function main()
     it("merge 已有更新 + 新增插入", function()
       local r = Blog:merge {
         { name = 'First Blog', tagline = 'updated by merge' },
-        { name = 'merge-new', tagline = 'inserted by merge' },
+        { name = 'merge-new',  tagline = 'inserted by merge' },
       }:exec()
       assert.are.same(r, { affected_rows = 1 })
       assert.are.same(Blog:where { name = 'First Blog' }:get().tagline, 'updated by merge')
@@ -1094,7 +1099,7 @@ local function main()
       local before = Blog:where { name = 'upd-1' }:get()
       local r = Blog:updates {
         { id = before.id, tagline = 'updated by updates' },
-        { id = 999999, tagline = 'wont update' },
+        { id = 999999,    tagline = 'wont update' },
       }:exec()
       assert.are.same(r, { affected_rows = 1 })
       assert.are.same(Blog:where { id = before.id }:get().tagline, 'updated by updates')
@@ -1414,7 +1419,8 @@ local function main()
     end)
 
     it("returning 跨表列 (delete 后取 fk)", function()
-      local entry = Entry:insert { blog_id = 1, headline = 'r-entry', body_text = '', pub_date = '2023-01-01', mod_date = '2023-01-01', number_of_comments = 0, number_of_pingbacks = 0, rating = 1 }:returning('*'):exec()
+      local entry = Entry:insert { blog_id = 1, headline = 'r-entry', body_text = '', pub_date = '2023-01-01', mod_date = '2023-01-01', number_of_comments = 0, number_of_pingbacks = 0, rating = 1 }
+          :returning('*'):exec()
       local del = Entry:delete { id = entry[1].id }:returning('blog_id__name'):exec()
       assert.are.same(del[1].blog_id__name, 'First Blog')
     end)
@@ -1637,7 +1643,7 @@ local function main()
         table_name = 'cdoc_item',
         fields = {
           { 'doc_id', reference = CDoc },
-          { 'label',  maxlength = 50, compact = false },
+          { 'label',  maxlength = 50,  compact = false },
         },
       }
       local CDocFull = Model:create_model {
