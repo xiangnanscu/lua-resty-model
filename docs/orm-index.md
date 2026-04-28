@@ -305,7 +305,7 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 借鉴 Django 的双下划线语法，通过 `字段名__操作符` 指定查询条件：
 
 | 查找                | 示例                             | 生成 SQL                                         |
-| ------------------- | -------------------------------- | ------------------------------------------------ | ---------- |
+| ------------------- | -------------------------------- | ------------------------------------------------ |
 | (默认 eq)           | `{name='Tom'}`                   | `name = 'Tom'`                                   |
 | `__lt`              | `{age__lt=18}`                   | `age < 18`                                       |
 | `__lte`             | `{age__lte=18}`                  | `age <= 18`                                      |
@@ -330,7 +330,7 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `__iregex`          | `{name__iregex='^t'}`            | `name ~* '^t'`                                   |
 | `__has_key`         | `{data__has_key='a'}`            | `(data) ? 'a'`                                   |
 | `__has_keys`        | `{data__has_keys={'a','b'}}`     | `(data) ?& ['a','b']`                            |
-| `__has_any_keys`    | `{data__has_any_keys={'a','b'}}` | `(data) ?                                        | ['a','b']` |
+| `__has_any_keys`    | `{data__has_any_keys={'a','b'}}` | `(data) ?\| ['a','b']`                           |
 | `__contains` (json) | `{data__a__contains='x'}`        | `(data #> ['a']) @> '"x"'`                       |
 | `__contained_by`    | `{data__contained_by={a=1}}`     | `(data) <@ '{"a":1}'`                            |
 
