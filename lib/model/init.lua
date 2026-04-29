@@ -369,7 +369,6 @@ function Model:create_sql()
     local table_name = self.table_name or error("table_name not set")
     table_token = smart_quote(table_name)
   end
-
   return Sql:new {
     model = self,
     table_name = table_token,

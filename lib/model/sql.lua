@@ -369,13 +369,6 @@ function Sql:_get_cte_values_literal(rows, columns, no_check)
   return res
 end
 
-local _debug = 0
-local function debug(...)
-  if _debug == 1 then
-    print(...)
-  end
-end
-
 --use `name` as key implicitly, because it's the only unique column
 --```lua
 -- Blog:merge {
@@ -1581,21 +1574,21 @@ function Sql:_parse_column(key, context)
     else
       token = key:sub(i, a - 1)
     end
-    debug('token', token, self.model.table_name)
+    -- print('token', token, self.model.table_name)
     -- column might be changed in the loop
     local field = model.fields[token]
     if field then
       -- 1. fields from model itself, highest priority
       if not last_field then
         -- 1.1 first column, the most case
-        debug('1.1', model.class_name, token)
+        -- print('1.1', model.class_name, token)
         column = token
         prefix = self._as or model._table_name_token
       elseif json_keys then
         -- 1.2 json field searh
         -- https://docs.djangoproject.com/en/4.2/topics/db/queries/#querying-jsonfield
         -- the json attribute happens to be included in fields, but we treat it as a json attribute
-        debug('1.2', model.class_name, token)
+        -- print('1.2', model.class_name, token)
         if json_operators[token] then
           op = token
         else
@@ -1604,18 +1597,18 @@ function Sql:_parse_column(key, context)
       elseif last_model.reversed_fields[last_token] then
         -- 1.3 field in a reversed model: Blog:where{entry__rating}
         -- already join in previous loop, do nothing
-        debug('1.3', model.class_name, token)
+        -- print('1.3', model.class_name, token)
         column = token
       elseif last_field.reference then
         -- 1.4 foreignkey model's field, may need a join
         if token == last_field.reference_column then
           -- 1.4.1 blog_id__id => redundant foreignkey suffix , rollback to last_token
-          debug('1.4.1', model.class_name, token)
+          -- print('1.4.1', model.class_name, token)
           column = last_token
           token = last_token -- in case of blog_id__id__gt
         else
           -- 1.4.2 blog_id__name => need a join
-          debug('1.4.2', model.class_name, last_token or '/', token)
+          -- print('1.4.2', model.class_name, last_token or '/', token)
           column = token
           if not join_key then
             -- prefix with foreignkey name because a model can be referenced multiple times by the same model
@@ -1642,7 +1635,7 @@ function Sql:_parse_column(key, context)
           end
         end
       else
-        -- 1.5: token IS a valid field on `model`, but the previous segment
+        -- print('1.5: token IS a valid field on `model`, but the previous segment')
         -- (`last_token`) is not a foreignkey / jsonb / reverse-fk, so the
         -- traversal is malformed.
         error(format(
@@ -1660,13 +1653,13 @@ function Sql:_parse_column(key, context)
       -- 2. name that's registered in annotate:
       -- Blog:annotate{cnt=Count('entry')}:where{cnt__lt=2}:group_by{'name'}
       -- return expression like: Count('entry') or F('price') * 10
-      debug('2', model.class_name, token)
+      -- print('2', model.class_name, token)
       final_column = self._annotate[token]
     elseif json_keys then
       -- 3. attributes from a json field
       -- Blog.where{data__a='x'} => WHERE ("example_blog"."data" -> a) = '"x"'
       -- Blog.where{data__a__contains='x'} => WHERE ("example_blog"."data" -> a) @> '"x"'
-      debug('3', model.class_name, token)
+      -- print('3', model.class_name, token)
       if json_operators[token] then
         op = token
       else
@@ -1678,7 +1671,7 @@ function Sql:_parse_column(key, context)
       if reversed_field then
         -- 4. reversed foreignkey, join from current loop
         -- token = entry, reversed_name = blog_id
-        debug('4', model.class_name, token)
+        -- print('4', model.class_name, token)
         -- Fix: if the previous segment was a forward FK whose target wasn't
         -- materialized yet (1.3 path skipped the join because at that point we
         -- only needed the FK column itself), we MUST add the forward join now,
@@ -1736,7 +1729,7 @@ function Sql:_parse_column(key, context)
         model = reversed_model
       elseif last_token then
         -- 5. operator, write back
-        debug('5', model.class_name, token)
+        -- print('5', model.class_name, token)
         if context == nil or not NON_OPERATOR_CONTEXTS[context] then -- where or having or Q
           -- 5.1 should be operator, check it
           assert(EXPR_OPERATORS[token], "5.1 invalid operator: " .. token)
