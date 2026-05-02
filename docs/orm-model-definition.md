@@ -1,6 +1,6 @@
 # 模型定义与数据校验
 
-> **示例模型** 见 [orm-models-reference.md](orm-models-reference.md)，与 [`spec/model_spec.lua`](../spec/model_spec.lua) 一致。本文涉及 `Blog` / `Author` / `Resume` / `BlogBin` 等，均按该 schema 定义。
+> **示例模型** 见 [orm-models-reference.md](orm-models-reference.md)。本文涉及 `Blog` / `Author` / `Resume` / `BlogBin` 等，均按该 schema 定义。
 
 ## 创建模型
 

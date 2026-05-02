@@ -1,6 +1,6 @@
 # 高级查询
 
-> **示例模型** 见 [orm-models-reference.md](orm-models-reference.md)（与 [`spec/model_spec.lua`](../spec/model_spec.lua) 一致）。本文出现的 `Blog` / `Entry` / `Book` / `Author` / `ViewLog` / `BlogBin` / `Publisher` 等均按该 schema 定义。
+> **示例模型** 见 [orm-models-reference.md](orm-models-reference.md)。本文出现的 `Blog` / `Entry` / `Book` / `Author` / `ViewLog` / `BlogBin` / `Publisher` 等均按该 schema 定义。
 
 ---
 

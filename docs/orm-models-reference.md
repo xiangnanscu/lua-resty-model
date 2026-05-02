@@ -1,8 +1,6 @@
 # 文档示例数据模型 (Reference Schema)
 
-本仓库的 ORM 文档共享同一套示例模型，便于阅读、复制和与 `spec/model_spec.lua` 中的可执行测试用例对照。其它文档（`orm-query-basics.md` / `orm-query-advanced.md` / `orm-expressions.md` / `orm-model-definition.md`）的所有 SQL 示例均假设以下模型已经定义。
-
-> 这些定义来源于 [`spec/model_spec.lua`](../spec/model_spec.lua)。
+本仓库的 ORM 文档共享同一套示例模型，其它文档（`orm-query-basics.md` / `orm-query-advanced.md` / `orm-expressions.md` / `orm-model-definition.md`）的所有 SQL 示例均假设以下模型已经定义。
 
 ---
 
@@ -196,21 +194,3 @@ Blog ────┐                           Resume (无主键, 联合唯一)
 | `utime` | `datetime`       | `auto_now = true`，每次 update 时刷新            |
 
 `Model(opts)` 是 `Model:mix(BaseModel, opts)` 的简写：会显式混入这三个字段。`Model:create_model(opts)` 也会自动添加 `id`（除非手动指定 `primary_key`），但不会添加 `ctime/utime`。`Resume` 通过 `auto_primary_key = false` 关闭了主键自动注入。
-
----
-
-## 5. 在示例中如何使用
-
-`spec/model_spec.lua` 的 `main()` 在执行前会：
-
-1. `migrate.get_table_defination(model)` 生成建表 SQL 并执行；
-2. 插入若干样本数据（`First Blog` / `Second Blog`、两位 `Author`、三条 `Entry` 等）；
-3. 进入 `describe / it` 套件运行各个 ORM 用例。
-
-文档中的 `:exec()` 结果断言（如 `{ name = 'First Blog' }`）正对应这套数据。如果你想在本地复现：
-
-```bash
-busted spec/model_spec.lua
-```
-
-或在自己的项目中按需删减——只复制需要的模型即可，其它示例仍能阅读。
