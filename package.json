@@ -11,7 +11,7 @@
     "resty": "resty -I lib --main-conf 'env NODE_ENV;' --http-conf 'lua_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;'",
     "postpush": "while true; do git push origin master && { echo 'Git push succeeded'; break; } || echo 'Git push failed, retrying in 1 seconds'; sleep 1; done",
     "pull": "while true; do git pull origin master && { echo 'Git pull succeeded'; break; } || echo 'Git pull failed, retrying in 1 seconds'; sleep 1; done",
-    "test": "yarn resty -I spec bin/ngx_busted.lua -o TAP",
+    "test": "LUA_PATH='/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;;' LUA_CPATH='/usr/lib/x86_64-linux-gnu/lua/5.1/?.so;;' yarn resty -I spec bin/ngx_busted.lua -o TAP",
     "sync": "cp -rf ~/create/template/lualib/model lib;cp -rf ~/create/template/docs/orm-* docs;",
     "syncback": "cp -rf lib/* ~/create/template/lualib;cp -rf docs/orm-* ~/create/template/docs;",
     "sql": "yarn resty -I spec bin/ngx_busted.lua -o TAP | node ./bin/sqlf.mjs > sql.md"
