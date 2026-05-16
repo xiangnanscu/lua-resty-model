@@ -673,6 +673,51 @@ local function main()
       local r = Entry:where { headline = 'First Entry' }:or_where { headline = 'Second Entry' }:exec()
       assert.are.same(#r, 2)
     end)
+
+    it("annotate 后再 traversal 显式报错 (B2)", function()
+      local ok, err = pcall(function()
+        Blog:annotate { x = Count('entry') }
+            :where { x__name__contains = 'a' }
+            :statement()
+      end)
+      assert.is_false(ok, "annotate 后再 traversal 应被拒绝")
+      err = tostring(err)
+      assert.is_truthy(err:find('annotation', 1, true),
+        "错误应指明是 annotation 链路问题; err=" .. err)
+      assert.is_truthy(err:find('x__name__contains', 1, true)
+        or err:find('name__contains', 1, true),
+        "错误应回显非法链路; err=" .. err)
+    end)
+
+    it("annotate + 单个 op 仍然合法 (cnt__gte)", function()
+      local sql = Blog:annotate { cnt = Count('entry') }
+          :where { cnt__gte = 1 }
+          :statement()
+      assert.is_truthy(sql:find('COUNT', 1, true))
+      assert.is_truthy(sql:find('>= 1', 1, true))
+    end)
+
+    it("blog_id__id__notop 错误信息保留 FK 上下文 (B4)", function()
+      local ok, err = pcall(function()
+        Entry:where { blog_id__id__notop = 1 }:statement()
+      end)
+      assert.is_false(ok)
+      err = tostring(err)
+      assert.is_truthy(err:find('notop', 1, true),
+        "err 应提到 notop; err=" .. err)
+      assert.is_truthy(err:find('blog_id', 1, true),
+        "err 应保留 blog_id 链路上下文; err=" .. err)
+      assert.is_truthy(err:find('blog_id__id__notop', 1, true),
+        "err 应回显完整 key; err=" .. err)
+    end)
+
+    it("blog_id__id 冗余 FK 后缀仍正常生成 (回归)", function()
+      local sql = Entry:where { blog_id__id = 5 }:statement()
+      assert.is_truthy(sql:find('blog_id', 1, true),
+        "应折叠到 blog_id 列; sql=" .. sql)
+      assert.is_falsy(sql:find('JOIN', 1, true),
+        "冗余后缀不应产生 JOIN; sql=" .. sql)
+    end)
   end)
 
   -------------------------------------------------------------------
@@ -782,6 +827,35 @@ local function main()
     it("aggregate StdDev (样本)", function()
       local s = Book:aggregate { sd = StdDev('price') }
       assert.is_true(s.sd > 0)
+    end)
+
+    it("having 拒绝嵌套 traversal (cnt__nope__gte)", function()
+      local ok, err = pcall(function()
+        Entry:annotate { cnt = Count('id') }
+            :group_by { 'blog_id' }
+            :having { cnt__nope__gte = 1 }
+            :statement()
+      end)
+      assert.is_false(ok)
+      err = tostring(err)
+      assert.is_truthy(err:find('cnt__nope__gte', 1, true),
+        "having 错误应回显完整 key; err=" .. err)
+      assert.is_truthy(err:find('nested traversal', 1, true)
+        or err:find('alias__op', 1, true),
+        "having 错误应说明不支持嵌套; err=" .. err)
+    end)
+
+    it("having 拒绝未知 op (cnt__bogus)", function()
+      local ok, err = pcall(function()
+        Entry:annotate { cnt = Count('id') }
+            :group_by { 'blog_id' }
+            :having { cnt__bogus = 1 }
+            :statement()
+      end)
+      assert.is_false(ok)
+      err = tostring(err)
+      assert.is_truthy(err:find('bogus', 1, true),
+        "having 错误应指出非法 op; err=" .. err)
     end)
   end)
 
@@ -1685,6 +1759,40 @@ local function main()
       local r = Author:where { payload__0__has_key = 'x' }:exec()
       assert.is_true(#r >= 1)
       Author:delete { name = 'jsonNum' }:exec()
+    end)
+
+    -- ----------------- 普通比较 op on JSON 路径 -----------------
+    -- payload = { status = 'active', score = 99 }
+    it("JSON path + gt: payload__score__gt 走 jsonb 比较", function()
+      local sql = Author:where { payload__score__gt = 50 }:statement()
+      assert.is_truthy(sql:find("->", 1, true), "应使用 -> 提取 jsonb; sql=" .. sql)
+      assert.is_falsy(sql:find("'gt'", 1, true), "gt 不应进入 json key; sql=" .. sql)
+      local r = Author:where { payload__score__gt = 50 }:exec()
+      assert.is_true(#r >= 1, "score=99 应满足 > 50")
+      local r2 = Author:where { payload__score__gt = 100 }:exec()
+      assert.are.same(#r2, 0, "score=99 不应满足 > 100")
+    end)
+
+    it("JSON path + lt / gte / lte / ne 走 jsonb 比较", function()
+      assert.is_true(#Author:where { payload__score__lt = 100 }:exec() >= 1)
+      assert.is_true(#Author:where { payload__score__gte = 99 }:exec() >= 1)
+      assert.is_true(#Author:where { payload__score__lte = 99 }:exec() >= 1)
+      assert.is_true(#Author:where { payload__score__ne = 0 }:exec() >= 1)
+    end)
+
+    it("JSON path + startswith / icontains 走 ->> 文本提取 + LIKE", function()
+      local sql = Author:where { payload__status__startswith = 'act' }:statement()
+      assert.is_truthy(sql:find("->>", 1, true),
+        "startswith 应使用 ->> 文本提取; sql=" .. sql)
+      assert.is_truthy(sql:find("LIKE", 1, true), "应展开为 LIKE; sql=" .. sql)
+      assert.is_true(#Author:where { payload__status__startswith = 'act' }:exec() >= 1)
+      assert.is_true(#Author:where { payload__status__icontains = 'CTI' }:exec() >= 1)
+    end)
+
+    it("JSON path 多段 + 普通 op 走 #> jsonb (语法可发送即可)", function()
+      assert.has_no_error(function()
+        Author:where { payload__nested__deep__gt = 1 }:exec()
+      end)
     end)
   end)
 
