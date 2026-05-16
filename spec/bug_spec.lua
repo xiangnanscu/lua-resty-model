@@ -1,11 +1,8 @@
 ---@diagnostic disable: param-type-mismatch, undefined-global
 --[[
-  bug_spec.lua —— 演示 lib/model/sql.lua 中 _parse_column / _parse_having_column
-  路径下已发现的 bug。每个 it 都只调用 :statement() 生成 SQL 字符串，
+  bug_spec.lua —— 锁定 lib/model/sql.lua 中 _parse_column / _parse_having_column
+  路径下已修复 bug 的预期行为。每个 it 都只调用 :statement() 生成 SQL 字符串，
   不连接数据库，可单独运行。
-
-  断言锁定的是「当前 (buggy) 行为」，便于 reviewer 直接看到 bug 输出；
-  修复后这些断言会失败，提示需要更新预期。
 ]]
 local Model = require("model")
 local Count = Model.Count
@@ -35,8 +32,9 @@ local Entry = Model:create_model {
 local Author = Model:create_model {
   table_name = 'author',
   fields = {
-    { 'name', maxlength = 200 },
-    { 'age',  type = 'integer' },
+    { 'name',    maxlength = 200 },
+    { 'age',     type = 'integer' },
+    { 'payload', type = 'json' },
   }
 }
 
@@ -65,13 +63,12 @@ local function is_running_with_busted()
 end
 
 local function main()
-  describe('sql.lua _parse_column / _parse_having_column 已知 bug', function()
+  describe('sql.lua _parse_column / _parse_having_column 已修复 bug', function()
     -------------------------------------------------------------------
-    it('BUG-B1: _parse_having_column 把首个 __ 之后的全部当 op', function()
+    it('BUG-B1: _parse_having_column 必须拒绝嵌套 traversal', function()
       -- key = "cnt__nope__gte"
-      -- 当前: _parse_having_column 只 find 第一个 "__"，op = key:sub(b+1) = "nope__gte"
-      -- 期望: op 应只取最后一段 ("gte") 或显式报 "invalid chain"，
-      --       并对中间段 "nope" 给出明确解析错误
+      -- 修复后: HAVING 只支持 'alias__op' 形态，多于一段 __ 直接报错；
+      --        即便最后一段恰好是合法 op, 中间段也无意义。
       local ok, err = pcall(function()
         Entry:annotate { cnt = Count('id') }
             :group_by { 'blog_id' }
@@ -80,39 +77,58 @@ local function main()
       end)
       assert.is_false(ok)
       err = tostring(err)
-      -- 直接证据: 错误信息里出现了「带 __ 的 op」
-      assert.is_truthy(err:find('nope__gte', 1, true),
-        'BUG B1: op 被错误地截取为 "nope__gte"; err=' .. err)
-      assert.is_truthy(err:find('invalid sql op', 1, true),
-        'BUG B1: 错误信息走的是 _get_expr_token 的 op 未知分支，'
-        .. '说明 having 没把 "nope" 当作非法路径段拒绝; err=' .. err)
+      assert.is_truthy(err:find('cnt__nope__gte', 1, true),
+        'B1: 错误应回显完整 key; err=' .. err)
+      assert.is_truthy(err:find('nested traversal', 1, true)
+        or err:find('alias__op', 1, true),
+        'B1: 错误应说明 having 不支持嵌套; err=' .. err)
+    end)
+
+    it('BUG-B1b: _parse_having_column 拒绝未知 op', function()
+      local ok, err = pcall(function()
+        Entry:annotate { cnt = Count('id') }
+            :group_by { 'blog_id' }
+            :having { cnt__bogus = 1 }
+            :statement()
+      end)
+      assert.is_false(ok)
+      err = tostring(err)
+      assert.is_truthy(err:find('bogus', 1, true),
+        'B1b: 错误应指出非法 op; err=' .. err)
+      assert.is_truthy(err:find('cnt__bogus', 1, true),
+        'B1b: 错误应回显完整 key; err=' .. err)
     end)
 
     -------------------------------------------------------------------
-    it('BUG-B2: annotate 命中后续 traversal 段被静默吞掉', function()
-      -- 用户写: where { x__name__contains = 'a' }
-      -- x 是 annotate 别名 -> branch 2 设置 final_column = annotate[x]
-      -- 之后 iter 在 1.1 把 column/prefix 改成 blog.name，
-      -- 但 post-loop `return final_column or ...` 仍返回 annotate 表达式，
-      -- 导致 blog.name 段被完全丢弃。
-      local sql = Blog:annotate { x = Count('entry') }
-          :where { x__name__contains = 'a' }
+    it('BUG-B2: annotate 后再 traversal 应当显式报错', function()
+      -- 修复前: where { x__name__contains = 'a' } 会静默返回
+      --        Count(...) LIKE '%a%'，name 段完全丢失。
+      -- 修复后: annotate 是 leaf，只允许后跟单个 op；继续 traversal 报错。
+      local ok, err = pcall(function()
+        Blog:annotate { x = Count('entry') }
+            :where { x__name__contains = 'a' }
+            :statement()
+      end)
+      assert.is_false(ok, 'B2: annotate 后再 traversal 应报错')
+      err = tostring(err)
+      assert.is_truthy(err:find("annotation 'x'", 1, true)
+        or err:find("annotation \"x\"", 1, true)
+        or err:find('annotation', 1, true),
+        'B2: 错误应指明问题出在 annotation; err=' .. err)
+      assert.is_truthy(err:find('x__name__contains', 1, true)
+        or err:find('name__contains', 1, true),
+        'B2: 错误应回显被拒绝的链路; err=' .. err)
+    end)
+
+    it('BUG-B2b: annotate + 单个 op 仍然合法', function()
+      -- annotate 别名 + 单个 op (cnt__gte=2) 是 Django 等价支持的写法。
+      local sql = Blog:annotate { cnt = Count('entry') }
+          :where { cnt__gte = 2 }
           :statement()
-
-      -- 提取 WHERE 子句
-      local where_pos = sql:find('WHERE', 1, true)
-      assert.is_truthy(where_pos, 'expected WHERE in sql: ' .. sql)
-      local where_clause = sql:sub(where_pos)
-
-      -- 直接证据 1: WHERE 用了 annotate 的 COUNT 表达式做 LIKE 左操作数
-      assert.is_truthy(where_clause:find('COUNT', 1, true),
-        'BUG B2: WHERE 使用了 annotate 的 COUNT 表达式; sql=' .. sql)
-      assert.is_truthy(where_clause:find('LIKE', 1, true),
-        'BUG B2: contains 应展开为 LIKE; sql=' .. sql)
-
-      -- 直接证据 2: 用户真正想匹配的 name 字段在 WHERE 里完全不出现
-      assert.is_falsy(where_clause:find('name', 1, true),
-        'BUG B2: name 段被静默丢弃，未出现在 WHERE 中; sql=' .. sql)
+      assert.is_truthy(sql:find('COUNT', 1, true),
+        'B2b: WHERE 应使用 COUNT 表达式; sql=' .. sql)
+      assert.is_truthy(sql:find('>= 2', 1, true),
+        'B2b: WHERE 应展开为 >= 2; sql=' .. sql)
     end)
 
     -------------------------------------------------------------------
@@ -175,14 +191,10 @@ local function main()
     end)
 
     -------------------------------------------------------------------
-    it('BUG-B4: blog_id__id 冗余后缀后再加段，错误信息不指向 blog_id', function()
-      -- "blog_id__id__notop":
-      --   iter1 blog_id  -> 1.1, column=blog_id, model 跳到 Blog
-      --   iter2 id       -> 1.4.1 (redundant FK suffix), 回滚 column=token=blog_id,
-      --                     但 last_field 被设为 Blog.fields.id (主键 field)，
-      --                     已脱离原 FK 上下文
-      --   iter3 notop    -> branch 5, EXPR_OPERATORS[notop]==nil -> assert fail
-      -- 当前错误信息只说 "invalid operator: notop"，完全不提 blog_id 链
+    it('BUG-B4: blog_id__id 冗余后缀后非法 op 错误信息应保留 FK 上下文', function()
+      -- 修复前: 1.4.1 把 last_field 改成主键 field，链路上下文丢失，
+      --        错误只说 "invalid operator: notop"。
+      -- 修复后: 1.4.1 保留 last_field, branch 5 错误信息带上 column / model / 原 key。
       local ok, err = pcall(function()
         Entry:where { blog_id__id__notop = 1 }:statement()
       end)
@@ -190,11 +202,57 @@ local function main()
       err = tostring(err)
 
       assert.is_truthy(err:find('notop', 1, true),
-        'BUG B4: err 应至少提到 notop; err=' .. err)
-      -- 直接证据: 错误信息丢失了 blog_id 上下文，
-      -- reviewer 看到 err 完全猜不出问题源头是 FK 链
-      assert.is_falsy(err:find('blog_id', 1, true),
-        'BUG B4: 错误信息未提及 blog_id 链上下文，调试不友好; err=' .. err)
+        'B4: err 应至少提到 notop; err=' .. err)
+      assert.is_truthy(err:find('blog_id', 1, true),
+        'B4: err 应保留 blog_id 链上下文; err=' .. err)
+      assert.is_truthy(err:find('blog_id__id__notop', 1, true),
+        'B4: err 应回显完整 key 帮助调试; err=' .. err)
+    end)
+
+    -------------------------------------------------------------------
+    it('JSON path: 普通比较 op (gt/lt/ne/...) 走 jsonb 比较', function()
+      -- 修复前: payload__age__gt=18 会把 'gt' 当 json key,
+      --        生成 (payload #> ARRAY['age','gt']) = 18 静默错误。
+      -- 修复后: gt 视为终止 op, 走 json_gt: (payload -> 'age') > '18'
+      local sql = Author:where { payload__age__gt = 18 }:statement()
+      assert.is_truthy(sql:find("->", 1, true),
+        "JSON gt: 应使用 -> 提取 jsonb; sql=" .. sql)
+      assert.is_falsy(sql:find("'gt'", 1, true),
+        "JSON gt: 'gt' 不应作为 json key 出现; sql=" .. sql)
+      assert.is_truthy(sql:find("> '18'", 1, true),
+        "JSON gt: 应展开为 > '18' (jsonb compare); sql=" .. sql)
+    end)
+
+    it('JSON path: text 类 op (startswith) 走 ->> 文本提取', function()
+      local sql = Author:where { payload__name__startswith = 'Al' }:statement()
+      assert.is_truthy(sql:find("->>", 1, true),
+        "JSON startswith: 应使用 ->> 提取 text; sql=" .. sql)
+      assert.is_truthy(sql:find("LIKE", 1, true),
+        "JSON startswith: 应展开为 LIKE; sql=" .. sql)
+    end)
+
+    it('JSON path: 多段 + 普通 op 走 #> jsonb', function()
+      local sql = Author:where { payload__a__b__gt = 1 }:statement()
+      assert.is_truthy(sql:find("#>", 1, true),
+        "JSON multi gt: 应使用 #> 提取 jsonb; sql=" .. sql)
+      assert.is_falsy(sql:find("'gt'", 1, true),
+        "JSON multi gt: 'gt' 不应进入路径; sql=" .. sql)
+      assert.is_truthy(sql:find("> '1'", 1, true),
+        "JSON multi gt: 应展开为 > '1'; sql=" .. sql)
+    end)
+
+    it('JSON path: 现有 has_key / contains / eq 行为不变', function()
+      local sql1 = Author:where { payload__has_key = 'status' }:statement()
+      assert.is_truthy(sql1:find("?", 1, true),
+        "has_key 仍走 ? 算子; sql=" .. sql1)
+
+      local sql2 = Author:where { payload__contains = { x = 1 } }:statement()
+      assert.is_truthy(sql2:find("@>", 1, true),
+        "contains 仍走 @> 算子; sql=" .. sql2)
+
+      local sql3 = Author:where { payload__status = 'active' }:statement()
+      assert.is_truthy(sql3:find("->", 1, true) and sql3:find("=", 1, true),
+        "eq 仍走 -> + =; sql=" .. sql3)
     end)
   end)
 end

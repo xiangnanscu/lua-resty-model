@@ -170,9 +170,53 @@ local EXPR_OPERATORS = {
   json_eq = function(key, value)
     return format("(%s) = '%s'", key, encode(value))
   end,
+  json_ne = function(key, value)
+    return format("(%s) <> '%s'", key, encode(value))
+  end,
+  json_gt = function(key, value)
+    return format("(%s) > '%s'", key, encode(value))
+  end,
+  json_gte = function(key, value)
+    return format("(%s) >= '%s'", key, encode(value))
+  end,
+  json_lt = function(key, value)
+    return format("(%s) < '%s'", key, encode(value))
+  end,
+  json_lte = function(key, value)
+    return format("(%s) <= '%s'", key, encode(value))
+  end,
   contained_by = function(key, value)
     return format("(%s) <@ '%s'", key, encode(value))
   end,
+}
+
+-- Rename normal comparison ops to their json_* variants when LHS is a jsonb path
+-- so RHS gets JSON-encoded and PG performs jsonb-vs-jsonb comparison.
+local JSON_OP_MAP = {
+  eq = 'json_eq',
+  ne = 'json_ne',
+  gt = 'json_gt',
+  gte = 'json_gte',
+  lt = 'json_lt',
+  lte = 'json_lte',
+  contains = 'json_contains',
+}
+
+-- Ops that operate on TEXT (LIKE family, regex, date extraction). When the LHS
+-- is a jsonb path, extract the leaf as text (->> / #>>) instead of jsonb (-> / #>),
+-- so PG operators that require text work directly without explicit cast.
+local JSON_TEXT_OPS = {
+  iexact = true,
+  icontains = true,
+  startswith = true, istartswith = true,
+  endswith = true, iendswith = true,
+  regex = true, iregex = true,
+  date = true, time = true,
+  year = true, month = true, day = true,
+  hour = true, minute = true, second = true,
+  week = true, week_day = true,
+  iso_week_day = true, iso_year = true,
+  quarter = true,
 }
 
 ---@class SqlOptions
@@ -1574,7 +1618,7 @@ function Sql:_parse_column(key, context)
   end
   local i = 1
   local op = 'eq'
-  local a, b, token, join_key, prefix, column, final_column, last_field, last_token, last_model, last_join_key, json_keys
+  local a, b, token, join_key, prefix, column, final_column, last_field, last_token, last_model, json_keys
   while true do
     a, b = key:find("__", i, true)
     if not a then
@@ -1593,37 +1637,46 @@ function Sql:_parse_column(key, context)
         column = token
         prefix = self._as or model._table_name_token
       elseif json_keys then
-        -- 1.2 json field searh
+        -- 1.2 json field search: token happens to be a model field name but we
+        -- are already inside a jsonb path, so treat it as a json path segment.
         -- https://docs.djangoproject.com/en/4.2/topics/db/queries/#querying-jsonfield
-        -- the json attribute happens to be included in fields, but we treat it as a json attribute
         -- print('1.2', model.class_name, token)
-        if json_operators[token] then
+        if json_operators[token] or EXPR_OPERATORS[token] then
+          -- terminal op: stop traversing, post-loop will build the json path
           op = token
+          break
         else
           json_keys[#json_keys + 1] = token
         end
       elseif last_model.reversed_fields[last_token] then
-        -- 1.3 field in a reversed model: Blog:where{entry__rating}
-        -- already join in previous loop, do nothing
+        -- 1.3 field on the reversed-model side: Blog:where{entry__rating}
+        -- The reverse join was created by branch 4 in the previous iter; here
+        -- we just point `column` at the current segment (prefix already alias).
         -- print('1.3', model.class_name, token)
         column = token
       elseif last_field.reference then
         -- 1.4 foreignkey model's field, may need a join
         if token == last_field.reference_column then
-          -- 1.4.1 blog_id__id => redundant foreignkey suffix , rollback to last_token
+          -- 1.4.1 blog_id__id => redundant FK suffix, rollback to the FK column.
+          -- Preserve `field = last_field` so the loop bottom's
+          -- `last_field = field` keeps the FK context — otherwise a trailing
+          -- segment like blog_id__id__notop would report errors against the
+          -- PK field and lose the originating FK chain (BUG B4).
           -- print('1.4.1', model.class_name, token)
           column = last_token
           token = last_token -- in case of blog_id__id__gt
+          field = last_field
         else
           -- 1.4.2 blog_id__name => need a join
           -- print('1.4.2', model.class_name, last_token or '/', token)
           column = token
+          local parent_join_key -- left side of the new join (nil = main table)
           if not join_key then
             -- prefix with foreignkey name because a model can be referenced multiple times by the same model
             -- such as: Entry:where{blog_id__name='Tom', reposted_blog_id__name='Kate'}
             join_key = last_token
           else
-            last_join_key = join_key
+            parent_join_key = join_key
             join_key = join_key .. "__" .. last_token
           end
           if not self._join_keys then
@@ -1632,9 +1685,10 @@ function Sql:_parse_column(key, context)
           prefix = self._join_keys[join_key]
           if not prefix then
             local function join_cond_cb(ctx)
-              local left_column = ctx[last_join_key or 1][last_token]
+              local left_proxy = ctx[parent_join_key or 1]
+              local left_column = left_proxy[last_token]
               if not left_column then
-                error(last_token .. " is a invalid column for " .. ctx[last_join_key or 1][1])
+                error(last_token .. " is a invalid column for " .. left_proxy[1])
               end
               local right_column = ctx[join_key][last_field.reference_column]
               return format("%s = %s", left_column, right_column)
@@ -1666,16 +1720,35 @@ function Sql:_parse_column(key, context)
     elseif self._annotate and self._annotate[token] then
       -- 2. name that's registered in annotate:
       -- Blog:annotate{cnt=Count('entry')}:where{cnt__lt=2}:group_by{'name'}
-      -- return expression like: Count('entry') or F('price') * 10
+      -- The annotation is an expression (Count(...), F('price')*10), so it's a
+      -- leaf — the only valid continuation is a single trailing operator
+      -- (cnt__gte=1). Traversal *into* the annotation makes no sense and used
+      -- to be silently dropped (BUG B2), so we reject it explicitly here.
       -- print('2', model.class_name, token)
       final_column = self._annotate[token]
+      if a then
+        local rest = key:sub(b + 1)
+        if EXPR_OPERATORS[rest] then
+          op = rest
+        else
+          error(format(
+            "cannot traverse into annotation '%s' on model '%s': "
+            .. "only a single trailing operator is allowed, got '%s' (full key: '%s')",
+            token, model.class_name, rest, key))
+        end
+      end
+      break
     elseif json_keys then
       -- 3. attributes from a json field
-      -- Blog.where{data__a='x'} => WHERE ("example_blog"."data" -> a) = '"x"'
-      -- Blog.where{data__a__contains='x'} => WHERE ("example_blog"."data" -> a) @> '"x"'
+      -- Blog.where{data__a='x'}         => WHERE (... "data" -> 'a')        = '"x"'
+      -- Blog.where{data__a__contains=...} => WHERE (... "data" -> 'a')      @> '...'
+      -- Blog.where{data__a__gt=5}       => WHERE (... "data" -> 'a')        > '5'
+      -- Blog.where{data__a__startswith='x'} => WHERE (... "data" ->> 'a') LIKE 'x%'
       -- print('3', model.class_name, token)
-      if json_operators[token] then
+      if json_operators[token] or EXPR_OPERATORS[token] then
+        -- terminal op: stop traversing, post-loop builds the json LHS
         op = token
+        break
       else
         json_keys[#json_keys + 1] = token
       end
@@ -1702,7 +1775,13 @@ function Sql:_parse_column(key, context)
                 ctx[left_anchor or 1][last_token],
                 ctx[fk_join_key][last_field.reference_column])
             end
-            self:_handle_manual_join(self._join_type or "INNER", model, fk_join_cb, fk_join_key)
+            local fix_join_type
+            if context == 'aggregate' then
+              fix_join_type = "LEFT"
+            else
+              fix_join_type = self._join_type or "INNER"
+            end
+            self:_handle_manual_join(fix_join_type, model, fk_join_cb, fk_join_key)
           end
           join_key = fk_join_key
         end
@@ -1746,16 +1825,22 @@ function Sql:_parse_column(key, context)
         -- print('5', model.class_name, token)
         if context == nil or not NON_OPERATOR_CONTEXTS[context] then -- where or having or Q
           -- 5.1 should be operator, check it
-          assert(EXPR_OPERATORS[token], "5.1 invalid operator: " .. token)
+          if not EXPR_OPERATORS[token] then
+            error(format(
+              "invalid operator '%s' after column '%s' on model '%s' (full key: '%s')",
+              token, last_token, model.class_name, key))
+          end
         else
           -- 5.2 select/returning etc context, shouldn't reach here
-          error("5.2 invalid column: " .. token)
+          error(format(
+            "invalid column segment '%s' after '%s' on model '%s' (full key: '%s') in %s context",
+            token, last_token, model.class_name, key, context))
         end
         op = token
         column = last_token
         break
       else
-        error("parse column error, invalid name: " .. token .. " for model: " .. model.class_name)
+        error(format("invalid column name '%s' for model '%s'", token, model.class_name))
       end
     end
     if not a then
@@ -1766,16 +1851,25 @@ function Sql:_parse_column(key, context)
     i = b + 1
   end
   if json_keys then
+    -- Text ops (LIKE, regex, date extraction) need text extraction (->> / #>>)
+    -- so PG operators that require text can apply directly. Other ops keep the
+    -- jsonb extract (-> / #>) and route through json_* variants that encode the
+    -- RHS as JSON literal, so PG can do jsonb-vs-jsonb comparison.
+    local arrow_one, arrow_many
+    if JSON_TEXT_OPS[op] then
+      arrow_one, arrow_many = "->>", "#>>"
+    else
+      arrow_one, arrow_many = "->", "#>"
+    end
+    local quoted_col = prefix .. '.' .. smart_quote(column)
     if #json_keys == 1 then
-      final_column = format("%s -> %s", prefix .. '.' .. smart_quote(column), as_literal(json_keys[1]))
+      final_column = format("%s %s %s", quoted_col, arrow_one, as_literal(json_keys[1]))
     elseif #json_keys > 1 then
-      final_column = format("%s #> ARRAY[%s]", prefix .. '.' .. smart_quote(column),
+      final_column = format("%s %s ARRAY[%s]", quoted_col, arrow_many,
         as_literal_without_brackets(json_keys))
     end
-    if op == 'contains' then
-      op = 'json_contains'
-    elseif op == 'eq' then
-      op = 'json_eq'
+    if JSON_OP_MAP[op] then
+      op = JSON_OP_MAP[op]
     end
   end
   return final_column or (prefix .. '.' .. smart_quote(column)), op
@@ -1791,6 +1885,17 @@ function Sql:_parse_having_column(key)
   end
   local token = key:sub(1, a - 1)
   local op = key:sub(b + 1)
+  -- HAVING references a group-by column or an aggregate alias; nested traversal
+  -- (cnt__nope__gte) makes no sense here and used to slip through as op =
+  -- "nope__gte" → "invalid sql op" downstream (BUG B1). Reject it up front.
+  if op:find("__", 1, true) then
+    error(format(
+      "invalid having key '%s': nested traversal is not supported, "
+      .. "use 'alias__op' (e.g. 'cnt__gte') only", key))
+  end
+  if not EXPR_OPERATORS[op] then
+    error(format("invalid having operator '%s' in key '%s'", op, key))
+  end
   return self:_get_having_column(token), op
 end
 
