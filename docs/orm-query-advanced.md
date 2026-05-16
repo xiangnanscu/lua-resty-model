@@ -168,6 +168,19 @@ Blog:annotate { cnt = Count('entry') }:group('name'):having { cnt__gt = 2 }:exec
 Blog:annotate { cnt = Count('entry') }:group('name'):where { cnt__lt = 5 }:order('-cnt'):exec()
 ```
 
+> **注意（annotate 别名后只能接一个 op）**：`annotate` 注册的别名展开成一段完整 SQL 表达式（`Count(...)` / `F(...) * ...`），它不是一个列，所以无法再 `__` traversal 进去；只允许 0 或 1 个比较 op（`cnt`、`cnt__gte=1`）：
+> ```lua
+> Blog:annotate{ x = Count('entry') }:where{ x__name__contains = 'a' }  -- error
+> -- error: cannot traverse into annotation 'x' on model 'Blog': only a single
+> --        trailing operator is allowed, got 'name__contains' ...
+> ```
+>
+> **HAVING 同理**：`having{}` 的 key 只支持 `alias__op` 形态，不接受嵌套：
+> ```lua
+> :having{ cnt__nope__gte = 1 }  -- error: nested traversal is not supported
+> :having{ cnt__bogus     = 1 }  -- error: invalid having operator 'bogus'
+> ```
+
 ### Sql:alias(kwargs)
 
 **签名：** 与 `annotate` 一致。
@@ -346,7 +359,13 @@ q1:union_all(q2):union_all(q3):exec()
 
 ## JSON 字段查询
 
-`json` / `table` 字段（以及任何带 `model` 属性的字段）支持 JSON 路径查询。**键名/数字下标**作为中间层时会被翻译为 PostgreSQL 的 `->` 或 `#>` 运算符；最末端的 lookup（默认 `eq`、或 `has_key` / `contains` 等）作用在该子节点上。
+`json` / `table` 字段（以及任何带 `model` 属性的字段）支持 JSON 路径查询。**键名/数字下标**作为中间层时会被翻译为 PostgreSQL 的 `->` 或 `#>` 运算符；最末端的 lookup（默认 `eq`、或 `has_key` / `contains` / `gt` / `startswith` 等）作用在该子节点上。
+
+> **路径段 vs 终止 op**：已知 lookup 名 (`gt`/`lt`/`gte`/`lte`/`ne`/`eq`/`contains`/`startswith`/`regex`/`has_key`/...) 始终被视为终止算子，**不会**被当成 JSON path 段。如果 JSON 里真有 key 叫 `gt`，请用 Q 或原始 SQL 表达。
+>
+> 提取方式按 op 自动选择：
+> - **JSON-原生 op**（jsonb 比较 / 包含 / 键检查）：用 `->` / `#>` 提取 `jsonb`，RHS 走 `encode()` 编成 JSON 字面量，PG 自动隐式 cast 成 jsonb。
+> - **文本类 op**（LIKE / regex / EXTRACT 系列）：用 `->>` / `#>>` 提取 `text`，再走对应 SQL 操作符。
 
 ### Author 模型示例
 
@@ -369,6 +388,42 @@ Author:where { payload__contained_by = { status = 'active' } }:exec()
 -- 顶层 key 检查
 Author:where { payload__has_key = 'status' }:exec()
 -- WHERE (T.payload) ? 'status'
+```
+
+### 普通比较 op 走 jsonb 比较
+
+```lua
+Author:where { payload__score__gt  = 50 }:exec()
+-- WHERE (T.payload -> 'score') > '50'
+
+Author:where { payload__score__lte = 99 }:exec()
+-- WHERE (T.payload -> 'score') <= '99'
+
+Author:where { payload__status__ne = 'active' }:exec()
+-- WHERE (T.payload -> 'status') <> '"active"'
+
+-- 多段 + 比较：用 #> 提取后比较
+Author:where { payload__a__b__gt = 1 }:exec()
+-- WHERE (T.payload #> ARRAY['a', 'b']) > '1'
+```
+
+注意：PG jsonb 比较要求两侧类型一致（数字-数字、字符串-字符串）。如果 JSON 里 `score` 存的是 `"99"`（字符串）而 RHS 给数字 `99`，PG 会报错；这是数据契约问题，不是 ORM bug。
+
+### 文本类 op 切到 `->>` 文本提取
+
+```lua
+Author:where { payload__name__startswith = 'Al' }:exec()
+-- WHERE T.payload ->> 'name' LIKE 'Al%' ESCAPE '\'
+
+Author:where { payload__name__icontains = 'ALI' }:exec()
+-- WHERE T.payload ->> 'name' ILIKE '%ALI%' ESCAPE '\'
+
+Author:where { payload__name__iregex = '^al' }:exec()
+-- WHERE T.payload ->> 'name' ~* '^al'
+
+-- 多段 + 文本 op
+Author:where { payload__a__b__startswith = 'x' }:exec()
+-- WHERE T.payload #>> ARRAY['a', 'b'] LIKE 'x%' ESCAPE '\'
 ```
 
 ### table 字段（结构化 jsonb 数组）
@@ -394,14 +449,20 @@ Author:where { resume__2__contained_by = { start_date = '2025-01-01' } }:exec()
 
 ### 支持的 lookup 速查
 
-| lookup           | SQL                              |
-| ---------------- | -------------------------------- |
-| (默认) `eq`      | `(field -> 'k') = '"v"'`         |
-| `contains`       | `(field -> 'k') @> '...'`        |
-| `contained_by`   | `(field -> 'k') <@ '...'`        |
-| `has_key`        | `(field -> 'k') ? 'x'`           |
-| `has_keys`       | `(field -> 'k') ?& ARRAY[...]`   |
-| `has_any_keys`   | `(field -> 'k') ?\| ARRAY[...]`  |
+| lookup           | 提取方式 | SQL                              |
+| ---------------- | -------- | -------------------------------- |
+| (默认) `eq`      | `->`     | `(field -> 'k') = '"v"'`         |
+| `ne`             | `->`     | `(field -> 'k') <> '"v"'`        |
+| `gt` / `gte` / `lt` / `lte` | `->` | `(field -> 'k') > '5'` (jsonb 比较) |
+| `contains`       | `->`     | `(field -> 'k') @> '...'`        |
+| `contained_by`   | `->`     | `(field -> 'k') <@ '...'`        |
+| `has_key`        | `->`     | `(field -> 'k') ? 'x'`           |
+| `has_keys`       | `->`     | `(field -> 'k') ?& ARRAY[...]`   |
+| `has_any_keys`   | `->`     | `(field -> 'k') ?\| ARRAY[...]`  |
+| `startswith` / `endswith` / `icontains` 等 LIKE 系列 | `->>` | `field ->> 'k' LIKE 'x%'` |
+| `iexact`         | `->>`    | `field ->> 'k' ILIKE 'v'`        |
+| `regex` / `iregex` | `->>`  | `field ->> 'k' ~ 'pat'`          |
+| `date` / `time` / `year` / `month` 等 EXTRACT 系列 | `->>` | 见 [基础 lookup 表](orm-query-basics.md#常用-lookup-速查) |
 
 ---
 

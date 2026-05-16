@@ -203,8 +203,9 @@ local JSON_OP_MAP = {
 }
 
 -- Ops that operate on TEXT (LIKE family, regex, date extraction). When the LHS
--- is a jsonb path, extract the leaf as text (->> / #>>) instead of jsonb (-> / #>),
--- so PG operators that require text work directly without explicit cast.
+-- is a jsonb path, extract the last segment as text (->> / #>>) instead of
+-- jsonb (-> / #>), so PG operators that require text work directly without
+-- explicit cast.
 local JSON_TEXT_OPS = {
   iexact = true,
   icontains = true,
@@ -1720,10 +1721,10 @@ function Sql:_parse_column(key, context)
     elseif self._annotate and self._annotate[token] then
       -- 2. name that's registered in annotate:
       -- Blog:annotate{cnt=Count('entry')}:where{cnt__lt=2}:group_by{'name'}
-      -- The annotation is an expression (Count(...), F('price')*10), so it's a
-      -- leaf — the only valid continuation is a single trailing operator
-      -- (cnt__gte=1). Traversal *into* the annotation makes no sense and used
-      -- to be silently dropped (BUG B2), so we reject it explicitly here.
+      -- The annotation expands to a full SQL expression (Count(...), F('price')
+      -- * 10), not a column — so the only valid continuation is a single
+      -- trailing operator (cnt__gte=1). Traversal *into* the annotation makes
+      -- no sense and used to be silently dropped (BUG B2), reject it here.
       -- print('2', model.class_name, token)
       final_column = self._annotate[token]
       if a then

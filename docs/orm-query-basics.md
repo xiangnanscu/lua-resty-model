@@ -351,6 +351,10 @@ Entry:exclude(Q{rating=5} / Q{headline__contains='draft'}):exec()
 
 **JSON 路径**：键名/数字下标作为中间层时，会被解析为 PG 的 `->` / `#>` 运算符，最末端的 lookup（`eq` / `has_key` / `contains` 等）作用在该子节点上。
 
+- **JSON-原生 lookup**（`eq` / `ne` / `gt` / `gte` / `lt` / `lte` / `contains` / `contained_by` / `has_key` / `has_keys` / `has_any_keys`）：用 `->` / `#>` 提取 `jsonb`，RHS 也按 JSON 字面量编码，PG 走 jsonb-vs-jsonb 比较。
+- **文本类 lookup**（`startswith` / `istartswith` / `endswith` / `iendswith` / `contains` 的 LIKE 行为不适用 — 这里 `contains` 仍是 JSON 包含；`icontains` / `iexact` / `regex` / `iregex` / 日期提取系列）：用 `->>` / `#>>` 提取为 `text`，再走对应 SQL 操作符。
+- 已识别 lookup 名（`gt` / `startswith` / …）始终被当作终止算子，**不会**当成 JSON 路径段。如果 JSON 里恰好有 key 叫 `gt`，请用 Q / 原始 SQL。
+
 ```lua
 -- payload 是 json 字段；2 表示数字下标 (json 数组)
 Author:where { payload__status = 'active' }       -- (T.payload -> 'status') = '"active"'
@@ -358,6 +362,15 @@ Author:where { payload__2__score = 99 }            -- (T.payload #> ARRAY['2','s
 Author:where { payload__contains    = { status = 'active' } } -- (T.payload) @> '{"status":"active"}'
 Author:where { payload__contained_by = { status = 'active' } } -- (T.payload) <@ '{"status":"active"}'
 Author:where { payload__has_key = 'status' }       -- (T.payload) ? 'status'
+
+-- 普通比较 op 直接作用在 JSON 路径上（jsonb 比较，RHS 自动 JSON 编码）
+Author:where { payload__score__gt  = 50 }          -- (T.payload -> 'score') > '50'
+Author:where { payload__score__lte = 99 }          -- (T.payload -> 'score') <= '99'
+Author:where { payload__status__ne = 'active' }    -- (T.payload -> 'status') <> '"active"'
+
+-- 文本类 lookup 自动切 ->>（文本提取），再走 LIKE / ~ / EXTRACT
+Author:where { payload__name__startswith = 'Al' }  -- T.payload ->> 'name' LIKE 'Al%' ESCAPE '\'
+Author:where { payload__name__iregex     = '^al' } -- T.payload ->> 'name' ~* '^al'
 
 -- resume 是 table 字段（jsonb 数组），下标 0/1/2 选取数组元素
 Author:where { resume__0__has_key      = 'start_date' }    -- (T.resume -> '0') ? 'start_date'
