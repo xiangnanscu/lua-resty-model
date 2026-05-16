@@ -116,35 +116,62 @@ local function main()
     end)
 
     -------------------------------------------------------------------
-    it('BUG-B5: where_in 静默丢弃 __op 后缀', function()
-      -- 用户写: where_in('blog_id__gt', {1, 2})
-      -- _parse_column 返回 (column, 'gt'), 但 where_in 在
-      --   Sql._base_where_in(self, self:_parse_column(cols), range)
-      -- 把多返回值压成 1 个 -> op 'gt' 被丢弃
-      -- 最终 SQL 仍然是 IN，等价于用户写 'blog_id'，"__gt" 当成不存在
-      local sql = Entry:where_in('blog_id__gt', { 1, 2 }):statement()
-
-      assert.is_truthy(sql:find(' IN ', 1, true),
-        'BUG B5: where_in 仍生成 IN 子句; sql=' .. sql)
-      -- 没有任何比较运算符出现 (没有 >)
-      assert.is_falsy(sql:find(' > ', 1, true),
-        'BUG B5: __gt 完全消失，没有生成任何 > 比较; sql=' .. sql)
-      -- 期望: where_in 看到带 __op 的 col 应 assert/error，
-      --       而非静默退化为相等列上的 IN
+    it('BUG-B5: where_in 对带 __op 的列名应当报错而非静默退化', function()
+      -- 设计：where_in 是 where{col__in = range} 的薄糖衣，col 不允许带比较 op。
+      -- IN 谓词本身和 gt/contains 等二元 op 互斥，拼在一起没有合法语义。
+      -- traversal (如 'blog__name') 仍合法，被拒绝的只是 op 后缀。
+      local ok, err = pcall(function()
+        Entry:where_in('blog_id__gt', { 1, 2 }):statement()
+      end)
+      assert.is_false(ok, '当前 bug 已修：where_in 不应静默接受 __gt')
+      err = tostring(err)
+      assert.is_truthy(err:find('where_in', 1, true),
+        'err 应指明是 where_in 拒绝; err=' .. err)
+      assert.is_truthy(err:find('blog_id__gt', 1, true),
+        'err 应回显原始列名 blog_id__gt; err=' .. err)
+      assert.is_truthy(err:find('gt', 1, true),
+        'err 应指出非法 op 是 gt; err=' .. err)
     end)
 
     -------------------------------------------------------------------
-    it('BUG-B7: 聚合上下文中正向 FK 仍使用 INNER JOIN', function()
+    it('BUG-B5b: where_in 对数组形式同样拒绝带 __op 的元素', function()
+      local ok, err = pcall(function()
+        Entry:where_in({ 'blog_id', 'rating__lt' }, { { 1, 5 }, { 2, 3 } }):statement()
+      end)
+      assert.is_false(ok)
+      err = tostring(err)
+      assert.is_truthy(err:find('rating__lt', 1, true),
+        'err 应回显非法元素 rating__lt; err=' .. err)
+      assert.is_truthy(err:find('lt', 1, true),
+        'err 应指出非法 op 是 lt; err=' .. err)
+    end)
+
+    -------------------------------------------------------------------
+    it('BUG-B5c: where_in 对纯列名 / traversal 列名仍正常工作', function()
+      -- 普通列
+      local sql1 = Entry:where_in('blog_id', { 1, 2 }):statement()
+      assert.is_truthy(sql1:find(' IN ', 1, true),
+        'where_in("blog_id", ...) 应生成 IN; sql=' .. sql1)
+
+      -- 数组形式 (复合 IN)
+      local sql2 = Entry:where_in({ 'blog_id', 'rating' }, { { 1, 5 }, { 2, 3 } }):statement()
+      assert.is_truthy(sql2:find(' IN ', 1, true),
+        'where_in({...}, ...) 应生成 IN; sql=' .. sql2)
+    end)
+
+    -------------------------------------------------------------------
+    it('BUG-B7: 聚合上下文中正向 FK 应改用 LEFT JOIN (Django 对齐)', function()
       -- annotate(Count('author__name')) 触发 _parse_column(.., 'aggregate')
-      -- _parse_column 仅在 reversed-fk 分支 (line 1719-1722) 根据 context
-      -- 切到 LEFT JOIN，正向 FK (1.4.2, line 1634) 仍写死 INNER。
-      -- Django 行为是整条聚合链都走 LEFT，否则没作者的 Book 会被 drop。
+      -- 修复前: 正向 FK (1.4.2) 写死 INNER JOIN，导致没作者的 Book 被 drop。
+      -- 修复后: 正向 FK 与 reversed-fk 分支一样，aggregate 上下文走 LEFT JOIN，
+      --         与 Django 行为一致 (Book.objects.annotate(c=Count('author__name'))
+      --         => LEFT OUTER JOIN author ON book.author_id = author.id)。
       local sql = Book:annotate { c = Count('author__name') }:statement()
 
-      assert.is_truthy(sql:find('INNER JOIN', 1, true),
-        'BUG B7: 正向 FK 仍走 INNER JOIN; sql=' .. sql)
-      assert.is_falsy(sql:find('LEFT JOIN', 1, true),
-        'BUG B7: 聚合上下文里正向 FK 应改 LEFT JOIN，但当前没有; sql=' .. sql)
+      assert.is_truthy(sql:find('LEFT JOIN', 1, true),
+        'BUG B7: 聚合上下文里正向 FK 应使用 LEFT JOIN; sql=' .. sql)
+      assert.is_falsy(sql:find('INNER JOIN', 1, true),
+        'BUG B7: 聚合上下文里不应再出现 INNER JOIN; sql=' .. sql)
     end)
 
     -------------------------------------------------------------------

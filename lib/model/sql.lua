@@ -705,19 +705,35 @@ function Sql:_base_where_in(cols, range)
   return self
 end
 
+---@private
+---@param caller string function name used in error messages (e.g. "where_in")
+---@param sql_op string SQL op name used in error messages (e.g. "IN")
+---@param cols string|string[]
+---@return string|string[] parsed_cols
+function Sql:_parse_in_cols(caller, sql_op, cols)
+  local function parse(raw, idx)
+    local col, op = self:_parse_column(raw)
+    assert(op == 'eq', format(
+      "%s: column%s=%q carries op '__%s' that conflicts with %s; "
+      .. "use where{['%s']=...} for non-%s comparisons",
+      caller, idx and ('[' .. idx .. ']') or '', raw, op, sql_op, raw, sql_op))
+    return col
+  end
+  if type(cols) == "string" then
+    return parse(cols)
+  end
+  local res = {}
+  for i = 1, #cols do
+    res[i] = parse(cols[i], i)
+  end
+  return res
+end
+
 ---@param cols string|string[]
 ---@param range Sql|table
 ---@return self
 function Sql:where_in(cols, range)
-  if type(cols) == "string" then
-    return Sql._base_where_in(self, self:_parse_column(cols), range)
-  else
-    local res = {}
-    for i = 1, #cols do
-      res[i] = self:_parse_column(cols[i])
-    end
-    return Sql._base_where_in(self, res, range)
-  end
+  return Sql._base_where_in(self, self:_parse_in_cols("where_in", "IN", cols), range)
 end
 
 ---@private
@@ -738,15 +754,7 @@ end
 ---@param range Sql|table
 ---@return self
 function Sql:where_not_in(cols, range)
-  if type(cols) == "string" then
-    return Sql._base_where_not_in(self, self:_parse_column(cols), range)
-  else
-    local res = {}
-    for i = 1, #cols do
-      res[i] = self:_parse_column(cols[i])
-    end
-    return Sql._base_where_not_in(self, res, range)
-  end
+  return Sql._base_where_not_in(self, self:_parse_in_cols("where_not_in", "NOT IN", cols), range)
 end
 
 ---@private
@@ -1631,7 +1639,13 @@ function Sql:_parse_column(key, context)
               local right_column = ctx[join_key][last_field.reference_column]
               return format("%s = %s", left_column, right_column)
             end
-            prefix = self:_handle_manual_join(self._join_type or "INNER", model, join_cond_cb, join_key)
+            local join_type
+            if context == 'aggregate' then
+              join_type = "LEFT"
+            else
+              join_type = self._join_type or "INNER"
+            end
+            prefix = self:_handle_manual_join(join_type, model, join_cond_cb, join_key)
           end
         end
       else
