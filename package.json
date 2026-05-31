@@ -7,6 +7,7 @@
     "rc": "yarn release && yarn push",
     "release": "opm upload && opm clean dist",
     "commit": "git add . && git commit -am ",
+    "g": "yarn commit ",
     "push": "yarn commit",
     "resty": "resty -I lib --main-conf 'env NODE_ENV;' --http-conf 'lua_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;'",
     "postpush": "while true; do git push origin master && { echo 'Git push succeeded'; break; } || echo 'Git push failed, retrying in 1 seconds'; sleep 1; done",

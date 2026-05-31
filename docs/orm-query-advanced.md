@@ -116,6 +116,19 @@ Entry:select_related_labels():exec()
 Entry:select_related_labels { 'blog_id' }:exec()
 ```
 
+> **⚠️ 陷阱：它不会 SELECT 模型自身字段。** `select_related_labels()` 内部只对每个外键调用 `select_related(fk, label_col)`，即只把「外键列 + 标签列」加入 SELECT。**模型自己的普通字段（name/address/status…）一个都不选**。
+>
+> ```lua
+> -- 错误：结果只有 blog_id 和 blog_id__name，丢失 name/headline 等自身字段
+> Entry:select_related_labels():get { id = 1 }
+>
+> -- 正确：补 :select(Model.field_names) 拉全自身字段
+> Entry:select_related_labels():select(Entry.field_names):get { id = 1 }
+> ```
+>
+> 例外：只需少数列的场景，故意写 `:select_related_labels():select('id','name')` 限定列，不是 bug。
+> classview 的默认列表查询走 `get_base_sql`，依赖前端传 `query.select` 决定自身列；自定义 handler 里直接调用时务必自己补 `:select(...)`。
+
 ---
 
 ## 聚合与注解
