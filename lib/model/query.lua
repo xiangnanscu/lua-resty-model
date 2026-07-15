@@ -4,6 +4,7 @@ local type          = type
 local table_concat  = table.concat
 local string_format = string.format
 local ngx           = ngx
+local traceback     = debug.traceback
 
 ---@class QueryOpts
 ---@field DATABASE? string
@@ -129,7 +130,11 @@ function ConnProxy:release()
     ok, err = self:disconnect()
   end
   if not ok then
-    ngx.log(ngx.ERR, err)
+    if ngx then
+      ngx.log(ngx.ERR, err)
+    else
+      io.stderr:write(tostring(err), "\n")
+    end
   end
   return ok, err
 end
@@ -209,8 +214,20 @@ local function Query(options)
     return ConnProxy:new { conn = conn, options = connect_table, debug = debug_func }
   end
 
+  -- 当前事务连接的 ambient 存储：按运行协程隔离，而非 ngx.ctx。
+  -- 1) 脱 ngx：纯 LuaJIT / resty-cli / 脚本里 coroutine.running() 是标准 Lua，照常工作；
+  -- 2) 隔离更准：每个 ngx.thread.spawn 轻线程是独立协程 → 独立 key → 独立连接，
+  --    杜绝多轻线程共用同一 pgmoon socket 并发发查询导致的线协议错乱。
+  -- 弱键：协程被回收后条目自动消失，不泄漏。
+  local txn_conns = setmetatable({}, { __mode = "k" })
+  local MAIN = {} -- 无协程的纯主线程（如 init/脚本顶层）的哨兵 key
+
+  local function txn_key()
+    return coroutine.running() or MAIN
+  end
+
   local function get_conn()
-    local conn = ngx and ngx.ctx._transaction_conn
+    local conn = txn_conns[txn_key()]
     if conn then
       return conn, true
     end
@@ -238,25 +255,41 @@ local function Query(options)
   end
 
 
+  -- 错误通道统一为「抛错」：失败一律 error 重抛，交给 app.lua 唯一的错误分类器
+  -- （field_error→422 / error{"msg"}→512 / 其它→500+ErrorLog）。绝不在此降级成
+  -- return nil,err——那样会丢失 512 分类、traceback 与 ErrorLog 日志，使 atomic=true
+  -- 悄悄改变错误码。成功时才返回 callback 的多值结果。
   local function transaction(callback)
-    if ngx and ngx.ctx._transaction_conn then
-      return nil, "transaction already started"
+    local key = txn_key()
+    if txn_conns[key] then
+      -- 嵌套 atomic 是调用方 bug，抛错让上层记 ErrorLog（500），别静默返回
+      error("transaction already started")
     end
     local conn = make_conn()
-    conn:begin()
-    if ngx then
-      ngx.ctx._transaction_conn = conn
+    -- BEGIN 失败也要释放连接，否则泄漏（不进池、不关闭）
+    local began, begin_err = pcall(conn.begin, conn)
+    if not began then
+      conn:release()
+      error(begin_err, 0)
     end
-    local ok, cb_res, cb_err, cb_status = pcall(callback, conn)
-    if ngx then
-      ngx.ctx._transaction_conn = nil
-    end
+    txn_conns[key] = conn
+    -- 用 xpcall+traceback 捕获，保留 callback 内真实崩溃栈（与非 atomic 路径一致）
+    local ok, cb_res, cb_err, cb_status = xpcall(callback, traceback, conn)
+    txn_conns[key] = nil
     if not ok then
-      conn:rollback()
-      return nil, cb_res
+      -- 回滚可能因网络中断再次抛错；pcall 兜住，保证 release 必然执行一次，
+      -- 且回滚的二次错误不掩盖 callback 根因 cb_res。
+      pcall(conn.rollback, conn)
+      conn:release()
+      error(cb_res, 0) -- 原样重抛（level 0，不加本文件位置），保持错误对象供上层分类
     end
-    conn:commit()
+    -- COMMIT 可能因网络中断或延迟约束（deferred constraint）抛错；
+    -- release 用 finally 语义放在判断之前，保证连接必然归还，避免 DB 故障下池耗尽。
+    local committed, commit_err = pcall(conn.commit, conn)
     conn:release()
+    if not committed then
+      error(commit_err, 0)
+    end
     return cb_res, cb_err, cb_status
   end
 

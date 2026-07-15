@@ -72,6 +72,8 @@ local Store = Model {
 { "username", maxlength = 20 }
 ```
 
+> **保留字段名陷阱**：字段名不能与模型类自身属性冲突，否则建模即报 `field name 'xxx' conflicts with model class attributes`。典型如 `label`（模型自带 `label` 元属性）、`name`、`fields`、`table_name` 等。需要"标签/名称"语义时改用 `code`、`title`、`seat_no` 等替代名。
+
 ### 通用字段选项
 
 | 选项          | 类型         | 默认值   | 说明                           |

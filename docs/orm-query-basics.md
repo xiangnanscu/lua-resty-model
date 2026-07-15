@@ -114,6 +114,12 @@ local rows = Blog:values('id', 'name')
 -- 纯 table，不经过 model 的 load()/create_record()
 ```
 
+> ⚠️ **alioss 字段 + raw 查询的坑**：`alioss`/`alioss_image` 存的是协议相对 URL（`//host/key`），
+> 绝对化（补 `https:`）发生在 `AliossField:load`。`execr()`/`values()`/`raw():exec()` 跳过 load，
+> 返回的仍是 `//host/key`。浏览器能按当前页 scheme 解析，但**微信小程序 `<video>`/`<image>`
+> 不支持 `//` 开头的 URL**（表现：黑屏、时长 0、图片不显示）。给小程序用的接口要么用 `exec()`，
+> 要么手动 `Model.fields.x:load(value)` 补回绝对 URL。
+
 ### Sql:values_list(fields, opts?)
 
 返回**元组数组**（每行是个数组）。`opts.flat = true` 时对单列结果展平为一维数组。
@@ -770,9 +776,9 @@ Blog:upsert(
 
 ### Sql:merge(rows, key?, columns?)
 
-**签名:** `Sql:merge(rows: Record[], key?: Keys, columns?: string[]) -> self`
+**签名:** `Sql:merge(rows: Record[]|Sql, key?: Keys, columns?: string[]) -> self`
 
-使用 CTE 实现的 merge 操作：先更新已有行，再插入新行。比 upsert 更安全（避免某些并发问题）。
+使用 CTE 实现的 merge 操作：先更新已有行，再插入新行。比 upsert 更安全（避免某些并发问题），且**不要求目标列上存在数据库唯一约束**（手动 join 匹配）。
 
 ```lua
 Blog:merge {
@@ -786,7 +792,19 @@ Blog:merge {
 -- INSERT INTO blog AS T (tagline, name)
 -- SELECT V.tagline, V.name FROM V LEFT JOIN U AS W ON (V.name = W.name)
 -- WHERE W.name IS NULL
+
+-- 子查询作为数据源（与 upsert/updates 一致；columns 自动从子查询的 select/returning 提取）
+Blog:merge(
+  BlogBin:select{ 'name', 'tagline' }:where{ name__contains = 'sync' }, 'name'
+):exec()
+-- WITH V(name, tagline) AS (SELECT ...), U AS (UPDATE ... RETURNING ...)
+-- INSERT INTO blog ... SELECT ... FROM V LEFT JOIN U ... WHERE ... IS NULL
 ```
+
+**校验语义（重要）：** merge 同时承担插入与更新，整批行统一按 `validate_create` 校验（只校验你**实际传入的列**，未传的列不报必填）。因此它偏 **insert 语义**：
+
+- 传入列里若是空值（`''`/`nil`）且该列有默认值，会被回填为模型默认值——即使该行命中的是"更新已存在行"分支，也会用默认值覆盖旧值。
+- 若需**精确更新已存在行**（保留空值、不触发默认值、不做插入），请改用 `updates`。
 
 ---
 
@@ -796,7 +814,7 @@ Blog:merge {
 
 **签名:** `Sql:updates(rows: Record[]|Sql, key?: Keys, columns?: string[]) -> self`
 
-通过 CTE VALUES 实现批量更新：
+通过 CTE VALUES 实现批量更新（仅更新已存在行，不插入）：
 
 ```lua
 Blog:updates {
@@ -804,13 +822,19 @@ Blog:updates {
   { name = 'Blog 2', tagline = 'Updated 2' },
 }:exec()
 -- WITH V(tagline, name) AS (VALUES ...)
--- UPDATE blog T SET tagline = V.tagline FROM V WHERE V.name = T.name
+-- UPDATE blog T SET tagline = V.tagline, utime = CURRENT_TIMESTAMP FROM V WHERE V.name = T.name
 
 -- 子查询作为数据源
 Blog:updates(
   BlogBin:select{'name', 'tagline'}:where{name__contains='sync'}
 ):exec()
 ```
+
+**与 merge 不同的更新语义：**
+
+- **自动刷新 `auto_now`**：与单行 `update` 一致，批量更新也会把 `auto_now` 列置为 `CURRENT_TIMESTAMP`（无需传入该列）。
+- **空值不回填默认值**：传入 `''`/`nil` 时保留校验后的空值（非 unique → `''`，unique → `NULL`），**不会**用模型默认值覆盖旧值。
+- **默认匹配键优先主键**：不显式传 `key` 时，默认用主键作匹配键；只有无主键的模型才回退到唯一字段。避免误用 payload 中的唯一列（其值是新值，会匹配不到旧行）。如需按非主键列匹配，显式传 `key`。
 
 ---
 

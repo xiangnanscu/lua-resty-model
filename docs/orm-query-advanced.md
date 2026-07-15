@@ -32,6 +32,21 @@ ViewLog:where { entry_id__blog_id__name = 'My Blog' }:exec()
 -- WHERE T1.name = 'My Blog'
 ```
 
+> **⚠️ 陷阱：可空外键选 label 会静默丢行。** `外键名__关联字段` 默认 **INNER JOIN**。若该外键列为 NULL（`null = true` 的可空外键），对应行会被 INNER JOIN 整行剔除，结果里直接消失，不报错。
+>
+> ```lua
+> -- Entry.reposted_blog_id 非转发文章时为 NULL
+> -- 错误：所有非转发的 Entry 都被 INNER JOIN 丢弃 → 结果残缺
+> Entry:select { "headline", "reposted_blog_id__name" }
+>   :where { number_of_comments__gt = 0 }:exec()
+>
+> -- 正确：join_type("LEFT") 让可空外键 JOIN 变 LEFT，保留 NULL 行
+> Entry:join_type("LEFT"):select { "headline", "reposted_blog_id__name" }
+>   :where { number_of_comments__gt = 0 }:exec()
+> ```
+>
+> 凡是 select/where 里出现可空外键的 `fk__label`，都要 `join_type("LEFT")`（或 `select_related_labels`，其本身就是 LEFT）。
+
 ### 同模型多外键
 
 当一个模型有多个外键指向同一模型时，用外键名作为前缀区分：

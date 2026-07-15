@@ -404,8 +404,8 @@ end
 ---@param columns string[]
 ---@param no_check? boolean
 ---@return string[]
-function Sql:_get_cte_values_literal(rows, columns, no_check)
-  rows = self:_rows_to_array(rows, columns)
+function Sql:_get_cte_values_literal(rows, columns, no_check, is_update)
+  rows = self:_rows_to_array(rows, columns, is_update)
   ---@type string[]
   local res = { self:_array_to_values(rows[1], columns, no_check, true) }
   for i = 2, #rows do
@@ -482,13 +482,19 @@ end
 --   W.name IS NULL
 --```
 ---@private
----@param rows Record[]
+---@param rows Record[]|Sql
 ---@param key Keys
 ---@param columns string[]
 ---@return self
 function Sql:_base_merge(rows, key, columns)
   local cte_name = format("V(%s)", concat(columns, ", "))
-  local cte_values = format("(VALUES %s)", as_token(self:_get_cte_values_literal(rows, columns)))
+  -- V 既可来自 VALUES 字面量，也可来自子查询；后续 U、INSERT 只引用 V.col，与来源无关
+  local cte_values
+  if rows.__SQL_BUILDER__ then
+    cte_values = rows
+  else
+    cte_values = format("(VALUES %s)", as_token(self:_get_cte_values_literal(rows, columns)))
+  end
   local join_cond = self:_get_join_condition_from_key(key, "V", "W")
   local vals_columns = map(columns, _prefix_with_V)
   -- as _check_upsert_key_error requires all keys are non-empty,
@@ -575,7 +581,7 @@ function Sql:_base_updates(rows, key, columns)
     error("empty rows passed to updates")
   else
     ---@cast rows Record[]
-    rows = self:_get_cte_values_literal(rows, columns)
+    rows = self:_get_cte_values_literal(rows, columns, nil, true)
     local cte_name = format("V(%s)", concat(columns, ", "))
     local cte_values = format("(VALUES %s)", as_token(rows))
     local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
@@ -847,7 +853,7 @@ end
 ---@param rows Record[]
 ---@param columns string[]
 ---@return DBValue[][]
-function Sql:_rows_to_array(rows, columns)
+function Sql:_rows_to_array(rows, columns, is_update)
   local c = #columns
   local n = #rows
   local res = table_new(n, 0)
@@ -860,6 +866,9 @@ function Sql:_rows_to_array(rows, columns)
       local v = rows[j][col]
       if not is_empty_value(v) then
         res[j][i] = v
+      elseif is_update then
+        -- 批量更新：保留校验后的空值（'' 或 NULL），不回填模型默认值，避免覆盖已存在行
+        res[j][i] = v == nil and NULL or v
       elseif fields[col] then
         local default = fields[col].default
         if default ~= nil then
@@ -926,22 +935,24 @@ end
 ---@return string
 function Sql:_get_update_token_with_prefix(columns, key, prefix)
   local tokens = {}
+  local auto_now = self.model.auto_now_name
+  local key_set = {}
   if type(key) == "string" then
-    for i, col in ipairs(columns) do
-      if col ~= key then
-        insert(tokens, format("%s = %s.%s", col, prefix, col))
-      end
-    end
+    key_set[key] = true
   else
-    local sets = {}
-    for i, k in ipairs(key) do
-      sets[k] = true
+    for _, k in ipairs(key) do
+      key_set[k] = true
     end
-    for i, col in ipairs(columns) do
-      if not sets[col] then
-        insert(tokens, format("%s = %s.%s", col, prefix, col))
-      end
+  end
+  for _, col in ipairs(columns) do
+    -- key 列不更新；auto_now 列统一在下方置 CURRENT_TIMESTAMP，跳过避免重复赋值
+    if not key_set[col] and col ~= auto_now then
+      insert(tokens, format("%s = %s.%s", col, prefix, col))
     end
+  end
+  -- 与单行 update 对齐：批量更新也刷新 auto_now 时间戳
+  if auto_now then
+    insert(tokens, format("%s = CURRENT_TIMESTAMP", auto_now))
   end
   return concat(tokens, ", ")
 end
@@ -1417,7 +1428,11 @@ end
 ---@private
 ---@param columns? string[]
 ---@return Keys
-function Sql:_get_bulk_key(columns)
+function Sql:_get_bulk_key(columns, is_update)
+  -- 批量更新优先用主键：唯一字段在 payload 里是新值，拿它当匹配键会匹配不到旧行
+  if is_update and self.model.primary_key then
+    return self.model.primary_key
+  end
   if self.model.unique_together and self.model.unique_together[1] then
     return clone(self.model.unique_together[1])
   end
@@ -1453,7 +1468,7 @@ function Sql:_clean_bulk_params(rows, key, columns, is_update)
   if key == nil then
     -- is_update is true when updates, means searching key among columns extracted from rows
     -- so to ensure primary key is the fallback key (not unique field)
-    key = self:_get_bulk_key(is_update and columns or nil)
+    key = self:_get_bulk_key(is_update and columns or nil, is_update)
   end
   if type(key) == 'string' then
     assert(self.model.fields[key], "invalid key for bulk operation: " .. key)
@@ -2789,17 +2804,32 @@ function Sql:update(row, columns)
   return self
 end
 
----@param rows Record[] rows to be merged into the table
+---@param rows Record[]|Sql rows or SELECT subquery to be merged into the table
 ---@param key? Keys key(s) to determine whether the row exists, when key is a column table, every column can't be empty
 ---@param columns? string[] columns to be inserted or updated, if not provided, attributes of the first row will be used
 ---@return self
 function Sql:merge(rows, key, columns)
-  rows, key, columns = self:_clean_bulk_params(rows, key, columns)
-  if not self._skip_validate then
-    rows = self.model:_validate_create_rows(rows, key, columns)
+  if rows.__SQL_BUILDER__ then
+    if columns == nil then
+      local select_text = rows._select or rows._returning
+      if select_text then
+        columns = extract_column_names(select_text)
+      else
+        error("subquery must have select or returning clause")
+      end
+    end
+    if key == nil then
+      key = self:_get_bulk_key(columns)
+    end
+    return Sql._base_merge(self, rows, key, columns)
+  else
+    rows, key, columns = self:_clean_bulk_params(rows, key, columns)
+    if not self._skip_validate then
+      rows = self.model:_validate_create_rows(rows, key, columns)
+    end
+    rows = self.model:_prepare_db_rows(rows, columns)
+    return Sql._base_merge(self, rows, key, columns)
   end
-  rows = self.model:_prepare_db_rows(rows, columns)
-  return Sql._base_merge(self, rows, key, columns)
 end
 
 --PostgreSQL: INSERT ON CONFLICT DO UPDATE
@@ -2846,7 +2876,7 @@ function Sql:updates(rows, key, columns)
       end
     end
     if key == nil then
-      key = self:_get_bulk_key(columns)
+      key = self:_get_bulk_key(columns, true)
     end
     return Sql._base_updates(self, rows, key, columns)
   else
