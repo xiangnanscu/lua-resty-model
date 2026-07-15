@@ -83,23 +83,31 @@ local function map(tbl, func)
   return res
 end
 
+---collect column names from a row or an array of rows, appending (deduped)
+---to the optional seed `columns`
 ---@param rows Records
 ---@param columns? string[]
 ---@return string[]
 local function get_keys(rows, columns)
   columns = columns or {}
-  if rows[1] then
-    local res = {}
-    for _, row in ipairs(rows) do
-      for k, _ in pairs(row) do
-        res[k] = true
+  local seen = {}
+  for _, col in ipairs(columns) do
+    seen[col] = true
+  end
+  local function collect(row)
+    for k, _ in pairs(row) do
+      if not seen[k] then
+        seen[k] = true
+        columns[#columns + 1] = k
       end
     end
-    return get_keys(res)
-  else
-    for k, _ in pairs(rows) do
-      insert(columns, k)
+  end
+  if rows[1] then
+    for _, row in ipairs(rows) do
+      collect(row)
     end
+  else
+    collect(rows)
   end
   return columns
 end
@@ -140,13 +148,13 @@ local function split_string(s, pattern)
   local start = 1
 
   while true do
-    local pos = s:find(pattern, start, true)
+    local pos, pend = s:find(pattern, start, true)
     if not pos then
       insert(parts, s:sub(start))
       break
     end
     insert(parts, s:sub(start, pos - 1))
-    start = pos + 2
+    start = pend + 1
   end
 
   return parts

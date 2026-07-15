@@ -56,8 +56,9 @@ end
 ---@param sep? string
 ---@return Array
 local function split(s, sep)
+  -- 空 sep 会让 find("", i, true) 返回 (i, i-1)，i 永不前进 → 死循环
+  assert(sep ~= nil and sep ~= "", "split: sep can't be nil or empty")
   local res = {}
-  sep = sep or ""
   local i = 1
   local a, b
   while true do
@@ -722,7 +723,7 @@ end
 local function get_max_choice_length(choices)
   local n = 0
   for _, c in ipairs(choices) do
-    local value = c.value
+    local value = tostring(c.value)
     local n1 = utf8len(value)
     if n1 > n then
       n = n1
@@ -1313,11 +1314,12 @@ function ForeignkeyField:setup_with_fk_model(fk_model)
 end
 
 function ForeignkeyField:get_validators(validators)
-  local fk_name = self.reference_column
   local function foreignkey_validator(v)
     local err
     if type(v) == "table" then
-      v = v[fk_name]
+      -- 动态读 reference_column：reference='self' 时它在本闭包创建之后
+      -- 才由 resolve_foreignkey_self 填充，捕获成局部变量会拿到 nil
+      v = v[self.reference_column]
     end
     v, err = self.convert(v)
     if err then
@@ -1435,6 +1437,9 @@ end
 function JsonField:prepare_for_db(value)
   if value == "" or value == nil then
     return NULL
+  elseif type(value) == 'function' then
+    -- F 表达式/raw token 已经是 SQL 文本生成器，不能当 JSON 数据编码
+    return value
   else
     return Validator.encode(value)
   end

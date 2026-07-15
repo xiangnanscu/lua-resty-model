@@ -8,6 +8,13 @@ if ngx then
   match = ngx.re.match
   gsub = ngx.re.gsub
 else
+  -- 非 OpenResty 环境没有 ngx.re，与其留 nil 让调用点报
+  -- "attempt to call a nil value"，不如给出明确错误
+  local function require_ngx()
+    error("model.validator requires OpenResty (ngx.re.match/ngx.re.gsub not available)", 2)
+  end
+  match = require_ngx
+  gsub = require_ngx
 end
 local math_floor = math.floor
 local tonumber = tonumber
@@ -289,15 +296,20 @@ local function time(v)
   local m, err = match(v, [[^(\d\d?):(\d\d?):(\d\d?)$]], "josui")
   if m then
     local hour = tonumber(m[1])
-    if hour > 24 or hour < 0 then
+    local minute = tonumber(m[2])
+    local second = tonumber(m[3])
+    if hour == 24 then
+      -- PostgreSQL 允许的特殊值 24:00:00
+      if minute ~= 0 or second ~= 0 then
+        return nil, "小时为24时只能是24:00:00"
+      end
+    elseif hour > 23 then
       return nil, "小时数字" .. m[1] .. "错误"
     end
-    local minute = tonumber(m[2])
-    if minute > 60 or minute < 0 then
+    if minute > 59 then
       return nil, "分钟数字" .. m[2] .. "错误"
     end
-    local second = tonumber(m[3])
-    if second > 60 or second < 0 then
+    if second > 59 then
       return nil, "秒数字" .. m[3] .. "错误"
     end
     return v
@@ -310,8 +322,8 @@ end
 
 local function datetime(v)
   local err
-  -- 为了兼容"2023-09-24T13:41:52+08:00"
-  v, err = match(tostring(v), [[^(\d{4})([^\d])(\d\d?)(\2)(\d\d?)[ T](\d\d?):(\d\d?):(\d\d?)(\+\d\d?(:\d\d)?)?$]],
+  -- 为了兼容"2023-09-24T13:41:52+08:00"，时区偏移允许正负
+  v, err = match(tostring(v), [[^(\d{4})([^\d])(\d\d?)(\2)(\d\d?)[ T](\d\d?):(\d\d?):(\d\d?)([+-]\d\d?(:\d\d)?)?$]],
     "josui")
   if v then
     local valid, msg = valid_date(tonumber(v[1]), tonumber(v[3]), tonumber(v[5]))
@@ -319,15 +331,19 @@ local function datetime(v)
       return nil, msg
     end
     local hour = tonumber(v[6])
-    if hour > 24 or hour < 0 then
+    local minute = tonumber(v[7])
+    local second = tonumber(v[8])
+    if hour == 24 then
+      if minute ~= 0 or second ~= 0 then
+        return nil, "小时为24时只能是24:00:00"
+      end
+    elseif hour > 23 then
       return nil, "小时数字" .. v[6] .. "错误"
     end
-    local minute = tonumber(v[7])
-    if minute > 60 or minute < 0 then
+    if minute > 59 then
       return nil, "分钟数字" .. v[7] .. "错误"
     end
-    local second = tonumber(v[8])
-    if second > 60 or second < 0 then
+    if second > 59 then
       return nil, "秒数字" .. v[8] .. "错误"
     end
     return string_format("%s-%s-%s %s:%s:%s", v[1], v[3], v[5], v[6], v[7], v[8])
@@ -398,7 +414,7 @@ end
 
 local function id_card(v)
   if utf8len(v) ~= 18 then
-    return nil, string_format("身份证号必须为18位，当前%s位", #v)
+    return nil, string_format("身份证号必须为18位，当前%s位", utf8len(v))
   end
   if not match(v, [[^\d{17}[\dX]$]], "josui") then
     return nil, "身份证号前17位必须为数字，第18位必须为数字或大写字母X"

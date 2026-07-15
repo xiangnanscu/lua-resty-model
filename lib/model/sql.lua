@@ -99,8 +99,10 @@ local EXPR_OPERATORS = {
     return format("%s::date = %s", key, as_literal(value))
   end,
   year = function(key, value)
-    local y = tostring(value):gsub("'", "''")
-    return format("%s BETWEEN '%s-01-01' AND '%s-12-31'", key, y, y)
+    -- 半开区间 [y-01-01, y+1-01-01)：BETWEEN '..-12-31' 对 timestamp 列
+    -- 会漏掉 12-31 当天 00:00 之后的数据（Django 同款处理）
+    local y = assert(tonumber(value), "year lookup requires an integer year, got: " .. tostring(value))
+    return format("(%s >= '%d-01-01' AND %s < '%d-01-01')", key, y, key, y + 1)
   end,
   month = function(key, value)
     return format("EXTRACT('month' FROM %s) = %s", key, as_literal(value))
@@ -1460,7 +1462,9 @@ function Sql:_clean_bulk_params(rows, key, columns, is_update)
     rows = { rows }
   end
   if columns == nil then
-    columns = get_keys(rows, is_update and { self.model.auto_now_name } or {})
+    -- auto_now 列无须掺入 columns：_get_update_token_with_prefix 总会
+    -- 追加 `utime = CURRENT_TIMESTAMP`，掺入只会给 CTE 添一列 NULL
+    columns = get_keys(rows)
     if #columns == 0 then
       error("no columns provided for bulk")
     end
@@ -2186,7 +2190,11 @@ end
 function Sql:copy()
   local copy_sql = {}
   for key, value in pairs(self) do
-    if type(value) == 'table' then
+    if key == 'model' then
+      -- model 是共享的类引用：clone 会丢元表和身份，
+      -- 破坏 fk.reference == self.model 这类比较（如 where_recursive）
+      copy_sql[key] = value
+    elseif type(value) == 'table' then
       copy_sql[key] = clone(value)
     else
       copy_sql[key] = value
@@ -3005,11 +3013,20 @@ end
 ---@param dval? DBValue
 ---@return integer
 function Sql:count(cond, op, dval)
-  local res
   if cond ~= nil then
-    res = self:_base_select("count(*)"):where(cond, op, dval):compact():exec()
+    self:where(cond, op, dval)
+  end
+  local res
+  if self._group or self._having or self._distinct or self._distinct_on or self._limit or self._offset then
+    -- 分组/去重/分页后的行数 = 包一层子查询再 COUNT（Django 同款处理）
+    local statement = format("SELECT count(*) FROM (%s) __count__", self:statement())
+    res = self.model.query(statement, true)
   else
-    res = self:_base_select("count(*)"):compact():exec()
+    -- 直接覆盖 select/order：COUNT 与已有普通列或 ORDER BY 共存会报
+    -- "column must appear in the GROUP BY clause"
+    self._select = "count(*)"
+    self._order = nil
+    res = self:compact():exec()
   end
   if res and res[1] then
     return res[1][1]

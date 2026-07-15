@@ -194,10 +194,9 @@ end
 --   return self:query("RELEASE SAVEPOINT " .. name)
 -- end
 
----@param options? QueryOpts
-local function Query(options)
-  options = options or {}
-  local connect_table = get_connect_table(options)
+---@param options QueryOpts
+---@param connect_table ConnOpts
+local function create_query(options, connect_table)
   local connect_timeout = connect_table.connect_timeout
   local debug_func = options.DEBUG or print
   -- local max_idle_timeout = connect_table.max_idle_timeout
@@ -245,11 +244,17 @@ local function Query(options)
     -- https://github.com/xiangnanscu/pgmoon/blob/master/pgmoon/init.lua#L545
     -- nil,  err_msg, result, num_queries, notifications, notices
     -- result, num_queries, notifications, notices
-    -- loger(connect_table)
     local conn, is_transaction = get_conn()
-    local result, num_queries, notifications, notices = conn:query(statement, compact)
-    if not is_transaction then
-      conn:release()
+    if is_transaction then
+      -- 事务连接的生命周期由 transaction() 负责，出错直接上抛
+      return conn:query(statement, compact)
+    end
+    -- 非事务连接必须先归还再抛错：ConnProxy:query 失败时 error()，
+    -- 若不 pcall，出错的连接既不进池也不关闭，连接池被慢性掏空
+    local ok, result, num_queries, notifications, notices = pcall(conn.query, conn, statement, compact)
+    conn:release()
+    if not ok then
+      error(result, 0)
     end
     return result, num_queries, notifications, notices
   end
@@ -302,6 +307,27 @@ local function Query(options)
       return send_query(...)
     end
   })
+end
+
+-- 按 pool_name（host:port:database:user）缓存 Query 实例：
+-- 同一连接配置的所有 model 共享同一份 txn_conns，保证 A:transaction 的
+-- callback 内经由 B model 发出的查询进入同一事务连接——否则每个 model
+-- 各持一个 Query 实例，跨 model 写入会拿新连接自动提交，逃逸事务回滚。
+-- 注意：同 pool_name 下 pool_size/timeout/DEBUG 等以首个实例为准，
+-- 与 pgmoon 连接池按 pool_name 复用 socket 的语义一致。
+local query_cache = {}
+
+---@param options? QueryOpts
+local function Query(options)
+  options = options or {}
+  local connect_table = get_connect_table(options)
+  local cached = query_cache[connect_table.pool_name]
+  if cached then
+    return cached
+  end
+  local q = create_query(options, connect_table)
+  query_cache[connect_table.pool_name] = q
+  return q
 end
 
 return Query

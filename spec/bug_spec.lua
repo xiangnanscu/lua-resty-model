@@ -255,6 +255,135 @@ local function main()
         "eq 仍走 -> + =; sql=" .. sql3)
     end)
   end)
+
+  describe('REVIEW 2026-07-15 回归 (statement 级，无 DB)', function()
+    local Utils = require "model.utils"
+    local Validator = require "model.validator"
+    local Fields = require "model.fields"
+
+    -------------------------------------------------------------------
+    it('REVIEW-B3: __year 用半开区间而非 BETWEEN，timestamp 列不漏年末数据', function()
+      local RLog = Model:create_model {
+        table_name = 'review_log',
+        fields = { { 'ctime', type = 'datetime' } }
+      }
+      local sql = RLog:where { ctime__year = 2020 }:statement()
+      assert.is_truthy(sql:find(">= '2020-01-01'", 1, true),
+        'year 下界应为 >= ; sql=' .. sql)
+      assert.is_truthy(sql:find("< '2021-01-01'", 1, true),
+        'year 上界应为 < 次年一月一日; sql=' .. sql)
+      assert.is_falsy(sql:find('BETWEEN', 1, true),
+        "BETWEEN '..-12-31' 会漏掉 12-31 当天 00:00 之后的 timestamp; sql=" .. sql)
+    end)
+
+    -------------------------------------------------------------------
+    it('REVIEW-B4: 自引用 FK 传表值能取出 reference_column', function()
+      -- 修复前: validator 闭包在 setup_with_fk_model 之前捕获了
+      -- reference_column=nil，v[nil] → nil → 假校验错误
+      local RCategory = Model:create_model {
+        table_name = 'review_category',
+        fields = {
+          { 'name',      maxlength = 50 },
+          { 'parent_id', reference = 'self', null = true, related_query_name = 'children' },
+        }
+      }
+      local data = RCategory:validate_create({ name = 'x', parent_id = { id = 3 } }, { 'name', 'parent_id' })
+      assert.are.same(data.parent_id, 3)
+    end)
+
+    -------------------------------------------------------------------
+    it('REVIEW-B5: 两个 FK 指向同一 model 且都用默认 related_query_name 应报错', function()
+      -- 修复前: fk_model.reversed_fields 被静默覆盖，反向查询解析到错误的 FK
+      local Target = Model:create_model {
+        table_name = 'review_target',
+        fields = { { 'name', maxlength = 10 } }
+      }
+      local ok, err = pcall(function()
+        return Model:create_model {
+          table_name = 'review_dup_fk',
+          fields = {
+            { 'name', maxlength = 10 },
+            { 'a_id', reference = Target },
+            { 'b_id', reference = Target },
+          }
+        }
+      end)
+      assert.is_false(ok, 'B5: 默认 rqn 冲突应报错而非静默覆盖')
+      err = tostring(err)
+      assert.is_truthy(err:find('related_query_name', 1, true),
+        'B5: 错误应指明 related_query_name 冲突; err=' .. err)
+    end)
+
+    -------------------------------------------------------------------
+    it('REVIEW-B6: related_query_name 与被引用方实体字段同名应报错', function()
+      -- rqn 用在被引用方的反向查询里，与其实体字段同名时会被静默遮蔽
+      local Target2 = Model:create_model {
+        table_name = 'review_target2',
+        fields = { { 'thing', maxlength = 10 } }
+      }
+      local ok, err = pcall(function()
+        return Model:create_model {
+          table_name = 'review_fk2',
+          fields = {
+            { 'name', maxlength = 10 },
+            { 't_id', reference = Target2, related_query_name = 'thing' },
+          }
+        }
+      end)
+      assert.is_false(ok, 'B6: rqn 与被引用方字段同名应报错')
+      err = tostring(err)
+      assert.is_truthy(err:find('referenced model', 1, true),
+        'B6: 错误应指明冲突发生在被引用方; err=' .. err)
+    end)
+
+    -------------------------------------------------------------------
+    it('REVIEW-B8: time/datetime 边界与负时区', function()
+      -- 60 分/60 秒是非法值（PG 会拒绝），24 时只允许 24:00:00
+      assert.is_nil((Validator.time('13:60:00')))
+      assert.is_nil((Validator.time('13:00:60')))
+      assert.are.same(Validator.time('24:00:00'), '24:00:00')
+      assert.is_nil((Validator.time('24:00:01')))
+      assert.is_nil((Validator.datetime('2023-09-24 13:60:00')))
+      -- 负时区偏移应被接受（此前只认 +）
+      assert.are.same(Validator.datetime('2023-09-24T13:41:52-08:00'), '2023-09-24 13:41:52')
+      assert.are.same(Validator.datetime('2023-09-24T13:41:52+08:00'), '2023-09-24 13:41:52')
+    end)
+
+    -------------------------------------------------------------------
+    it('REVIEW-B9: copy() 不克隆 model，身份比较保持成立', function()
+      local q = Blog:where { name = 'x' }
+      local q2 = q:copy()
+      assert.is_true(q2.model == q.model,
+        'copy 后 model 应是同一引用，否则 fk.reference == self.model 等比较全部失效')
+    end)
+
+    -------------------------------------------------------------------
+    it('REVIEW-B10a: split_string 支持任意长度分隔符', function()
+      assert.are.same(Utils.split_string('a,b,c', ','), { 'a', 'b', 'c' })
+      assert.are.same(Utils.split_string('a, b, c', ', '), { 'a', 'b', 'c' })
+      assert.are.same(Utils.split_string('a::b::c', '::'), { 'a', 'b', 'c' })
+    end)
+
+    it('REVIEW-B10b: get_keys 的 columns 种子参与去重且不丢失', function()
+      local cols = Utils.get_keys({ { a = 1, b = 2 }, { c = 3 } }, { 'b' })
+      assert.are.same(cols[1], 'b', '种子列应保持在最前')
+      assert.are.same(#cols, 3, '不应重复收集种子列; cols=' .. table.concat(cols, ','))
+      local seen = {}
+      for _, c in ipairs(cols) do seen[c] = true end
+      assert.is_true(seen.a and seen.b and seen.c)
+    end)
+
+    it('REVIEW-B10c: 数字 choices 的 StringField 不再崩溃', function()
+      local f = Fields.string:create_field { name = 's', choices = { 1, 22, 333 } }
+      assert.are.same(f.maxlength, 3)
+    end)
+
+    it('REVIEW-B10d: F 表达式用于 json 字段不再被 cjson 编码', function()
+      local sql = Author:update { payload = Model.F('payload') }:statement()
+      assert.is_truthy(sql:find('payload = T.payload', 1, true),
+        'F(payload) 应展开为列引用而非 JSON 字面量; sql=' .. sql)
+    end)
+  end)
 end
 
 if is_running_with_busted() then

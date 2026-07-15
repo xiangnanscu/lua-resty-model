@@ -688,8 +688,19 @@ function Model:resolve_foreignkey_related()
       end
       -- reversed foreignkey field
       local rqn = field.related_query_name
-      assert(not self.fields[rqn],
-        format("model '%s'.'%s' related_query_name '%s' conflicts with field name", self.table_name, field.name, rqn))
+      -- rqn 用在被引用方的反向查询里（fk_model:where{rqn__x=...}）。
+      -- 冲突要查 fk_model 自己的字段：_parse_column 里实体字段优先于
+      -- reversed_fields，同名时反向查询会被静默遮蔽。
+      assert(not fk_model.fields[rqn],
+        format("model '%s'.'%s' related_query_name '%s' conflicts with a field of referenced model '%s'",
+          self.table_name, field.name, rqn, fk_model.table_name))
+      -- 同一目标 model 的多个 FK 都用默认 rqn（= self.table_name）时会互相
+      -- 覆盖，反向查询静默解析到最后注册的 FK；必须显式命名（Django E304/E305 同款）
+      local existing = fk_model.reversed_fields[rqn]
+      assert(existing == nil or existing == field,
+        format(
+          "related_query_name '%s' on model '%s' is already taken by field '%s'; set an explicit related_query_name for '%s'.'%s'",
+          rqn, fk_model.table_name, existing and existing.name or '?', self.table_name, field.name))
       fk_model.reversed_fields[rqn] = field
       -- { -- Blog / Poll
       --   is_reversed = true,
@@ -1288,8 +1299,11 @@ end
 ---@param columns string[]
 ---@return Records
 function Model:_validate_create_rows(rows, key, columns)
+  -- 先做数据校验：columns 里的非法字段名（invalid field name）比
+  -- key 缺失更根本，应当优先报出来
+  local cleaned = self:_validate_create_data(rows, columns)
   self:_check_upsert_key_error(rows, key)
-  return self:_validate_create_data(rows, columns)
+  return cleaned
 end
 
 ---@param rows Record|Record[]
@@ -1297,8 +1311,9 @@ end
 ---@param columns string[]
 ---@return Records
 function Model:_validate_update_rows(rows, key, columns)
+  local cleaned = self:_validate_update_data(rows, columns)
   self:_check_upsert_key_error(rows, key)
-  return self:_validate_update_data(rows, columns)
+  return cleaned
 end
 
 ---@param rows Record|Record[]

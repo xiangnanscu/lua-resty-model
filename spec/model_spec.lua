@@ -1967,6 +1967,23 @@ local function main()
       assert.is_truthy(Blog:where { name = 'atomic-1' }:get())
       Blog:delete { name = 'atomic-1' }:exec()
     end)
+
+    it("REVIEW-B1: 回滚覆盖事务内经其它 model 的写入", function()
+      -- 每个 model 各持一个 Query 实例时，BlogBin 的写入会拿新连接自动提交，
+      -- 逃逸 Blog:transaction 的回滚；修复后同连接配置共享 Query 实例
+      local before = BlogBin:count()
+      pcall(function()
+        Blog:transaction(function()
+          Blog:insert { name = 'tx-cross-a' }:exec()
+          BlogBin:insert { name = 'tx-cross-b', note = 'must rollback' }:exec()
+          error("boom")
+        end)
+      end)
+      assert.is_false(Blog:where { name = 'tx-cross-a' }:exists())
+      assert.are.same(BlogBin:count(), before)
+      -- 兜底清理（断言失败时不污染后续用例）
+      BlogBin:delete { name = 'tx-cross-b' }:exec()
+    end)
   end)
 
   -------------------------------------------------------------------
@@ -1980,6 +1997,26 @@ local function main()
     it("datetimes by hour", function()
       local hours = ViewLog:datetimes('ctime', 'hour')
       assert.is_true(#hours >= 2)
+    end)
+  end)
+
+  -------------------------------------------------------------------
+  describe("29b. count 回归 (REVIEW B2)", function()
+    it("select 之后 count 不再拼出非法 SQL", function()
+      assert.are.same(Blog:select('name'):count(), 2)
+    end)
+
+    it("order 之后 count 不再拼出非法 SQL", function()
+      assert.are.same(Blog:order('name'):count(), 2)
+    end)
+
+    it("group 之后 count 返回分组数", function()
+      local groups = Entry:group('blog_id'):exec()
+      assert.are.same(Entry:group('blog_id'):count(), #groups)
+    end)
+
+    it("limit 之后 count 返回截断后的行数", function()
+      assert.are.same(Entry:limit(2):count(), 2)
     end)
   end)
 
