@@ -4,9 +4,18 @@ local Fields = require "model.fields"
 local Func = require "model.func"
 local F = require "model.f"
 local Q = require "model.q"
-local Query = require "model.query"
 local Utils = require "model.utils"
 local Sql = require "model.sql"
+
+-- model.query 拉入 pgmoon 并读取 .env，惰性 require：
+-- 「纯粹生成 SQL」（定义 model + :statement()）不必背这个隐式依赖
+local Query
+local function get_query(options)
+  if Query == nil then
+    Query = require "model.query"
+  end
+  return Query(options)
+end
 
 
 local setmetatable = setmetatable
@@ -260,10 +269,21 @@ end
 ---@field name_to_label {[string]:string}
 ---@field label_to_name {[string]:string}
 ---@field reversed_fields {[string]:ForeignkeyField}
+-- 默认 Query 的惰性代理：require/建模/生成 SQL 阶段都不触碰 pgmoon 与 .env，
+-- 首次真正执行查询或事务时才构造（Query 内部按 pool_name memoize，同配置共享实例）
+local default_query = setmetatable({}, {
+  __call = function(_, ...)
+    return get_query({})(...)
+  end,
+  __index = function(_, k)
+    return get_query({})[k]
+  end,
+})
+
 local Model = {
   __SQL_BUILDER__ = true,
   smart_quote = smart_quote,
-  query = Query {},
+  query = default_query,
   auto_primary_key = true,
   DEFAULT_PRIMARY_KEY = DEFAULT_PRIMARY_KEY,
   NULL = NULL,
@@ -440,7 +460,7 @@ function Model:_make_model_class(opts)
   end
   local options = opts.db_config or self.db_config
   if options then
-    ModelClass.query = Query(options)
+    ModelClass.query = get_query(options)
   end
   ModelClass.__index = ModelClass
   local pk_defined = false

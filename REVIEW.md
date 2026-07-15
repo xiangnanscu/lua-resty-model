@@ -7,6 +7,18 @@
 
 > **修复状态（2026-07-15 同日）**：B1–B10 已全部修复并补回归测试（bug_spec `REVIEW-*` 系列 + model_spec `REVIEW-B1`/`29b`），全量 247/247 通过。B1 采用方案 1（Query 按 pool_name memoize），B6 改查被引用方字段。
 > 附带发现：基线并非 232 全过——「updates 抛错: 非法字段名」一条是**预先存在的失败**（首轮汇报时被输出截断漏看），根因是 `_validate_*_rows` 里 key 非空检查先于数据校验执行，非法字段名报不出来；已交换顺序修复。
+>
+> **第二轮处理（2026-07-16）**，全量 250/250 通过：
+> - §2.9 **已修**：`Model.query` 改惰性代理，`model.query`（含 pgmoon）与 `.env`/ALIOSS 环境读取全部惰性化——`require model` + 建模 + `:statement()` 零隐式依赖，首次真实查询才加载（探针验证 `package.loaded` 均为 false）。
+> - §3.3 **已修**：fields.lua 删除本地 `dict/list/map/split/utf8len/clone`，统一引 utils（`utf8len` 上移至 utils，`split_string` 增加空分隔符守卫）；validator.lua 的 `utf8len` 一并统一；`ngx.localtime`/`ngx.null` 加非 ngx 降级。
+> - §2.3 **已修**：空 `__in`/`__notin` 报错带列名（回归 `REVIEW-D3`）。
+> - §2.11 **已修**：`_resolve_Q` 递归透传 context，复合 Q 在 having 里保持 having 解析路径（回归 `REVIEW-D11`）。
+> - §2.10 **已修**：TableField **显式声明** `max_rows` 时校验行数；类默认 1 保持仅前端提示，不破坏既有行为（回归 `REVIEW-D10`）。
+> - §2.7 **文档化**：`standard_conforming_strings` PG 9.1+ 默认 on，逐连接 SET 不值一次往返——改为在 docs（where 原始字符串的安全警告旁）提示使用者勿改该服务器配置；`smart_quote` 转义标识符内部双引号保留。
+> - §2.1 **已修**：`exec/get/first/last/values/filter/in_bulk/get_or_create/...` 的 `@return` 注解由 `ModelInstance` 改为 `Record`（`raw(false)` 分支的 cast 保留），docs 的 raw 小节补默认语义与实例方法获取方式，`get_or_create` 补并发处方。
+> - §2.2/§2.6 docs 已有对应段落（copy 可变性、update_or_create 并发提醒），仅补 get_or_create 一处。
+> - §2.4（JSON 数组下标）、§2.5（get 的 0/2+ 行均返回 false）维持原设计，仅记录。
+> - §5.5 的 `get_keys` 递归丢参在第一轮 B10.2 已修（去重种子版，回归 `REVIEW-B10b`）。
 
 ---
 

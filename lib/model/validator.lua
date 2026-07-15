@@ -1,6 +1,8 @@
 local cjson_encode = require "cjson.safe".encode
 local cjson_decode = require "cjson.safe".decode
-local is_empty_value = require "model.utils".is_empty_value
+local Utils = require "model.utils"
+local is_empty_value = Utils.is_empty_value
+local utf8len = Utils.utf8len
 local ENCODE_AS_ARRAY = require "cjson".empty_array_mt
 
 local match, gsub
@@ -21,11 +23,6 @@ local tonumber = tonumber
 local tostring = tostring
 local type = type
 local string_format = string.format
-
-local function utf8len(s)
-  local _, cnt = s:gsub("[^\128-\193]", "")
-  return cnt
-end
 
 local function required(message)
   message = message or "此项必填"

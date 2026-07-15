@@ -1,9 +1,15 @@
-local clone = require "table.clone"
 local isarray = require("table.isarray")
 local Array = require "resty.array"
 local getenv = require("resty.dotenv").getenv
-local get_payload = require "resty.alioss".get_payload
+local Utils = require "model.utils"
 local Validator = require "model.validator"
+
+local clone = Utils.clone
+local dict = Utils.dict
+local list = Utils.list
+local map = Utils.map
+local split = Utils.split_string
+local utf8len = Utils.utf8len
 
 local string_format = string.format
 local table_concat = table.concat
@@ -12,66 +18,8 @@ local ipairs = ipairs
 local setmetatable = setmetatable
 local type = type
 local rawset = rawset
-local ngx_localtime = ngx.localtime
-
-
----@param a table
----@param b? table
----@return table
-local function dict(a, b)
-  local t = clone(a)
-  if b then
-    for k, v in pairs(b) do
-      t[k] = v
-    end
-  end
-  return t
-end
-
----@param a table
----@param b? table
----@return table
-local function list(a, b)
-  local t = clone(a)
-  if b then
-    for _, v in ipairs(b) do
-      t[#t + 1] = v
-    end
-  end
-  return t
-end
-
----@param tbl table
----@param func function
----@return Array
-local function map(tbl, func)
-  local res = Array()
-  for i = 1, #tbl do
-    res[i] = func(tbl[i])
-  end
-  return res
-end
-
----@param s string
----@param sep? string
----@return Array
-local function split(s, sep)
-  -- 空 sep 会让 find("", i, true) 返回 (i, i-1)，i 永不前进 → 死循环
-  assert(sep ~= nil and sep ~= "", "split: sep can't be nil or empty")
-  local res = {}
-  local i = 1
-  local a, b
-  while true do
-    a, b = s:find(sep, i, true)
-    if a then
-      local e = s:sub(i, a - 1)
-      i = b + 1
-      res[#res + 1] = e
-    else
-      res[#res + 1] = s:sub(i)
-      return res
-    end
-  end
+local ngx_localtime = ngx and ngx.localtime or function()
+  return os.date("%Y-%m-%d %H:%M:%S")
 end
 
 ---@alias AnyField
@@ -157,11 +105,6 @@ local function class(cls, parent)
   cls.__call = cls.__call or class__call
   cls.__index = cls
   return cls
-end
-
-local function utf8len(s)
-  local _, cnt = s:gsub("[^\128-\193]", "")
-  return cnt
 end
 
 local size_table = {
@@ -273,7 +216,7 @@ local VALID_FOREIGN_KEY_TYPES = {
   date = Validator.date,
   time = Validator.time
 }
-local NULL = ngx.null
+local NULL = Utils.NULL
 local FK_TYPE_NOT_DEFIEND = {}
 
 local PRIMITIVE_TYPES = {
@@ -1630,6 +1573,18 @@ function TableField:get_validators(validators)
   end
 
   table_insert(validators, 1, validate_by_each_field)
+  -- 只校验显式声明的 max_rows：类默认值 1 历来只是前端提示，
+  -- 后端强校验会破坏既有多行数据的行为
+  if rawget(self, 'max_rows') then
+    local max_rows = self.max_rows
+    local function max_rows_validator(rows)
+      if #rows > max_rows then
+        return nil, string_format("最多只能%s行，当前%s行", max_rows, #rows)
+      end
+      return rows
+    end
+    table_insert(validators, 1, max_rows_validator)
+  end
   return BaseArrayField.get_validators(self, validators)
 end
 
@@ -1660,9 +1615,16 @@ function TableField:load(rows)
   return Array(rows)
 end
 
-local ALIOSS_URL = getenv("ALIOSS_URL") or ""
-local ALIOSS_SIZE = getenv("ALIOSS_SIZE") or "1M"
-local ALIOSS_LIFETIME = tonumber(getenv("ALIOSS_LIFETIME") or 30) --[[@as integer]]
+-- 惰性读取 ALIOSS_* 配置：require 本模块不触发环境/.env 读取，
+-- 首次创建 Alioss 字段时才加载（纯生成 SQL 的用法不背这个依赖）
+local ALIOSS_URL, ALIOSS_SIZE, ALIOSS_LIFETIME
+local function load_alioss_env()
+  if ALIOSS_SIZE == nil then
+    ALIOSS_URL = getenv("ALIOSS_URL") or ""
+    ALIOSS_SIZE = getenv("ALIOSS_SIZE") or "1M"
+    ALIOSS_LIFETIME = tonumber(getenv("ALIOSS_LIFETIME") or 30) --[[@as integer]]
+  end
+end
 
 ---@class AliossField:StringField
 ---@field type "alioss"
@@ -1722,6 +1684,7 @@ end
 ---@param self AliossField|AliossListField
 ---@param options AliossPayloadArgs
 function AliossField.setup(self, options)
+  load_alioss_env()
   local size = options.size or ALIOSS_SIZE
   self.key_secret = options.key_secret
   self.key_id = options.key_id
@@ -1749,6 +1712,8 @@ end
 ---@param options AliossPayloadArgs
 ---@return AliossPayload
 function AliossField:get_payload(options)
+  -- 惰性 require：resty.alioss 只有真正生成上传凭证时才需要
+  local get_payload = require("resty.alioss").get_payload
   return get_payload(dict(self, options))
 end
 

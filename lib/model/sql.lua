@@ -63,9 +63,15 @@ local EXPR_OPERATORS = {
     return format("%s <> %s", key, as_literal(value))
   end,
   ['in'] = function(key, value)
+    if type(value) == 'table' and value[1] == nil and not value.__SQL_BUILDER__ then
+      error(format("empty table passed to __in lookup for column: %s", key))
+    end
     return format("%s IN %s", key, as_literal(value))
   end,
   notin = function(key, value)
+    if type(value) == 'table' and value[1] == nil and not value.__SQL_BUILDER__ then
+      error(format("empty table passed to __notin lookup for column: %s", key))
+    end
     return format("%s NOT IN %s", key, as_literal(value))
   end,
   contains = function(key, value)
@@ -1577,11 +1583,13 @@ end
 ---@param context? "where"|"having"
 ---@return string
 function Sql:_resolve_Q(q, context)
+  -- 递归必须透传 context：having(Q{...}*Q{...}) 的复合分支若掉回 where 解析，
+  -- FK 遍历会额外造 JOIN，与 having 别名解析路径产生分歧
   if q.logic == "NOT" then
-    return format("NOT (%s)", self:_resolve_Q(q.left))
+    return format("NOT (%s)", self:_resolve_Q(q.left, context))
   elseif q.left and q.right then
-    local left_token = self:_resolve_Q(q.left)
-    local right_token = self:_resolve_Q(q.right)
+    local left_token = self:_resolve_Q(q.left, context)
+    local right_token = self:_resolve_Q(q.right, context)
     return format("(%s) %s (%s)", left_token, q.logic, right_token)
   elseif context == nil or context == "where" then
     return self:_get_condition_token_from_table(q.cond, q.logic)
@@ -2174,7 +2182,7 @@ end
 ---@param rows Record[]
 ---@param key Keys
 ---@param columns? string[]
----@return self|ModelInstance[]
+---@return self|Record[]
 function Sql:merge_gets(rows, key, columns)
   columns = columns or get_keys(rows)
   rows = self.model:_prepare_db_rows(rows, columns)
@@ -2934,8 +2942,11 @@ function Sql:gets(keys, columns)
   return Sql._base_gets(self, keys, columns)
 end
 
+---注意：默认（_raw 未显式置 false）返回裸 Record（无 RecordClass 元表、
+---不做 field:load）；只有 raw(false) 才走 model:load / create_record，
+---返回真正的 ModelInstance
 ---@param statement string
----@return Array<ModelInstance>|Array<ModelInstance>[]
+---@return Array<Record>|Array<Record>[]
 ---@return number num_queries
 function Sql:exec_statement(statement)
   -- https://github.com/leafo/pgmoon/blob/cd42b4a12ceae969db3f38bb2757ae738e4b0e32/pgmoon/init.moon#L872
@@ -3002,7 +3013,8 @@ function Sql:exec_statement(statement)
   end
 end
 
----@return Array<ModelInstance>
+---默认返回裸 Record；raw(false) 时返回 ModelInstance（见 exec_statement）
+---@return Array<Record>
 ---@return number num_queries
 function Sql:exec()
   return self:exec_statement(self:statement())
@@ -3108,7 +3120,7 @@ function Sql:flat(col)
 end
 
 ---@param ... string field names to include
----@return Array<ModelInstance>
+---@return Array<Record>
 ---@return number num_queries
 function Sql:values(...)
   if select('#', ...) > 0 then
@@ -3210,7 +3222,7 @@ end
 ---@param cond? table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
----@return ModelInstance|false
+---@return Record|false
 function Sql:try_get(cond, op, dval)
   return self:get(cond, op, dval)
 end
@@ -3218,7 +3230,7 @@ end
 ---@param cond? table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
----@return ModelInstance|false
+---@return Record|false
 function Sql:get(cond, op, dval)
   local records
   if cond ~= nil then
@@ -3236,7 +3248,7 @@ function Sql:get(cond, op, dval)
   end
 end
 
----@return ModelInstance|nil
+---@return Record|nil
 function Sql:first()
   if not self._order then
     self:order(self.model.primary_key)
@@ -3245,7 +3257,7 @@ function Sql:first()
   return records[1]
 end
 
----@return ModelInstance|nil
+---@return Record|nil
 function Sql:last()
   if not self._order then
     self:order('-' .. self.model.primary_key)
@@ -3257,7 +3269,7 @@ function Sql:last()
 end
 
 ---@param ... string
----@return ModelInstance|nil
+---@return Record|nil
 function Sql:latest(...)
   local n = select('#', ...)
   if n == 0 then
@@ -3273,7 +3285,7 @@ function Sql:latest(...)
 end
 
 ---@param ... string
----@return ModelInstance|nil
+---@return Record|nil
 function Sql:earliest(...)
   local n = select('#', ...)
   if n == 0 then
@@ -3328,7 +3340,7 @@ end
 
 ---@param ids? table
 ---@param field_name? string
----@return table<any, ModelInstance>
+---@return table<any, Record>
 function Sql:in_bulk(ids, field_name)
   field_name = field_name or self.model.primary_key
   if ids and #ids > 0 then
@@ -3489,7 +3501,7 @@ end
 ---@param params table
 ---@param defaults? table
 ---@param columns? string[]
----@return ModelInstance, boolean
+---@return Record, boolean
 function Sql:get_or_create(params, defaults, columns)
   local values_list, insert_columns = Sql:_get_insert_values_token(dict(params, defaults))
   local insert_columns_token = as_token(insert_columns)
@@ -3522,7 +3534,7 @@ end
 ---@param params table lookup conditions
 ---@param defaults? table values to create/update with
 ---@param columns? string[] columns to return
----@return ModelInstance, boolean
+---@return Record, boolean
 function Sql:update_or_create(params, defaults, columns)
   defaults = defaults or {}
   local existing = self.model:create_sql():where(params):limit(2):exec()
@@ -3551,7 +3563,7 @@ function Sql:compact()
 end
 
 ---@param kwargs table
----@return Array<ModelInstance>
+---@return Array<Record>
 ---@return number num_queries
 function Sql:filter(kwargs)
   return self:where(kwargs):exec()

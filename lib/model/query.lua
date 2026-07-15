@@ -50,24 +50,33 @@ local traceback     = debug.traceback
 ---@field disconnect fun(self: PgmoonConn): boolean, string
 ---@field compact? boolean
 
-local ENV_CONFIG    = dotenv { ".env" }
+-- 惰性读取 .env：require 本模块不产生文件读取副作用，
+-- 首次构造连接配置/执行查询时才加载
+local ENV
+local function get_env()
+  if not ENV then
+    ENV = dotenv { ".env" }
+  end
+  return ENV
+end
 
 ---@param options QueryOpts
 ---@return ConnOpts
 local function get_connect_table(options)
+  local env = get_env()
   local res = {
-    host = options.HOST or ENV_CONFIG.PGHOST or "127.0.0.1",
-    port = options.PORT or tonumber(ENV_CONFIG.PGPORT) or 5432,
-    database = options.DATABASE or ENV_CONFIG.PGDATABASE or "postgres",
-    user = options.USER or ENV_CONFIG.PGUSER or "postgres",
-    password = options.PASSWORD or ENV_CONFIG.PGPASSWORD,
-    ssl = options.SSL or ENV_CONFIG.PG_SSL == "true" or false,
-    ssl_verify = options.SSL_VERIFY or ENV_CONFIG.PG_SSL_VERIFY or nil,
-    ssl_required = options.SSL_REQUIRED or ENV_CONFIG.PG_SSL_REQUIRED or nil,
-    pool_name = options.POOL_NAME or ENV_CONFIG.PG_POOL_NAME or nil,
-    pool_size = options.POOL_SIZE or tonumber(ENV_CONFIG.PG_POOL_SIZE) or 100,
-    connect_timeout = options.CONNECT_TIMEOUT or tonumber(ENV_CONFIG.PG_CONNECT_TIMEOUT) or 10000,
-    max_idle_timeout = options.MAX_IDLE_TIMEOUT or tonumber(ENV_CONFIG.PG_MAX_IDLE_TIMEOUT) or 10000,
+    host = options.HOST or env.PGHOST or "127.0.0.1",
+    port = options.PORT or tonumber(env.PGPORT) or 5432,
+    database = options.DATABASE or env.PGDATABASE or "postgres",
+    user = options.USER or env.PGUSER or "postgres",
+    password = options.PASSWORD or env.PGPASSWORD,
+    ssl = options.SSL or env.PG_SSL == "true" or false,
+    ssl_verify = options.SSL_VERIFY or env.PG_SSL_VERIFY or nil,
+    ssl_required = options.SSL_REQUIRED or env.PG_SSL_REQUIRED or nil,
+    pool_name = options.POOL_NAME or env.PG_POOL_NAME or nil,
+    pool_size = options.POOL_SIZE or tonumber(env.PG_POOL_SIZE) or 100,
+    connect_timeout = options.CONNECT_TIMEOUT or tonumber(env.PG_CONNECT_TIMEOUT) or 10000,
+    max_idle_timeout = options.MAX_IDLE_TIMEOUT or tonumber(env.PG_MAX_IDLE_TIMEOUT) or 10000,
     socket_type = options.SOCKET_TYPE,
     application_name = options.APPLICATION_NAME,
     backlog = options.BACKLOG,
@@ -157,7 +166,7 @@ function ConnProxy:query(statement, compact)
   if type(statement) == 'table' then
     statement = process_statement_table(statement)
   end
-  if ENV_CONFIG.DEBUG_SQL == 'on' then
+  if get_env().DEBUG_SQL == 'on' then
     self.debug(statement)
   end
   self.conn.compact = compact

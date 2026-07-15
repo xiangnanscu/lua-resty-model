@@ -383,6 +383,63 @@ local function main()
       assert.is_truthy(sql:find('payload = T.payload', 1, true),
         'F(payload) 应展开为列引用而非 JSON 字面量; sql=' .. sql)
     end)
+
+    -------------------------------------------------------------------
+    it('REVIEW-D3: 空 __in 报错信息带列名', function()
+      local ok, err = pcall(function()
+        return Blog:where { name__in = {} }:statement()
+      end)
+      assert.is_false(ok)
+      err = tostring(err)
+      assert.is_truthy(err:find('name', 1, true),
+        'D3: 错误应带列名; err=' .. err)
+      assert.is_truthy(err:find('__in', 1, true),
+        'D3: 错误应指明是 __in lookup; err=' .. err)
+    end)
+
+    -------------------------------------------------------------------
+    it('REVIEW-D11: 复合 Q 在 having 里保持 having 解析路径', function()
+      local Q = Model.Q
+      -- 合法：注解别名在复合 Q 里正常展开
+      local sql = Entry:annotate { cnt = Count('id') }
+          :group_by { 'blog_id' }
+          :having(Q { cnt__gte = 1 } * Q { cnt__lt = 99 })
+          :statement()
+      assert.is_truthy(sql:find('HAVING', 1, true), 'D11: 应生成 HAVING; sql=' .. sql)
+      assert.is_truthy(sql:find('COUNT', 1, true), 'D11: 别名应展开为聚合表达式; sql=' .. sql)
+      -- 非法：having 不支持 FK traversal，复合 Q 也必须报 having 语义的错，
+      -- 而不是掉回 where 解析悄悄生成 JOIN
+      local ok, err = pcall(function()
+        return Entry:annotate { cnt = Count('id') }
+            :group_by { 'blog_id' }
+            :having(Q { blog_id__name = 'x' } * Q { cnt__gte = 1 })
+            :statement()
+      end)
+      assert.is_false(ok, 'D11: 复合 Q 里的 traversal 应在 having 路径报错')
+      err = tostring(err)
+      assert.is_truthy(err:find('having', 1, true),
+        'D11: 错误应来自 having 解析路径; err=' .. err)
+    end)
+
+    -------------------------------------------------------------------
+    it('REVIEW-D10: TableField 显式 max_rows 才校验行数', function()
+      local Sub = Model:create_model {
+        table_name = 'review_sub',
+        fields = { { 'name', maxlength = 10 } }
+      }
+      local Fields2 = require "model.fields"
+      -- 显式 max_rows=2：3 行报错
+      local tf = Fields2.table:create_field { name = 'rows', model = Sub, max_rows = 2 }
+      local _, err = tf:validate({ { name = 'a' }, { name = 'b' }, { name = 'c' } })
+      assert.is_truthy(err, 'D10: 超过显式 max_rows 应报错')
+      assert.is_truthy(tostring(err):find('2', 1, true),
+        'D10: 错误应带上限值; err=' .. tostring(err))
+      -- 不显式：类默认 1 只是前端提示，3 行照常通过
+      local tf2 = Fields2.table:create_field { name = 'rows', model = Sub }
+      local val, err2 = tf2:validate({ { name = 'a' }, { name = 'b' }, { name = 'c' } })
+      assert.is_nil(err2, 'D10: 未显式声明 max_rows 不应校验行数; err=' .. tostring(err2))
+      assert.are.same(#val, 3)
+    end)
   end)
 end
 

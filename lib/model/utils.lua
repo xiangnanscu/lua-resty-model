@@ -120,6 +120,14 @@ end
 -- String Utilities
 -- =========================================================================
 
+---UTF-8 字符数（按非续字节计数）
+---@param s string
+---@return integer
+local function utf8len(s)
+  local _, cnt = s:gsub("[^\128-\193]", "")
+  return cnt
+end
+
 local function capitalize(s)
   if s == "" then return s end
   return s:sub(1, 1):upper() .. s:sub(2):lower()
@@ -142,8 +150,11 @@ local function to_camel_case(str)
 end
 
 ---@param s string
+---@param pattern string plain-text separator (any length)
 ---@return string[]
 local function split_string(s, pattern)
+  -- 空 pattern 会让 find 返回 (i, i-1)，start 永不前进 → 死循环
+  assert(pattern ~= nil and pattern ~= "", "split_string: pattern can't be nil or empty")
   local parts = {}
   local start = 1
 
@@ -371,7 +382,8 @@ local NON_OPERATOR_CONTEXTS = {
 
 local function smart_quote(s)
   if IS_PG_KEYWORDS[s:upper()] then
-    return format('"%s"', s)
+    -- 防御性转义内部双引号（标识符正常不含引号，但引用时必须完整）
+    return '"' .. (s:gsub('"', '""')) .. '"'
   else
     return s
   end
@@ -748,6 +760,7 @@ return {
   is_empty_value = is_empty_value,
 
   -- String Utilities
+  utf8len = utf8len,
   capitalize = capitalize,
   to_camel_case = to_camel_case,
   split_string = split_string,

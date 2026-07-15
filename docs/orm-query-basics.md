@@ -203,6 +203,10 @@ Blog:where(Q{name='A'} * Q{tagline__contains='lua'} / -Q{id__gt=10}):exec()
 #### 情形 3: 原始 SQL 字符串
 
 > **安全警告:** 此形式不会对 `cond` 做任何转义，请勿将用户输入直接拼入字符串，否则会导致 SQL 注入。推荐使用键值对表（情形 1）或两参数形式（情形 4）。
+>
+> **服务器配置前提:** 本 ORM 的字符串字面量转义（`'` → `''`）依赖 PostgreSQL 的
+> `standard_conforming_strings = on`（9.1 起的默认值）。请勿在服务器/数据库级把它改为
+> `off`——那会让 `\'` 重新具有转义语义，破坏转义的完整性并产生注入面。
 
 ```lua
 Blog:where("name = 'My Blog'"):exec()
@@ -977,7 +981,7 @@ local name_set = Blog:select('name'):as_set()
 
 ### Sql:get_or_create(params, defaults?, columns?)
 
-**签名:** `Sql:get_or_create(params, defaults?, columns?) -> ModelInstance, boolean`
+**签名:** `Sql:get_or_create(params, defaults?, columns?) -> Record, boolean`
 
 获取或创建：如果符合条件的记录存在则返回，否则创建。
 
@@ -990,9 +994,13 @@ local blog, created = Blog:get_or_create(
 -- created = false 表示已存在
 ```
 
+**⚠️ 并发提醒：** 底层是 `INSERT ... WHERE NOT EXISTS(...)`，非原子；并发下两个请求可能同时通过
+NOT EXISTS 检查造成重复插入。处方：给 `params` 涉及的列加 **unique 约束**兜底，
+高并发场景再包 `Model:transaction`（或 `atomic` classview）。
+
 ### Sql:update_or_create(params, defaults?, columns?)
 
-**签名：** `(params, defaults?, columns?) -> ModelInstance, boolean`
+**签名：** `(params, defaults?, columns?) -> Record, boolean`
 
 按 `params` 查找记录：存在则用 `defaults` 更新，不存在则用 `params + defaults` 创建。返回 `(记录, 是否新建)`。
 
@@ -1177,6 +1185,17 @@ local result = Blog:select('id', 'name'):compact():exec()
 Blog:raw():exec()        -- 不转换
 Blog:raw(false):exec()   -- 转换 (相当于取消 raw)
 ```
+
+> ⚠️ **`exec()` 默认就是 raw 语义**：不显式 `raw(false)` 时，`exec()`/`get()` 返回的是
+> **裸字典**（无 RecordClass 元表）——没有 `rec:save()`/`rec:delete()` 这些实例方法，
+> 外键/alioss 等字段也不做 `load` 转换，`select_related` 的关联字段以 `fk__col`
+> 平铺键返回。需要实例方法时二选一：
+>
+> ```lua
+> local rec = Blog:raw(false):where{id=1}:get()   -- 查询时转换
+> local rec = Blog:create_record(Blog:get{id=1})  -- 或事后手动挂元表
+> rec:save()
+> ```
 
 ### Sql:skip_validate(bool?)
 
