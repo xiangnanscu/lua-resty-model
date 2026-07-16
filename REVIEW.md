@@ -365,8 +365,15 @@ end
 5. ~~**B9 copy、B10 潜伏组**（顺手修）~~ ✅
 6. ~~§3 优化项按需，proxy 闭包缓存收益最大~~ ✅
 
-仍开放的事项（截至 2026-07-16）：
-- `COUNT(DISTINCT col)` / `Func` 的 `FILTER (WHERE ...)` 功能缺口（后者现已显式报 not implemented）
-- `_parse_column` 拆独立模块（纯重构，未立项）
+仍开放的事项（截至 2026-07-16 第四轮后）：
 - validate 三态协议（用户拍板不动）
 - `check_field_name` 的 EXPR_OPERATORS 大小写失效检查（见顶部注记「新发现」，权衡后维持现状）
+
+第四轮已完成（2026-07-16，全量 263/263）：
+- **`Count{'col', distinct=true}`** → `COUNT(DISTINCT ...)`；**`filter = Q{...}/kwargs表`** →
+  `FILTER (WHERE ...)`（PG 9.4+），annotate/alias/aggregate 三入口统一走 `Sql:_get_func_token`；
+  filter 条件按 where 语义解析，docs 已注明「跨表遍历会改变聚合前行集，请只用本表列」。
+- **`_parse_column` 拆模块**：解析簇（`parse_column`/`parse_having_column`/`get_having_column`）
+  迁至 `lib/model/parser.lua`，`EXPR_OPERATORS`/`JSON_OP_MAP`/`JSON_TEXT_OPS` 迁至
+  `lib/model/expr.lua`（纯函数、零 builder 状态）；sql.lua 留 `@private` 薄壳，
+  全部调用点与 `Sql.EXPR_OPERATORS` 导出保持不变，bug_spec 全部解析回归零改动通过。

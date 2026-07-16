@@ -1,6 +1,7 @@
 local Utils = require "model.utils"
 local Array = require "resty.array"
-local encode = require("cjson").encode
+local Expr = require "model.expr"
+local Parser = require "model.parser"
 local F = require "model.f"
 
 local setmetatable = setmetatable
@@ -32,201 +33,11 @@ local get_foreign_object = Utils.get_foreign_object
 local extract_column_names = Utils.extract_column_names
 local as_literal = Utils.as_literal
 local as_token = Utils.as_token
-local as_literal_without_brackets = Utils.as_literal_without_brackets
-local escape_like_value = Utils.escape_like_value
 local get_list_tokens = Utils.get_list_tokens
 local assemble_sql = Utils.assemble_sql
-local json_operators = Utils.json_operators
-local NON_OPERATOR_CONTEXTS = Utils.NON_OPERATOR_CONTEXTS
 local _get_join_token = Utils._get_join_token
 local _prefix_with_V = Utils._prefix_with_V
-local EXPR_OPERATORS = {
-  eq = function(key, value)
-    return format("%s = %s", key, as_literal(value))
-  end,
-  iexact = function(key, value)
-    return format("%s ILIKE %s", key, as_literal(value))
-  end,
-  lt = function(key, value)
-    return format("%s < %s", key, as_literal(value))
-  end,
-  lte = function(key, value)
-    return format("%s <= %s", key, as_literal(value))
-  end,
-  gt = function(key, value)
-    return format("%s > %s", key, as_literal(value))
-  end,
-  gte = function(key, value)
-    return format("%s >= %s", key, as_literal(value))
-  end,
-  ne = function(key, value)
-    return format("%s <> %s", key, as_literal(value))
-  end,
-  ['in'] = function(key, value)
-    if type(value) == 'table' and value[1] == nil and not value.__SQL_BUILDER__ then
-      error(format("empty table passed to __in lookup for column: %s", key))
-    end
-    return format("%s IN %s", key, as_literal(value))
-  end,
-  notin = function(key, value)
-    if type(value) == 'table' and value[1] == nil and not value.__SQL_BUILDER__ then
-      error(format("empty table passed to __notin lookup for column: %s", key))
-    end
-    return format("%s NOT IN %s", key, as_literal(value))
-  end,
-  contains = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s LIKE '%%%s%%' ESCAPE '\\'", key, esc)
-  end,
-  icontains = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s ILIKE '%%%s%%' ESCAPE '\\'", key, esc)
-  end,
-  startswith = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s LIKE '%s%%' ESCAPE '\\'", key, esc)
-  end,
-  istartswith = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s ILIKE '%s%%' ESCAPE '\\'", key, esc)
-  end,
-  endswith = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s LIKE '%%%s' ESCAPE '\\'", key, esc)
-  end,
-  iendswith = function(key, value)
-    local esc = escape_like_value(value)
-    return format("%s ILIKE '%%%s' ESCAPE '\\'", key, esc)
-  end,
-  range = function(key, value)
-    return format("%s BETWEEN %s AND %s", key, as_literal(value[1]), as_literal(value[2]))
-  end,
-  date = function(key, value)
-    return format("%s::date = %s", key, as_literal(value))
-  end,
-  year = function(key, value)
-    -- 半开区间 [y-01-01, y+1-01-01)：BETWEEN '..-12-31' 对 timestamp 列
-    -- 会漏掉 12-31 当天 00:00 之后的数据（Django 同款处理）
-    local y = assert(tonumber(value), "year lookup requires an integer year, got: " .. tostring(value))
-    return format("(%s >= '%d-01-01' AND %s < '%d-01-01')", key, y, key, y + 1)
-  end,
-  month = function(key, value)
-    return format("EXTRACT('month' FROM %s) = %s", key, as_literal(value))
-  end,
-  day = function(key, value)
-    return format("EXTRACT('day' FROM %s) = %s", key, as_literal(value))
-  end,
-  hour = function(key, value)
-    return format("EXTRACT('hour' FROM %s) = %s", key, as_literal(value))
-  end,
-  minute = function(key, value)
-    return format("EXTRACT('minute' FROM %s) = %s", key, as_literal(value))
-  end,
-  second = function(key, value)
-    return format("EXTRACT('second' FROM %s) = %s", key, as_literal(value))
-  end,
-  week = function(key, value)
-    return format("EXTRACT('week' FROM %s) = %s", key, as_literal(value))
-  end,
-  week_day = function(key, value)
-    return format("EXTRACT('dow' FROM %s) + 1 = %s", key, as_literal(value))
-  end,
-  iso_week_day = function(key, value)
-    return format("EXTRACT('isodow' FROM %s) = %s", key, as_literal(value))
-  end,
-  iso_year = function(key, value)
-    return format("EXTRACT('isoyear' FROM %s) = %s", key, as_literal(value))
-  end,
-  quarter = function(key, value)
-    return format("EXTRACT('quarter' FROM %s) = %s", key, as_literal(value))
-  end,
-  time = function(key, value)
-    return format("%s::time = %s", key, as_literal(value))
-  end,
-  regex = function(key, value)
-    return format("%s ~ '%s'", key, (tostring(value):gsub("'", "''")))
-  end,
-  iregex = function(key, value)
-    return format("%s ~* '%s'", key, (tostring(value):gsub("'", "''")))
-  end,
-  null = function(key, value)
-    if value then
-      return format("%s IS NULL", key)
-    else
-      return format("%s IS NOT NULL", key)
-    end
-  end,
-  isnull = function(key, value)
-    if value then
-      return format("%s IS NULL", key)
-    else
-      return format("%s IS NOT NULL", key)
-    end
-  end,
-  has_key = function(key, value)
-    return format("(%s) ? %s", key, as_literal(value))
-  end,
-  has_keys = function(key, value)
-    return format("(%s) ?& ARRAY[%s]", key, as_literal_without_brackets(value))
-  end,
-  has_any_keys = function(key, value)
-    return format("(%s) ?| ARRAY[%s]", key, as_literal_without_brackets(value))
-  end,
-  json_contains = function(key, value)
-    return format("(%s) @> '%s'", key, encode(value))
-  end,
-  json_eq = function(key, value)
-    return format("(%s) = '%s'", key, encode(value))
-  end,
-  json_ne = function(key, value)
-    return format("(%s) <> '%s'", key, encode(value))
-  end,
-  json_gt = function(key, value)
-    return format("(%s) > '%s'", key, encode(value))
-  end,
-  json_gte = function(key, value)
-    return format("(%s) >= '%s'", key, encode(value))
-  end,
-  json_lt = function(key, value)
-    return format("(%s) < '%s'", key, encode(value))
-  end,
-  json_lte = function(key, value)
-    return format("(%s) <= '%s'", key, encode(value))
-  end,
-  contained_by = function(key, value)
-    return format("(%s) <@ '%s'", key, encode(value))
-  end,
-}
-
--- Rename normal comparison ops to their json_* variants when LHS is a jsonb path
--- so RHS gets JSON-encoded and PG performs jsonb-vs-jsonb comparison.
-local JSON_OP_MAP = {
-  eq = 'json_eq',
-  ne = 'json_ne',
-  gt = 'json_gt',
-  gte = 'json_gte',
-  lt = 'json_lt',
-  lte = 'json_lte',
-  contains = 'json_contains',
-}
-
--- Ops that operate on TEXT (LIKE family, regex, date extraction). When the LHS
--- is a jsonb path, extract the last segment as text (->> / #>>) instead of
--- jsonb (-> / #>), so PG operators that require text work directly without
--- explicit cast.
-local JSON_TEXT_OPS = {
-  iexact = true,
-  icontains = true,
-  startswith = true, istartswith = true,
-  endswith = true, iendswith = true,
-  regex = true, iregex = true,
-  date = true, time = true,
-  year = true, month = true, day = true,
-  hour = true, minute = true, second = true,
-  week = true, week_day = true,
-  iso_week_day = true, iso_year = true,
-  quarter = true,
-}
+local EXPR_OPERATORS = Expr.EXPR_OPERATORS
 
 ---@class SqlOptions
 ---@field table_name string
@@ -1632,329 +1443,30 @@ function Sql:_array_to_values(row, columns, no_check, type_suffix)
   return '(' .. as_token(row) .. ')'
 end
 
+-- 列解析簇的实现在 model.parser（多段遍历/自动 JOIN/JSON 路径/annotate 别名），
+-- 此处只留薄壳保持内部调用点与 @private 语义不变
+
 ---@private
 ---@param key string column name
 ---@param context? ColumnContext
 ---@return string resolved_column
 ---@return string operator
 function Sql:_parse_column(key, context)
-  local model = self.model
-  local fast_field = model.fields[key]
-  if fast_field then
-    local prefix = self._as or model._table_name_token
-    return prefix .. '.' .. (fast_field._column_token or smart_quote(key)), 'eq'
-  end
-  local i = 1
-  local op = 'eq'
-  local a, b, token, join_key, prefix, column, final_column, last_field, last_token, last_model, json_keys
-  while true do
-    a, b = key:find("__", i, true)
-    if not a then
-      token = key:sub(i)
-    else
-      token = key:sub(i, a - 1)
-    end
-    -- print('token', token, self.model.table_name)
-    -- column might be changed in the loop
-    local field = model.fields[token]
-    if field then
-      -- 1. fields from model itself, highest priority
-      if not last_field then
-        -- 1.1 first column, the most case
-        -- print('1.1', model.class_name, token)
-        column = token
-        prefix = self._as or model._table_name_token
-      elseif json_keys then
-        -- 1.2 json field search: token happens to be a model field name but we
-        -- are already inside a jsonb path, so treat it as a json path segment.
-        -- https://docs.djangoproject.com/en/4.2/topics/db/queries/#querying-jsonfield
-        -- print('1.2', model.class_name, token)
-        if json_operators[token] or EXPR_OPERATORS[token] then
-          -- terminal op: stop traversing, post-loop will build the json path
-          op = token
-          break
-        else
-          json_keys[#json_keys + 1] = token
-        end
-      elseif last_model.reversed_fields[last_token] then
-        -- 1.3 field on the reversed-model side: Blog:where{entry__rating}
-        -- The reverse join was created by branch 4 in the previous iter; here
-        -- we just point `column` at the current segment (prefix already alias).
-        -- print('1.3', model.class_name, token)
-        column = token
-      elseif last_field.reference then
-        -- 1.4 foreignkey model's field, may need a join
-        if token == last_field.reference_column then
-          -- 1.4.1 blog_id__id => redundant FK suffix, rollback to the FK column.
-          -- Preserve `field = last_field` so the loop bottom's
-          -- `last_field = field` keeps the FK context — otherwise a trailing
-          -- segment like blog_id__id__notop would report errors against the
-          -- PK field and lose the originating FK chain (BUG B4).
-          -- print('1.4.1', model.class_name, token)
-          column = last_token
-          token = last_token -- in case of blog_id__id__gt
-          field = last_field
-        else
-          -- 1.4.2 blog_id__name => need a join
-          -- print('1.4.2', model.class_name, last_token or '/', token)
-          column = token
-          local parent_join_key -- left side of the new join (nil = main table)
-          if not join_key then
-            -- prefix with foreignkey name because a model can be referenced multiple times by the same model
-            -- such as: Entry:where{blog_id__name='Tom', reposted_blog_id__name='Kate'}
-            join_key = last_token
-          else
-            parent_join_key = join_key
-            join_key = join_key .. "__" .. last_token
-          end
-          if not self._join_keys then
-            self._join_keys = {}
-          end
-          prefix = self._join_keys[join_key]
-          if not prefix then
-            local function join_cond_cb(ctx)
-              local left_proxy = ctx[parent_join_key or 1]
-              local left_column = left_proxy[last_token]
-              if not left_column then
-                error(last_token .. " is a invalid column for " .. left_proxy[1])
-              end
-              local right_column = ctx[join_key][last_field.reference_column]
-              return format("%s = %s", left_column, right_column)
-            end
-            local join_type
-            if context == 'aggregate' then
-              join_type = "LEFT"
-            else
-              join_type = self._join_type or "INNER"
-            end
-            prefix = self:_handle_manual_join(join_type, model, join_cond_cb, join_key)
-          end
-        end
-      else
-        -- print('1.5: token IS a valid field on `model`, but the previous segment')
-        -- (`last_token`) is not a foreignkey / jsonb / reverse-fk, so the
-        -- traversal is malformed.
-        error(format(
-          "cannot traverse to '%s' through '%s' on model '%s' (previous segment is not a foreignkey, jsonb, or reverse-fk)",
-          token, last_token, last_model.class_name))
-      end
-      last_model = model
-      if field.reference then
-        model = field.reference
-      end
-      if not json_keys and (field.model or field.db_type == 'jsonb') then
-        json_keys = {}
-      end
-    elseif self._annotate and self._annotate[token] then
-      -- 2. name that's registered in annotate:
-      -- Blog:annotate{cnt=Count('entry')}:where{cnt__lt=2}:group_by{'name'}
-      -- The annotation expands to a full SQL expression (Count(...), F('price')
-      -- * 10), not a column — so the only valid continuation is a single
-      -- trailing operator (cnt__gte=1). Traversal *into* the annotation makes
-      -- no sense and used to be silently dropped (BUG B2), reject it here.
-      -- print('2', model.class_name, token)
-      final_column = self._annotate[token]
-      if a then
-        local rest = key:sub(b + 1)
-        if EXPR_OPERATORS[rest] then
-          op = rest
-        else
-          error(format(
-            "cannot traverse into annotation '%s' on model '%s': "
-            .. "only a single trailing operator is allowed, got '%s' (full key: '%s')",
-            token, model.class_name, rest, key))
-        end
-      end
-      break
-    elseif json_keys then
-      -- 3. attributes from a json field
-      -- Blog.where{data__a='x'}         => WHERE (... "data" -> 'a')        = '"x"'
-      -- Blog.where{data__a__contains=...} => WHERE (... "data" -> 'a')      @> '...'
-      -- Blog.where{data__a__gt=5}       => WHERE (... "data" -> 'a')        > '5'
-      -- Blog.where{data__a__startswith='x'} => WHERE (... "data" ->> 'a') LIKE 'x%'
-      -- print('3', model.class_name, token)
-      if json_operators[token] or EXPR_OPERATORS[token] then
-        -- terminal op: stop traversing, post-loop builds the json LHS
-        op = token
-        break
-      else
-        json_keys[#json_keys + 1] = token
-      end
-    else
-      -- Blog:where{entry__rating=1}
-      local reversed_field = model.reversed_fields[token] -- Entry.blog_id, Blog:where{entry=1}
-      if reversed_field then
-        -- 4. reversed foreignkey, join from current loop
-        -- token = entry, reversed_name = blog_id
-        -- print('4', model.class_name, token)
-        -- Fix: if the previous segment was a forward FK whose target wasn't
-        -- materialized yet (1.3 path skipped the join because at that point we
-        -- only needed the FK column itself), we MUST add the forward join now,
-        -- otherwise the reverse join below would anchor on the wrong table.
-        -- Example: Blog:where{entry__blog_id__entry__rating=5} requires a
-        -- Blog T2 join between entry T1 and the second entry T3 (Django parity:
-        -- 3 joins total).
-        if last_field and last_field.reference == model then
-          local fk_join_key = (join_key and (join_key .. "__" .. last_token)) or last_token
-          if not self._join_keys or not self._join_keys[fk_join_key] then
-            local left_anchor = join_key
-            local function fk_join_cb(ctx)
-              return format("%s = %s",
-                ctx[left_anchor or 1][last_token],
-                ctx[fk_join_key][last_field.reference_column])
-            end
-            local fix_join_type
-            if context == 'aggregate' then
-              fix_join_type = "LEFT"
-            else
-              fix_join_type = self._join_type or "INNER"
-            end
-            self:_handle_manual_join(fix_join_type, model, fk_join_cb, fk_join_key)
-          end
-          join_key = fk_join_key
-        end
-        local reversed_model = reversed_field:get_model() -- Entry
-        -- loger(token, model.table_name, reversed_model.table_name, reversed_field.name)
-        if not join_key then
-          join_key = token
-        else
-          join_key = join_key .. "__" .. token
-        end
-        if not self._join_keys then
-          self._join_keys = {}
-        end
-        prefix = self._join_keys[join_key]
-        if not prefix then
-          local function join_cond_cb(ctx)
-            local left_model_index
-            if token == join_key then
-              left_model_index = 1
-            else
-              left_model_index = #ctx - 1
-            end
-            return format("%s = %s",
-              ctx[left_model_index][reversed_field.reference_column],
-              ctx[#ctx][reversed_field.name])
-          end
-          local join_type
-          if context == 'aggregate' then
-            join_type = "LEFT"
-          else
-            join_type = self._join_type or "INNER"
-          end
-          prefix = self:_handle_manual_join(join_type, reversed_model, join_cond_cb, join_key)
-        end
-        column = reversed_model.primary_key
-        field = reversed_field
-        last_model = model
-        model = reversed_model
-      elseif last_token then
-        -- 5. operator, write back
-        -- print('5', model.class_name, token)
-        if context == nil or not NON_OPERATOR_CONTEXTS[context] then -- where or having or Q
-          -- 5.1 should be operator, check it
-          if not EXPR_OPERATORS[token] then
-            error(format(
-              "invalid operator '%s' after column '%s' on model '%s' (full key: '%s')",
-              token, last_token, model.class_name, key))
-          end
-        else
-          -- 5.2 select/returning etc context, shouldn't reach here
-          error(format(
-            "invalid column segment '%s' after '%s' on model '%s' (full key: '%s') in %s context",
-            token, last_token, model.class_name, key, context))
-        end
-        op = token
-        column = last_token
-        break
-      else
-        error(format("invalid column name '%s' for model '%s'", token, model.class_name))
-      end
-    end
-    if not a then
-      break
-    end
-    last_token = token
-    last_field = field
-    i = b + 1
-  end
-  if json_keys then
-    -- Text ops (LIKE, regex, date extraction) need text extraction (->> / #>>)
-    -- so PG operators that require text can apply directly. Other ops keep the
-    -- jsonb extract (-> / #>) and route through json_* variants that encode the
-    -- RHS as JSON literal, so PG can do jsonb-vs-jsonb comparison.
-    local arrow_one, arrow_many
-    if JSON_TEXT_OPS[op] then
-      arrow_one, arrow_many = "->>", "#>>"
-    else
-      arrow_one, arrow_many = "->", "#>"
-    end
-    local quoted_col = prefix .. '.' .. smart_quote(column)
-    if #json_keys == 1 then
-      local k = json_keys[1]
-      -- Django 对齐：单段整数样式按数组下标（-> 0 / ->> 0），字符串键才用
-      -- 文本（-> 'k'）；对象的 "0" 这类数字字符串键与 Django 一样不支持直查。
-      -- 多段路径无须处理：#> 的 text[] 在数组语境自动把数字串当下标。
-      if k:match("^%-?%d+$") then
-        final_column = format("%s %s %s", quoted_col, arrow_one, k)
-      else
-        final_column = format("%s %s %s", quoted_col, arrow_one, as_literal(k))
-      end
-    elseif #json_keys > 1 then
-      final_column = format("%s %s ARRAY[%s]", quoted_col, arrow_many,
-        as_literal_without_brackets(json_keys))
-    end
-    if JSON_OP_MAP[op] then
-      op = JSON_OP_MAP[op]
-    end
-  end
-  return final_column or (prefix .. '.' .. smart_quote(column)), op
+  return Parser.parse_column(self, key, context)
 end
 
 ---@private
 ---@param key string column
 ---@return string, string
 function Sql:_parse_having_column(key)
-  local a, b = key:find("__", 1, true)
-  if not a then
-    return self:_get_having_column(key), "eq"
-  end
-  local token = key:sub(1, a - 1)
-  local op = key:sub(b + 1)
-  -- HAVING references a group-by column or an aggregate alias; nested traversal
-  -- (cnt__nope__gte) makes no sense here and used to slip through as op =
-  -- "nope__gte" → "invalid sql op" downstream (BUG B1). Reject it up front.
-  if op:find("__", 1, true) then
-    error(format(
-      "invalid having key '%s': nested traversal is not supported, "
-      .. "use 'alias__op' (e.g. 'cnt__gte') only", key))
-  end
-  if not EXPR_OPERATORS[op] then
-    error(format("invalid having operator '%s' in key '%s'", op, key))
-  end
-  return self:_get_having_column(token), op
+  return Parser.parse_having_column(self, key)
 end
 
 ---@private
 ---@param key string
 ---@return string
 function Sql:_get_having_column(key)
-  if self._annotate then
-    local res = self._annotate[key]
-    if res ~= nil then
-      return res
-    end
-  end
-  -- fall back to a regular model column reference, so usages like
-  --   :group_by{'name'}:having{name__startswith='a'}
-  -- or HAVING expressions over plain columns (Postgres allows this when
-  -- the column appears in GROUP BY) work without going through annotate.
-  local field = self.model.fields[key]
-  if field then
-    local prefix = self._as or self.model._table_name_token
-    return prefix .. '.' .. (field._column_token or smart_quote(key))
-  end
-  error(format("invalid alias or column for having: '%s'", key))
+  return Parser.get_having_column(self, key)
 end
 
 ---@private
@@ -2679,6 +2191,38 @@ function Sql:decrease(name, amount)
   return self:update { [name] = F(name) - (amount or 1) }
 end
 
+---把 Func 实例渲染为聚合表达式：
+---  Count{'id'}                          -> COUNT(T.id)
+---  Count{'id', distinct = true}         -> COUNT(DISTINCT T.id)
+---  Count{'id', filter = Q{...}}         -> COUNT(T.id) FILTER (WHERE ...)
+---filter 接受 Q 对象或 kwargs 条件表；条件按 where 语义解析。
+---注意：filter 条件里的跨表遍历（fk__col）会向主查询追加 JOIN，
+---改变聚合前的行集——filter 条件请只用本表列或 annotate 别名。
+---@private
+---@param func table Func instance
+---@return string
+function Sql:_get_func_token(func)
+  local prefixed_column = self:_parse_column(func.column, "aggregate")
+  local token
+  if func.distinct then
+    token = format("%s(DISTINCT %s)", func.name, prefixed_column)
+  else
+    token = format("%s(%s)", func.name, prefixed_column)
+  end
+  if func.filter ~= nil then
+    local cond
+    if type(func.filter) == 'table' and func.filter.__IS_LOGICAL_BUILDER__ then
+      cond = self:_resolve_Q(func.filter)
+    elseif type(func.filter) == 'table' then
+      cond = self:_get_condition_token_from_table(func.filter)
+    else
+      error("Func filter must be a Q object or a condition table, not " .. type(func.filter))
+    end
+    token = format("%s FILTER (WHERE %s)", token, cond)
+  end
+  return token
+end
+
 ---@param kwargs {[string]:table}
 function Sql:annotate(kwargs)
   if not self._annotate then
@@ -2691,9 +2235,7 @@ function Sql:annotate(kwargs)
     if self.model.fields[alias] then
       error(format("annotate name '%s' is conflict with model field", alias))
     elseif func.__IS_FUNCTION__ then
-      local prefixed_column = self:_parse_column(func.column, "aggregate")
-      local func_token = format("%s(%s)", func.name, prefixed_column)
-      -- self._annotate[alias] = { func_token = func_token, func = func, reversed = reversed }
+      local func_token = self:_get_func_token(func)
       self._annotate[alias] = func_token
       self:_base_select(format("%s AS %s", func_token, smart_quote(alias)))
     elseif func.__IS_FIELD_BUILDER__ then
@@ -2722,8 +2264,7 @@ function Sql:alias(kwargs)
     if self.model.fields[alias] then
       error(format("alias name '%s' is conflict with model field", alias))
     elseif func.__IS_FUNCTION__ then
-      local prefixed_column = self:_parse_column(func.column, "aggregate")
-      self._annotate[alias] = format("%s(%s)", func.name, prefixed_column)
+      self._annotate[alias] = self:_get_func_token(func)
     elseif func.__IS_FIELD_BUILDER__ then
       self._annotate[alias] = self:_resolve_field_builder(func)
     end
@@ -2740,8 +2281,7 @@ function Sql:aggregate(kwargs)
       alias = func.column .. func.suffix
     end
     if func.__IS_FUNCTION__ then
-      local prefixed_column = self:_parse_column(func.column, "aggregate")
-      select_parts[#select_parts + 1] = format("%s(%s) AS %s", func.name, prefixed_column, smart_quote(alias))
+      select_parts[#select_parts + 1] = format("%s AS %s", self:_get_func_token(func), smart_quote(alias))
     elseif func.__IS_FIELD_BUILDER__ then
       local exp_token = self:_resolve_field_builder(func)
       select_parts[#select_parts + 1] = format("%s AS %s", exp_token, smart_quote(alias))

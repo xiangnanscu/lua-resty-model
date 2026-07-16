@@ -222,6 +222,28 @@ Variance('column')  -- VAR_SAMP(column)（样本方差）
 
 `StdDev` / `Variance` 使用**样本**版本（分母为 n-1）。如需总体版本，需自己写 `F('STDDEV_POP(col)')` 或在 SQL 层处理。
 
+### DISTINCT 与 FILTER 修饰
+
+表形式参数支持 `distinct` 与 `filter`（对齐 Django 的 `Count('x', distinct=True, filter=Q(...))`）：
+
+```lua
+-- COUNT(DISTINCT T.blog_id)
+Entry:aggregate { uniq = Count { 'blog_id', distinct = true } }
+
+-- COUNT(T.id) FILTER (WHERE T.rating > 3)：filter 接受 Q 对象或 kwargs 条件表
+Entry:aggregate { high = Count { 'id', filter = Q { rating__gt = 3 } } }
+Entry:aggregate { b1 = Count { 'id', filter = { blog_id = 1 } } }
+
+-- 可组合，annotate / alias 同样支持
+Entry:group('blog_id')
+     :annotate { c = Count { 'id', distinct = true, filter = { rating__gt = 3 } } }
+     :exec()
+```
+
+> ⚠️ `filter` 条件按 where 语义解析：条件里若写跨表遍历（`fk__col`），
+> 会向主查询追加 JOIN、改变聚合前的行集。filter 条件请只用**本表列**或
+> annotate 别名；跨表过滤计数请改用子查询。
+
 ### 基本聚合
 
 ```lua

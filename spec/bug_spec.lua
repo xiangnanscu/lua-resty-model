@@ -473,6 +473,27 @@ local function main()
       assert.is_truthy(second, 'GROUP BY 里应有该列; sql=' .. sql)
     end)
 
+    it('REVIEW-D17: Count DISTINCT / FILTER 语法生成', function()
+      local Q = Model.Q
+      local sql = Entry:annotate { c = Count { 'id', distinct = true } }
+          :group_by { 'blog_id' }:statement()
+      assert.is_truthy(sql:find('COUNT(DISTINCT T.id)', 1, true),
+        'distinct=true 应生成 COUNT(DISTINCT ...); sql=' .. sql)
+      local sql2 = Entry:annotate { c = Count { 'id', filter = Q { rating__gt = 3 } } }
+          :group_by { 'blog_id' }:statement()
+      assert.is_truthy(sql2:find('FILTER (WHERE', 1, true),
+        'filter 应生成 FILTER (WHERE ...); sql=' .. sql2)
+      assert.is_truthy(sql2:find('T.rating > 3', 1, true),
+        'filter 条件应展开; sql=' .. sql2)
+      -- filter 非法类型报错
+      local ok, err = pcall(function()
+        return Entry:annotate { c = Count { 'id', filter = 'raw' } }:statement()
+      end)
+      assert.is_false(ok)
+      assert.is_truthy(tostring(err):find('filter', 1, true), 'err=' .. tostring(err))
+    end)
+
+    -------------------------------------------------------------------
     it('REVIEW-D16: 无法推断子查询列名时提前报错', function()
       -- upper(name) 是函数调用片段，extract_column_name 无法反推列名；
       -- 修复前静默丢列 → DB 层报"列数不匹配"，修复后库层提前报错并给出解法

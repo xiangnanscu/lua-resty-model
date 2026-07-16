@@ -1,15 +1,15 @@
---TODO: support filter, COALESCE(return first non-null value)
+--TODO: COALESCE(return first non-null value)
+---聚合函数构造器。表形式支持修饰参数：
+---  Count { 'id', distinct = true }            -> COUNT(DISTINCT T.id)
+---  Count { 'id', filter = Q { rating__gt=3 } } -> COUNT(T.id) FILTER (WHERE ...)
+---  Sum { 'price', filter = { pages__gt=100 } } -> filter 也接受 kwargs 条件表
 local Func = { __IS_FUNCTION__ = true }
 Func.__index = Func
 Func.__call = function(self, column)
   if type(column) == 'string' then
     return self:new { column = column }
   else
-    if column.filter ~= nil then
-      -- 与其静默丢弃 filter 生成语义错误的 SQL，不如显式拒绝
-      error("Func filter is not implemented yet (FILTER (WHERE ...) is never generated); remove it")
-    end
-    return self:new { column = column[1] }
+    return self:new { column = column[1], filter = column.filter, distinct = column.distinct }
   end
 end
 function Func:class(args)
@@ -17,6 +17,12 @@ function Func:class(args)
   return setmetatable(args, self)
 end
 
+---@class Func
+---@field name string SQL 聚合函数名
+---@field suffix string 数字索引 annotate 的自动命名后缀
+---@field column string
+---@field distinct? boolean COUNT(DISTINCT col)
+---@field filter? table Q 对象或 kwargs 条件表 → FILTER (WHERE ...)
 function Func:new(args)
   return setmetatable(args or {}, self)
 end

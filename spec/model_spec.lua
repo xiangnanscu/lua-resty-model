@@ -829,6 +829,40 @@ local function main()
       assert.is_true(s.sd > 0)
     end)
 
+    it("Count DISTINCT", function()
+      local s = Entry:aggregate {
+        total = Count { 'blog_id' },
+        uniq = Count { 'blog_id', distinct = true },
+      }
+      assert.are.same(s.total, 3)
+      assert.are.same(s.uniq, 2)
+    end)
+
+    it("Count + FILTER (kwargs 条件表)", function()
+      local expected = Entry:where { blog_id = 1 }:count()
+      local s = Entry:aggregate { c = Count { 'id', filter = { blog_id = 1 } } }
+      assert.are.same(s.c, expected)
+    end)
+
+    it("Count + FILTER (Q 复合条件)", function()
+      local s = Entry:aggregate {
+        c = Count { 'id', filter = Q { blog_id = 1 } / Q { blog_id = 2 } },
+      }
+      assert.are.same(s.c, 3)
+    end)
+
+    it("DISTINCT + FILTER 组合，annotate 同样支持", function()
+      local s = Entry:aggregate {
+        c = Count { 'blog_id', distinct = true, filter = { blog_id__gt = 0 } },
+      }
+      assert.are.same(s.c, 2)
+      local r = Entry:group('blog_id')
+          :annotate { c1 = Count { 'id', filter = { blog_id = 1 } } }
+          :order('blog_id'):exec()
+      assert.are.same(r[1].c1, 2) -- blog 1 组内命中 2 条
+      assert.are.same(r[2].c1, 0) -- blog 2 组内 filter 全不命中
+    end)
+
     it("having 拒绝嵌套 traversal (cnt__nope__gte)", function()
       local ok, err = pcall(function()
         Entry:annotate { cnt = Count('id') }
