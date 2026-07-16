@@ -983,7 +983,9 @@ local name_set = Blog:select('name'):as_set()
 
 **签名:** `Sql:get_or_create(params, defaults?, columns?) -> Record, boolean`
 
-获取或创建：如果符合条件的记录存在则返回，否则创建。
+获取或创建：如果符合条件的记录存在则返回，否则创建。**原子操作**——底层是单条
+`INSERT ... ON CONFLICT (params列) DO UPDATE SET k = EXCLUDED.k RETURNING ..., (xmax = 0)`，
+并发下多个请求恰好一个 `created = true`，其余拿到同一条现有记录，不会重复插入。
 
 ```lua
 local blog, created = Blog:get_or_create(
@@ -994,26 +996,34 @@ local blog, created = Blog:get_or_create(
 -- created = false 表示已存在
 ```
 
-**⚠️ 并发提醒：** 底层是 `INSERT ... WHERE NOT EXISTS(...)`，非原子；并发下两个请求可能同时通过
-NOT EXISTS 检查造成重复插入。处方：给 `params` 涉及的列加 **unique 约束**兜底，
-高并发场景再包 `Model:transaction`（或 `atomic` classview）。
+**前提与代价：**
+
+- `params` 的列集合必须命中**唯一约束**（`unique` 字段或 `unique_together`），
+  否则 PG 报 `no unique or exclusion constraint matching the ON CONFLICT specification`。
+  任意非唯一条件的"找一条"请用 `get()`。
+- 已存在时执行的是 no-op 更新（只回写冲突键自身）：不改其它列、不刷新 `auto_now`，
+  但仍产生一次行版本写入。高频只读探测场景请直接用 `get()`。
 
 ### Sql:update_or_create(params, defaults?, columns?)
 
 **签名：** `(params, defaults?, columns?) -> Record, boolean`
 
-按 `params` 查找记录：存在则用 `defaults` 更新，不存在则用 `params + defaults` 创建。返回 `(记录, 是否新建)`。
+按 `params` 查找记录：存在则用 `defaults` 更新（并刷新 `auto_now`），不存在则用
+`params + defaults` 创建。返回 `(记录, 是否新建)`。**原子操作**——底层是单条
+`INSERT ... ON CONFLICT (params列) DO UPDATE SET defaults列 = EXCLUDED.defaults列 RETURNING ...`。
 
 ```lua
 local user, created = User:update_or_create(
-  { email = 'a@b.com' },                -- 查找键
+  { email = 'a@b.com' },                -- 查找键 (必须命中唯一约束)
   { nickname = 'Alice', login_at = ngx.time() }  -- 更新/创建的值
 )
 -- created = true：新建
 -- created = false：已存在且已被 UPDATE
 ```
 
-**⚠️ 并发提醒：** 与 `get_or_create` 类似，底层是两条 SQL（先 SELECT 再 UPDATE/INSERT），并发下有 race condition。高并发场景请包在 `atomic` classview 里，或改用 `upsert()`。
+与 `get_or_create` 相同的唯一约束前提。`defaults` 为空时退化为 `get_or_create`。
+校验按 `validate_update` 语义（只校验提供的值，不回填模型默认值、不检查 required），
+可用 `skip_validate()` 跳过。
 
 ### Sql:first() / Sql:last()
 

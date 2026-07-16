@@ -17,6 +17,11 @@
 > - §2.7 **文档化**：`standard_conforming_strings` PG 9.1+ 默认 on，逐连接 SET 不值一次往返——改为在 docs（where 原始字符串的安全警告旁）提示使用者勿改该服务器配置；`smart_quote` 转义标识符内部双引号保留。
 > - §2.1 **已修**：`exec/get/first/last/values/filter/in_bulk/get_or_create/...` 的 `@return` 注解由 `ModelInstance` 改为 `Record`（`raw(false)` 分支的 cast 保留），docs 的 raw 小节补默认语义与实例方法获取方式，`get_or_create` 补并发处方。
 > - §2.2/§2.6 docs 已有对应段落（copy 可变性、update_or_create 并发提醒），仅补 get_or_create 一处。
+> - §2.6 **升级为原子实现（2026-07-16 追加）**：`get_or_create`/`update_or_create` 改为单条
+>   `INSERT ... ON CONFLICT (params列) DO UPDATE ... RETURNING (xmax = 0) AS __is_inserted__`，
+>   并发安全、无重复插入、不依赖外层事务（也因此不会撞本库「事务不可嵌套」的限制）。
+>   语义收窄：params 列集合必须命中唯一约束（原实现允许任意条件），fail loud；
+>   已存在时的 no-op 更新会产生一次行版本写入。docs 两段已重写，spec 15 节补 4 条用例。
 > - §2.4（JSON 数组下标）、§2.5（get 的 0/2+ 行均返回 false）维持原设计，仅记录。
 > - §5.5 的 `get_keys` 递归丢参在第一轮 B10.2 已修（去重种子版，回归 `REVIEW-B10b`）。
 

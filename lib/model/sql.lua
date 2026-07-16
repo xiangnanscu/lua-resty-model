@@ -3498,30 +3498,37 @@ function Sql:where_recursive(name, value, select_names)
   return self
 end
 
----@param params table
----@param defaults? table
----@param columns? string[]
----@return Record, boolean
+---原子版 get-or-create：单条 `INSERT ... ON CONFLICT (params列) DO UPDATE
+---SET k = EXCLUDED.k RETURNING ..., (xmax = 0) AS __is_inserted__`。
+---并发调用恰好一个拿到 created=true，其余拿到现有行（xmax=0 仅插入路径成立）。
+---要求 params 的列集合命中唯一约束（unique 字段或 unique_together），
+---否则 PG 报 "no unique or exclusion constraint matching the ON CONFLICT specification"。
+---已存在时的 no-op 更新只回写冲突键自身：不触碰其它列、不刷新 auto_now，
+---但会产生一次行版本写入——高频只读探测场景请直接用 get()。
+---@param params table 查找条件（必须命中唯一约束）
+---@param defaults? table 仅创建时使用的值
+---@param columns? string[]|'*' 返回列，默认主键 + 插入列
+---@return Record, boolean created
 function Sql:get_or_create(params, defaults, columns)
+  assert(next(params) ~= nil, "params can't be empty for get_or_create")
   local values_list, insert_columns = Sql:_get_insert_values_token(dict(params, defaults))
-  local insert_columns_token = as_token(insert_columns)
-  local all_columns_token = as_token(list(columns or { self.model.primary_key }, insert_columns):unique())
-  local insert_sql = format('(INSERT INTO %s(%s) SELECT %s WHERE NOT EXISTS (%s) RETURNING %s)',
-    self.model._table_name_token,
-    insert_columns_token,
-    as_literal_without_brackets(values_list),
-    self.model:create_sql():select(1):where(params),
-    all_columns_token
-  )
-  local inserted_set = Sql:new { model = self.model, table_name = 'NEW_RECORDS', _as = 'NEW_RECORDS' }
-      :with(format("NEW_RECORDS(%s)", all_columns_token), insert_sql)
-      :_base_select(all_columns_token):_base_select("TRUE AS __is_inserted__")
-  -- main sql
-  local selected_set = self:where(params):_base_select(all_columns_token):_base_select(
-    "FALSE AS __is_inserted__")
-  local records = inserted_set:union_all(selected_set):exec()
-  if #records > 1 then
-    error("multiple records returned")
+  local key_columns = get_keys(params)
+  local all_columns_token
+  if columns == '*' then
+    all_columns_token = '*'
+  else
+    all_columns_token = as_token(list(columns or { self.model.primary_key }, insert_columns):unique())
+  end
+  local k1 = key_columns[1]
+  self._insert = format("(%s) VALUES %s ON CONFLICT (%s) DO UPDATE SET %s = EXCLUDED.%s",
+    as_token(insert_columns),
+    as_literal(values_list),
+    as_token(key_columns),
+    k1, k1)
+  self:_base_returning(all_columns_token):_base_returning("(xmax = 0) AS __is_inserted__")
+  local records = self:execr()
+  if #records ~= 1 then
+    error("get_or_create expected 1 record, got " .. #records)
   end
   local ins = records[1]
   ---@diagnostic disable-next-line: invisible
@@ -3531,29 +3538,43 @@ function Sql:get_or_create(params, defaults, columns)
   return ins, created
 end
 
----@param params table lookup conditions
----@param defaults? table values to create/update with
----@param columns? string[] columns to return
----@return Record, boolean
+---原子版 update-or-create：单条 `INSERT ... ON CONFLICT (params列) DO UPDATE
+---SET defaults列 = EXCLUDED.defaults列 RETURNING ..., (xmax = 0)`。
+---存在则用 defaults 更新（并刷新 auto_now），不存在则用 params+defaults 创建。
+---与 get_or_create 相同的唯一约束要求；defaults 为空时退化为 get_or_create。
+---校验走 validate_update 语义（只校验提供的值，不回填默认、不查 required），
+---与旧实现「已存在只验 defaults」的行为对齐；skip_validate() 可跳过。
+---@param params table 查找条件（必须命中唯一约束）
+---@param defaults? table 更新/创建的值
+---@param columns? string[] 返回列，默认 '*'
+---@return Record, boolean created
 function Sql:update_or_create(params, defaults, columns)
+  assert(next(params) ~= nil, "params can't be empty for update_or_create")
   defaults = defaults or {}
-  local existing = self.model:create_sql():where(params):limit(2):exec()
-  if #existing > 1 then
-    error("multiple records matched for update_or_create")
+  if next(defaults) == nil then
+    -- 与主路径的默认返回列（'*'）保持一致
+    return self:get_or_create(params, nil, columns or '*')
   end
-  if #existing == 1 then
-    local record = existing[1]
-    if next(defaults) ~= nil then
-      self.model:create_sql():where(params):update(defaults):exec()
-      for k, v in pairs(defaults) do
-        record[k] = v
-      end
-    end
-    return record, false
-  else
-    local ins = self.model:create_sql():insert(dict(params, defaults)):returning(columns or '*'):execr()
-    return ins[1], true
+  local row = dict(params, defaults)
+  local row_columns = get_keys(row)
+  local key_columns = get_keys(params)
+  if not self._skip_validate then
+    row = self.model:validate_update(row, row_columns)
   end
+  row = self.model:_prepare_db_rows(row, row_columns)
+  Sql._base_upsert(self, row, key_columns, row_columns)
+  self:returning(columns or '*')
+  self:_base_returning("(xmax = 0) AS __is_inserted__")
+  local records = self:execr()
+  if #records ~= 1 then
+    error("update_or_create expected 1 record, got " .. #records)
+  end
+  local ins = records[1]
+  ---@diagnostic disable-next-line: invisible
+  local created = ins.__is_inserted__
+  ---@diagnostic disable-next-line: invisible
+  ins.__is_inserted__ = nil
+  return ins, created
 end
 
 ---@return self

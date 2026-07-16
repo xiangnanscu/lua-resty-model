@@ -1405,6 +1405,32 @@ local function main()
       assert.are.same(r.tagline, 'after')
       Blog:delete { name = 'uoc-up' }:exec()
     end)
+
+    it("update_or_create: defaults 为空 → 退化为 get_or_create", function()
+      local r, created = Blog:update_or_create({ name = 'First Blog' })
+      assert.is_false(created)
+      assert.are.same(r.tagline, 'Welcome to my blog')
+    end)
+
+    it("get_or_create: params 列无唯一约束 → 报错 (原子版前提)", function()
+      -- tagline 上没有 unique 约束，ON CONFLICT 无法锚定
+      local ok, err = pcall(function()
+        return Blog:get_or_create({ tagline = 'no unique here' })
+      end)
+      assert.is_false(ok)
+      assert.is_truthy(tostring(err):lower():find('no unique', 1, true),
+        'err 应为 PG 的 no unique constraint 报错; err=' .. tostring(err))
+    end)
+
+    it("get_or_create: 重复调用幂等且 created 标志准确 (xmax 判定)", function()
+      local r1, c1 = Blog:get_or_create({ name = 'goc-x' }, { tagline = 't1' })
+      local r2, c2 = Blog:get_or_create({ name = 'goc-x' }, { tagline = 'never' })
+      assert.is_true(c1)
+      assert.is_false(c2)
+      assert.are.same(r1.id, r2.id)
+      assert.are.same(r2.tagline, 't1', '已存在时 defaults 不应覆盖')
+      Blog:delete { name = 'goc-x' }:exec()
+    end)
   end)
 
   -------------------------------------------------------------------
