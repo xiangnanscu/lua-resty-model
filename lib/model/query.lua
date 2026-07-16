@@ -60,6 +60,14 @@ local function get_env()
   return ENV
 end
 
+---布尔选项不能用 `a or b`（false 会被吞掉，导致 options 里的 false 无法覆盖 env）
+local function coalesce(a, b)
+  if a ~= nil then
+    return a
+  end
+  return b
+end
+
 ---@param options QueryOpts
 ---@return ConnOpts
 local function get_connect_table(options)
@@ -70,9 +78,9 @@ local function get_connect_table(options)
     database = options.DATABASE or env.PGDATABASE or "postgres",
     user = options.USER or env.PGUSER or "postgres",
     password = options.PASSWORD or env.PGPASSWORD,
-    ssl = options.SSL or env.PG_SSL == "true" or false,
-    ssl_verify = options.SSL_VERIFY or env.PG_SSL_VERIFY or nil,
-    ssl_required = options.SSL_REQUIRED or env.PG_SSL_REQUIRED or nil,
+    ssl = coalesce(options.SSL, env.PG_SSL == "true"),
+    ssl_verify = coalesce(options.SSL_VERIFY, env.PG_SSL_VERIFY),
+    ssl_required = coalesce(options.SSL_REQUIRED, env.PG_SSL_REQUIRED),
     pool_name = options.POOL_NAME or env.PG_POOL_NAME or nil,
     pool_size = options.POOL_SIZE or tonumber(env.PG_POOL_SIZE) or 100,
     connect_timeout = options.CONNECT_TIMEOUT or tonumber(env.PG_CONNECT_TIMEOUT) or 10000,
@@ -122,10 +130,6 @@ end
 ---@field debug fun(statement: string): nil
 local ConnProxy = {}
 ConnProxy.__index = ConnProxy
-
-ConnProxy.__call = function(self, attrs)
-  return self:new(attrs or {})
-end
 
 function ConnProxy:new(attrs)
   return setmetatable(attrs or {}, self)
@@ -304,6 +308,8 @@ local function create_query(options, connect_table)
     if not committed then
       error(commit_err, 0)
     end
+    -- 注意：只透传 callback 的前 3 个返回值（xpcall 捕获处即已截断），
+    -- 需要更多返回值请打包成 table
     return cb_res, cb_err, cb_status
   end
 

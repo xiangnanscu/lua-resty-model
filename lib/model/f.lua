@@ -1,7 +1,6 @@
 -- https://docs.djangoproject.com/en/dev/ref/models/expressions/#django.db.models.F
 ---@class FClass
 ---@field column string
----@field resolved_column string
 ---@field operator string
 ---@field left FClass
 ---@field right FClass

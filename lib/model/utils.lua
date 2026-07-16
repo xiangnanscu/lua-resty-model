@@ -449,104 +449,67 @@ local function extract_column_names(sql_text)
     local col = extract_column_name(part)
     if col then
       insert(columns, col)
+    else
+      -- 静默跳过会让推断列数 < 实际列数，最终在 DB 层报
+      -- "INSERT has more expressions than target columns"，难定位；
+      -- 在此提前报错并给出解法
+      error(format(
+        "can't infer a column name from select fragment '%s' (in %q); pass explicit columns instead",
+        part, sql_text))
     end
   end
   return columns
 end
 
----@param value DBValue
----@return string
-local function as_literal(value)
-  local value_type = type(value)
-  if "string" == value_type then
-    return "'" .. (value:gsub("'", "''")) .. "'"
-  elseif "number" == value_type then
-    return tostring(value)
-  elseif "boolean" == value_type then
-    return value and "TRUE" or "FALSE"
-  elseif "function" == value_type then
-    return value()
-  elseif "table" == value_type then
-    if value.__SQL_BUILDER__ then
-      return "(" .. value:statement() .. ")"
-    elseif value[1] ~= nil then
-      local result = {}
-      for i, v in ipairs(value) do
-        result[i] = as_literal(v)
+---构造值转 SQL 文本的函数
+---@param quote_string boolean 字符串是否加引号并转义（literal），否则原样当 token
+---@param add_brackets boolean 数组值是否包一层括号
+---@return fun(value: DBValue): string
+local function _escape_factory(quote_string, add_brackets)
+  local function escape(value)
+    local value_type = type(value)
+    if "string" == value_type then
+      if quote_string then
+        return "'" .. (value:gsub("'", "''")) .. "'"
+      else
+        return value
       end
-      return "(" .. concat(result, ", ") .. ")"
+    elseif "number" == value_type then
+      return tostring(value)
+    elseif "boolean" == value_type then
+      return value and "TRUE" or "FALSE"
+    elseif "function" == value_type then
+      return value()
+    elseif "table" == value_type then
+      if value.__SQL_BUILDER__ then
+        return "(" .. value:statement() .. ")"
+      elseif value[1] ~= nil then
+        local result = {}
+        for i, v in ipairs(value) do
+          result[i] = escape(v)
+        end
+        local token = concat(result, ", ")
+        if add_brackets then
+          return "(" .. token .. ")"
+        else
+          return token
+        end
+      else
+        error("empty table is not allowed")
+      end
+    elseif NULL == value then
+      return 'NULL'
     else
-      error("empty table is not allowed")
+      error(format("don't know how to escape value: %s (%s)", value, value_type))
     end
-  elseif NULL == value then
-    return 'NULL'
-  else
-    error(format("don't know how to escape value: %s (%s)", value, value_type))
   end
+
+  return escape
 end
 
----@param value DBValue
----@return string
-local function as_token(value)
-  local value_type = type(value)
-  if "string" == value_type then
-    return value
-  elseif "number" == value_type then
-    return tostring(value)
-  elseif "boolean" == value_type then
-    return value and "TRUE" or "FALSE"
-  elseif "function" == value_type then
-    return value()
-  elseif "table" == value_type then
-    if value.__SQL_BUILDER__ then
-      return "(" .. value:statement() .. ")"
-    elseif value[1] ~= nil then
-      local result = {}
-      for i, v in ipairs(value) do
-        result[i] = as_token(v)
-      end
-      return concat(result, ", ")
-    else
-      error("empty table is not allowed")
-    end
-  elseif NULL == value then
-    return 'NULL'
-  else
-    error(format("don't know how to escape value: %s (%s)", value, value_type))
-  end
-end
-
--- local as_literal_without_brackets = _escape_factory(true, false)
----@param value DBValue
----@return string
-local function as_literal_without_brackets(value)
-  local value_type = type(value)
-  if "string" == value_type then
-    return "'" .. (value:gsub("'", "''")) .. "'"
-  elseif "number" == value_type then
-    return tostring(value)
-  elseif "boolean" == value_type then
-    return value and "TRUE" or "FALSE"
-  elseif "function" == value_type then
-    return value()
-  elseif "table" == value_type then
-    if value.__SQL_BUILDER__ then
-      return "(" .. value:statement() .. ")"
-    elseif value[1] ~= nil then
-      local result = {}
-      for i, v in ipairs(value) do
-        result[i] = as_literal_without_brackets(v)
-      end
-      return concat(result, ", ")
-    else
-      error("empty table is not allowed")
-    end
-  elseif NULL == value then
-    return 'NULL'
-  else
-    error(format("don't know how to escape value: %s (%s)", value, value_type))
-  end
-end
+local as_literal = _escape_factory(true, true)
+local as_token = _escape_factory(false, false)
+local as_literal_without_brackets = _escape_factory(true, false)
 
 local function escape_like_value(val)
   val = tostring(val)
@@ -615,6 +578,10 @@ local function get_join_table_condition(opts, key)
   local froms
   if opts[key] and opts[key] ~= "" then
     froms = { opts[key] }
+    -- join_args 首项与 froms 以空格拼接，与显式 from/using 混用会缺逗号
+    -- 生成非法 SQL（FROM a b），提前拦截
+    assert(not (opts.join_args and opts.join_args[1]),
+      "can't mix explicit from/using with join-derived tables in UPDATE/DELETE")
   else
     froms = {}
   end
@@ -668,7 +635,7 @@ local function assemble_sql(opts)
     local returning = opts.returning and " RETURNING " .. opts.returning or ""
     local table_name
     if opts.as then
-      table_name = opts.table_name .. ' ' .. opts.as
+      table_name = opts.table_name .. ' AS ' .. opts.as
     else
       table_name = opts.table_name
     end
@@ -692,7 +659,7 @@ local function assemble_sql(opts)
     local returning = opts.returning and " RETURNING " .. opts.returning or ""
     local table_name
     if opts.as then
-      table_name = opts.table_name .. ' ' .. opts.as
+      table_name = opts.table_name .. ' AS ' .. opts.as
     else
       table_name = opts.table_name
     end

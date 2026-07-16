@@ -144,10 +144,10 @@ local EXPR_OPERATORS = {
     return format("%s::time = %s", key, as_literal(value))
   end,
   regex = function(key, value)
-    return format("%s ~ '%s'", key, value:gsub("'", "''"))
+    return format("%s ~ '%s'", key, (tostring(value):gsub("'", "''")))
   end,
   iregex = function(key, value)
-    return format("%s ~* '%s'", key, value:gsub("'", "''"))
+    return format("%s ~* '%s'", key, (tostring(value):gsub("'", "''")))
   end,
   null = function(key, value)
     if value then
@@ -1891,7 +1891,15 @@ function Sql:_parse_column(key, context)
     end
     local quoted_col = prefix .. '.' .. smart_quote(column)
     if #json_keys == 1 then
-      final_column = format("%s %s %s", quoted_col, arrow_one, as_literal(json_keys[1]))
+      local k = json_keys[1]
+      -- Django 对齐：单段整数样式按数组下标（-> 0 / ->> 0），字符串键才用
+      -- 文本（-> 'k'）；对象的 "0" 这类数字字符串键与 Django 一样不支持直查。
+      -- 多段路径无须处理：#> 的 text[] 在数组语境自动把数字串当下标。
+      if k:match("^%-?%d+$") then
+        final_column = format("%s %s %s", quoted_col, arrow_one, k)
+      else
+        final_column = format("%s %s %s", quoted_col, arrow_one, as_literal(k))
+      end
     elseif #json_keys > 1 then
       final_column = format("%s %s ARRAY[%s]", quoted_col, arrow_many,
         as_literal_without_brackets(json_keys))
@@ -2341,8 +2349,21 @@ function Sql:group(a, ...)
   else
     self._group = self._group .. ", " .. s
   end
-  --** by default, group by columns are selected
-  self:select(a, ...)
+  --** by default, group by columns are selected (dedup against existing select)
+  if not self._select then
+    self:select(a, ...)
+  else
+    -- 用 select 语境重新生成 token（保留 AS 别名），只追加尚未选择的列
+    local select_token = self:_get_column_tokens("select", a, ...)
+    local haystack = ", " .. self._select .. ","
+    for _, token in ipairs(Utils.split_string(select_token, ", ")) do
+      local needle = ", " .. token .. ","
+      if not haystack:find(needle, 1, true) then
+        self._select = self._select .. ", " .. token
+        haystack = haystack .. " " .. token .. ","
+      end
+    end
+  end
   return self
 end
 
@@ -2674,7 +2695,7 @@ function Sql:annotate(kwargs)
       local func_token = format("%s(%s)", func.name, prefixed_column)
       -- self._annotate[alias] = { func_token = func_token, func = func, reversed = reversed }
       self._annotate[alias] = func_token
-      self:_base_select(format("%s AS %s", func_token, alias))
+      self:_base_select(format("%s AS %s", func_token, smart_quote(alias)))
     elseif func.__IS_FIELD_BUILDER__ then
       local exp_token = self:_resolve_field_builder(func)
       self._annotate[alias] = exp_token
@@ -2682,7 +2703,7 @@ function Sql:annotate(kwargs)
       --   self._computed_columns = {}
       -- end
       -- self._computed_columns[alias] = exp_token
-      self:_base_select(format("%s AS %s", exp_token, alias))
+      self:_base_select(format("%s AS %s", exp_token, smart_quote(alias)))
     end
   end
   return self
@@ -2720,10 +2741,10 @@ function Sql:aggregate(kwargs)
     end
     if func.__IS_FUNCTION__ then
       local prefixed_column = self:_parse_column(func.column, "aggregate")
-      select_parts[#select_parts + 1] = format("%s(%s) AS %s", func.name, prefixed_column, alias)
+      select_parts[#select_parts + 1] = format("%s(%s) AS %s", func.name, prefixed_column, smart_quote(alias))
     elseif func.__IS_FIELD_BUILDER__ then
       local exp_token = self:_resolve_field_builder(func)
-      select_parts[#select_parts + 1] = format("%s AS %s", exp_token, alias)
+      select_parts[#select_parts + 1] = format("%s AS %s", exp_token, smart_quote(alias))
     else
       error("aggregate values must be Func or F instances")
     end
@@ -3623,10 +3644,16 @@ end
 ---@param data selectArgs
 ---@return table
 ---@return number? num_queries
+local terminal_args = { flat = true, get = true, try_get = true, exists = true }
+
 function Sql:meta_query(data)
   for i, arg_name in ipairs(select_args) do
     if data[arg_name] ~= nil then
       self = self[arg_name](self, unpack(ensure_array(data[arg_name])))
+      if terminal_args[arg_name] then
+        -- terminal 方法已执行并返回结果（非 builder），不能再链式调用
+        break
+      end
     end
   end
   if data.get or data.try_get or data.flat or data.exists then

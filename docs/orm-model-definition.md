@@ -145,6 +145,11 @@ local Store = Model {
 | `auto_now_add` | 创建时自动设置当前时间     |
 | `auto_now`     | 每次更新时自动设置当前时间 |
 
+> ⚠️ **时区依赖：** `auto_now`/`auto_now_add` 写入的是 `ngx.localtime()`（服务器本地时间、
+> 不带时区偏移的字符串），而 `timezone = true`（默认）时 DDL 生成的是 `timestamptz` 列——
+> PG 会按**数据库会话时区**解释这个字符串。请保证 nginx 所在机器与 PG 的 `timezone`
+> 配置一致，否则写入的时间会整体偏移。
+
 #### text
 
 ```lua
@@ -262,6 +267,9 @@ local Author = Model:create_model {
 | `max_rows`       | 最大行数      |
 | `names`          | 校验字段列表  |
 | `cascade_column` | 级联列名      |
+
+> `max_rows` 只有**显式声明**时才在后端校验（超行数报错）；不声明时类默认值 1
+> 仅作为前端展示提示，后端不限制行数。
 
 ---
 

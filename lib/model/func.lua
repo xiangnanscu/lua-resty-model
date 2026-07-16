@@ -5,7 +5,11 @@ Func.__call = function(self, column)
   if type(column) == 'string' then
     return self:new { column = column }
   else
-    return self:new { column = column[1], filter = column.filter }
+    if column.filter ~= nil then
+      -- 与其静默丢弃 filter 生成语义错误的 SQL，不如显式拒绝
+      error("Func filter is not implemented yet (FILTER (WHERE ...) is never generated); remove it")
+    end
+    return self:new { column = column[1] }
   end
 end
 function Func:class(args)

@@ -422,6 +422,71 @@ local function main()
     end)
 
     -------------------------------------------------------------------
+    it('REVIEW-D12: 字段名与 Model/Sql 方法同名应报错', function()
+      -- 修复前 check_field_name 的 self 是 normalize 半成品表，
+      -- execr/group_by/count 等方法名可当字段名，随后被 proxy 方法遮蔽
+      for _, fname in ipairs({ 'execr', 'group_by', 'count', 'fields' }) do
+        local ok, err = pcall(function()
+          return Model:create_model {
+            table_name = 'review_cfn_' .. fname,
+            fields = { { fname, maxlength = 10 } }
+          }
+        end)
+        assert.is_false(ok, "字段名 '" .. fname .. "' 应被拒绝")
+        assert.is_truthy(tostring(err):find('conflicts', 1, true),
+          'err 应指明冲突; err=' .. tostring(err))
+      end
+      -- 常规字段名不受影响
+      assert.has_no_error(function()
+        return Model:create_model {
+          table_name = 'review_cfn_ok',
+          fields = { { 'status', maxlength = 10 }, { 'ctime2', type = 'datetime' } }
+        }
+      end)
+    end)
+
+    it('REVIEW-D13: 单段整数样式 JSON 路径按数组下标 (Django 对齐)', function()
+      local sql = Author:where { payload__0__has_key = 'x' }:statement()
+      assert.is_truthy(sql:find('-> 0', 1, true),
+        "整数段应生成数组下标 -> 0; sql=" .. sql)
+      assert.is_falsy(sql:find("-> '0'", 1, true),
+        "不应再生成文本键 -> '0'; sql=" .. sql)
+      -- 字符串键不受影响
+      local sql2 = Author:where { payload__status = 'active' }:statement()
+      assert.is_truthy(sql2:find("-> 'status'", 1, true), 'sql=' .. sql2)
+    end)
+
+    it('REVIEW-D14: annotate 别名为 PG 关键字时自动加引号', function()
+      local sql = Entry:annotate { ['order'] = Count('id') }:group_by { 'blog_id' }:statement()
+      assert.is_truthy(sql:find('AS "order"', 1, true),
+        '关键字别名应被引用; sql=' .. sql)
+    end)
+
+    it('REVIEW-D15: group 自动 select 不重复追加已选列', function()
+      local sql = Entry:select('blog_id'):group('blog_id'):statement()
+      local first = sql:find('T.blog_id', 1, true)
+      local second = sql:find('T.blog_id', first + 1, true)
+      -- 第二次出现应只在 GROUP BY 里，SELECT 里不得重复
+      local select_part = sql:match('^SELECT (.-) FROM')
+      assert.are.same(select_part, 'T.blog_id',
+        'SELECT 不应重复列; sql=' .. sql)
+      assert.is_truthy(second, 'GROUP BY 里应有该列; sql=' .. sql)
+    end)
+
+    it('REVIEW-D16: 无法推断子查询列名时提前报错', function()
+      -- upper(name) 是函数调用片段，extract_column_name 无法反推列名；
+      -- 修复前静默丢列 → DB 层报"列数不匹配"，修复后库层提前报错并给出解法
+      local sub = Blog:select('name'):select(function() return 'upper(name)' end)
+      local ok, err = pcall(function()
+        return Blog:insert(sub)
+      end)
+      assert.is_false(ok, '含函数表达式的子查询无法推断列名，应报错')
+      err = tostring(err)
+      assert.is_truthy(err:find('columns', 1, true),
+        'err 应提示显式传 columns; err=' .. err)
+    end)
+
+    -------------------------------------------------------------------
     it('REVIEW-D10: TableField 显式 max_rows 才校验行数', function()
       local Sub = Model:create_model {
         table_name = 'review_sub',

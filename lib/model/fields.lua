@@ -48,25 +48,6 @@ end
 ---| AliossImageListField
 
 
-local INHERIT_METHODS = {
-  new = true,
-  __add = true,
-  __sub = true,
-  __mul = true,
-  __div = true,
-  __mod = true,
-  __pow = true,
-  __unm = true,
-  __concat = true,
-  __len = true,
-  __eq = true,
-  __lt = true,
-  __le = true,
-  __index = true,
-  __newindex = true,
-  __call = true,
-  __tostring = true
-}
 local function class_new(cls, self)
   return setmetatable(self or {}, cls)
 end
@@ -88,17 +69,14 @@ end
 ---@return T
 local function class(cls, parent)
   if parent then
+    -- 元方法必须是子类的直接键（Lua 元方法查找不走 __index 链），
+    -- pairs 拷贝父类全部直接键即已覆盖——类链的元方法始终以直接键传递
     for key, value in pairs(parent) do
       if cls[key] == nil then
         cls[key] = value
       end
     end
     setmetatable(cls, parent)
-    for method, _ in pairs(INHERIT_METHODS) do
-      if cls[method] == nil and parent[method] ~= nil then
-        cls[method] = parent[method]
-      end
-    end
   end
   cls.new = cls.new or class_new
   cls.init = cls.init or class__init
@@ -367,8 +345,6 @@ local base_option_names = {
 ---@overload fun(options: table): BaseField
 ---@operator add(BaseField): string
 ---@operator sub(BaseField): string
----@diagnostic disable-next-line: unknown-operator
----@operator eq(BaseField): string
 ---@field private __call function
 ---@field private __is_field_class__ true
 ---@field validators function[]

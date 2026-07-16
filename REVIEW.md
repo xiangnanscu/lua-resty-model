@@ -24,22 +24,51 @@
 >   已存在时的 no-op 更新会产生一次行版本写入。docs 两段已重写，spec 15 节补 4 条用例。
 > - §2.4（JSON 数组下标）、§2.5（get 的 0/2+ 行均返回 false）维持原设计，仅记录。
 > - §5.5 的 `get_keys` 递归丢参在第一轮 B10.2 已修（去重种子版，回归 `REVIEW-B10b`）。
+>
+> **第三轮处理（2026-07-16 续）**，全量 258/258 通过：
+> - §2.4 **已修（推翻原"仅记录"）**：单段整数样式 JSON 路径按 Django 语义走数组下标
+>   （`payload__0` → `-> 0`）；多段 `#>` 的 text[] 本就自动支持数组下标无须改。
+>   代价与 Django 相同：对象的 `"0"` 字符串数字键不再可直查（spec 用例已改写注明，回归 `REVIEW-D13`）。
+> - §3.1+§3.2 **已修**：proxy 方法 wrapper 缓存（独立 cache 表 + `__newindex` 失效同步；
+>   不能 rawset 进 proxy 自身，否则后续同名赋值绕开 `__newindex` 造成 proxy/ModelClass 分裂）。
+> - §5.8 **已修**：`check_field_name` 显式对 Model/Sql 方法 + 内部机制属性黑名单检查
+>   （探针证实原 `self[name]` 查的是 normalize 半成品表，`execr/group_by/count` 全放行；回归 `REVIEW-D12`）。
+>   label/admin 等"软冲突"属性有意不拦（存量字段名常用）。
+> - §3.8 **已修**：annotate/alias/aggregate 的 AS 别名统一 `smart_quote`（回归 `REVIEW-D14`）。
+> - §3.5 **已修**：`group()` 自动 select 按 select 语境 token 去重（回归 `REVIEW-D15`）。
+> - §5.5 **已修**：`extract_column_name` 推断失败即报错并提示显式传 columns（回归 `REVIEW-D16`）；
+>   `as_literal` 三胞胎工厂化；`get_join_table_condition` 混用显式 from + join 表加防御断言。
+> - §5.4 **已修**：`SSL/SSL_VERIFY/SSL_REQUIRED` 用 coalesce（`or` 吞 false 的问题）；
+>   删 `ConnProxy.__call` 迷惑代码；`transaction` 截断 >3 返回值加注释。
+> - §5.9 **已修**：`regex/iregex` 先 `tostring`；`meta_query` terminal 方法后 break。
+> - §3.4 **已修**：`class()` 的 INHERIT_METHODS 死循环删除（元方法以直接键沿类链传递，pairs 拷贝已覆盖）。
+> - §3.6/§3.7 **已修**：assemble_sql 的 UPDATE/DELETE 别名补 `AS`；`valid_date` 死分支删除（实际位于 validator.lua，§3.7 原归属 utils 有误）。
+> - §5.2/§5.7 **已修**：`resolved_column`、`__eq` 死注解删除。
+> - §5.3 **半修**：`Func` 的 `filter` 参数从静默丢弃改为显式报 not implemented；`COUNT(DISTINCT)` 仍未支持。
+> - §5.7 docs 补 DatetimeField 时区依赖说明；§2.10 docs 补 max_rows"显式才校验"说明。
+> - **决定不动**：§4 validate 三态协议（用户拍板）；§2.5（get 语义）；`_parse_column` 拆模块（未立项）。
+> - **新发现（暂不动）**：`check_field_name` 里 `Sql.EXPR_OPERATORS[name:upper()]` 检查因大小写
+>   永不命中（键是小写）——但真启用会禁掉 `date/year/month/time/contains` 等常用字段名，
+>   且 `_parse_column` 对"字段 vs 操作符"本有确定的优先级规则（首段字段优先、JSON 路径内操作符优先，
+>   与 Django 一致），风险大于收益，维持现状并记录。
+> - **B8 勘误**：第三条（`date` 混搭分隔符 `2010-01/02`）当时有意未修——分隔符回引用会杀掉
+>   `X年X月X日` 支持（年/月/日是两个不同分隔符），属知情取舍，非遗漏。
 
 ---
 
-## 0. TL;DR
+## 0. TL;DR（下表为审查时点快照，**均已修复**，状态详见顶部注记）
 
-| 级别 | 问题 | 位置 |
-|------|------|------|
-| 🔴 严重 | 跨 model 事务失效：`A:transaction` 内经 `B:xxx` 的写入不参与事务，回滚后仍落库 | query.lua + init.lua |
-| 🟠 高 | `count()` 不清除已有 `_select`/`_order`，`select(...):count()` 直接 SQL 报错 | sql.lua:3007 |
-| 🟠 高 | `__year` 查询用 `BETWEEN '01-01' AND '12-31'`，timestamp 列漏掉 12-31 当天非零点数据 | sql.lua:101 |
-| 🟠 高 | 自引用外键（`reference='self'`）validator 闭包捕获了 setup 前的 `reference_column=nil`，传表值校验必错 | fields.lua:1315 |
-| 🟠 高 | 同一 model 两个 FK 指向同一目标且都用默认 `related_query_name` 时静默覆盖，反向查询解析到错误的 FK | init.lua:678 |
-| 🟡 中 | SQL 出错时连接不 release（非事务路径），连接池被慢性掏空 | query.lua:244 |
-| 🟡 中 | `Validator.time/datetime` 允许 60 分/60 秒；datetime 不接受负时区偏移 | validator.lua |
-| 🟡 中 | `Sql:copy()` 会浅克隆 `self.model`，破坏 `fk.reference == self.model` 之类的身份比较 | sql.lua:2186 |
-| ⚪ 低 | 一批潜伏 bug 与设计取舍，详见 §2/§3 |
+| 级别 | 问题 | 位置 | 状态 |
+|------|------|------|------|
+| 🔴 严重 | 跨 model 事务失效：`A:transaction` 内经 `B:xxx` 的写入不参与事务，回滚后仍落库 | query.lua + init.lua | ✅ 已修 |
+| 🟠 高 | `count()` 不清除已有 `_select`/`_order`，`select(...):count()` 直接 SQL 报错 | sql.lua:3007 | ✅ 已修 |
+| 🟠 高 | `__year` 查询用 `BETWEEN '01-01' AND '12-31'`，timestamp 列漏掉 12-31 当天非零点数据 | sql.lua:101 | ✅ 已修 |
+| 🟠 高 | 自引用外键（`reference='self'`）validator 闭包捕获了 setup 前的 `reference_column=nil`，传表值校验必错 | fields.lua:1315 | ✅ 已修 |
+| 🟠 高 | 同一 model 两个 FK 指向同一目标且都用默认 `related_query_name` 时静默覆盖，反向查询解析到错误的 FK | init.lua:678 | ✅ 已修 |
+| 🟡 中 | SQL 出错时连接不 release（非事务路径），连接池被慢性掏空 | query.lua:244 | ✅ 已修 |
+| 🟡 中 | `Validator.time/datetime` 允许 60 分/60 秒；datetime 不接受负时区偏移 | validator.lua | ✅ 已修 |
+| 🟡 中 | `Sql:copy()` 会浅克隆 `self.model`，破坏 `fk.reference == self.model` 之类的身份比较 | sql.lua:2186 | ✅ 已修 |
+| ⚪ 低 | 一批潜伏 bug 与设计取舍，详见 §2/§3 | | ✅ 已修/已记录 |
 
 ---
 
@@ -327,11 +356,17 @@ end
 
 ---
 
-## 6. 建议的修复优先级
+## 6. 建议的修复优先级（已全部执行完毕，仅存档）
 
-1. **B1 事务**（数据正确性，修法见 §1.B1）→ 补跨 model 事务 spec
-2. **B3 `__year`** + **B8 time/datetime 边界**（静默错误数据）
-3. **B2 count**、**B7 连接释放**（稳定性）
-4. **B4/B5/B6 外键反向体系**（模型定义期就能 fail loud 的都改成断言）
-5. **B9 copy、B10 潜伏组**（顺手修）
-6. §3 优化项按需，proxy 闭包缓存收益最大
+1. ~~**B1 事务**（数据正确性，修法见 §1.B1）→ 补跨 model 事务 spec~~ ✅
+2. ~~**B3 `__year`** + **B8 time/datetime 边界**（静默错误数据）~~ ✅
+3. ~~**B2 count**、**B7 连接释放**（稳定性）~~ ✅
+4. ~~**B4/B5/B6 外键反向体系**（模型定义期就能 fail loud 的都改成断言）~~ ✅
+5. ~~**B9 copy、B10 潜伏组**（顺手修）~~ ✅
+6. ~~§3 优化项按需，proxy 闭包缓存收益最大~~ ✅
+
+仍开放的事项（截至 2026-07-16）：
+- `COUNT(DISTINCT col)` / `Func` 的 `FILTER (WHERE ...)` 功能缺口（后者现已显式报 not implemented）
+- `_parse_column` 拆独立模块（纯重构，未立项）
+- validate 三态协议（用户拍板不动）
+- `check_field_name` 的 EXPR_OPERATORS 大小写失效检查（见顶部注记「新发现」，权衡后维持现状）

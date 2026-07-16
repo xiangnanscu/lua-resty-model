@@ -1763,27 +1763,30 @@ local function main()
       assert.is_true(#r >= 1)
     end)
 
-    -- 注：resume 是 jsonb 数组。ORM 在数字路径段上仍用 text key (`-> '0'`)，
-    -- PG 对数组应使用 int (`-> 0`) 才能索引。这里只验证语句可正确发送、不抛错。
-    it("resume 数字下标 has_key 能正确执行 (语义限制见注)", function()
-      assert.has_no_error(function()
-        Author:where { resume__0__has_key = 'start_date' }:exec()
-      end)
+    -- 注：数字路径段按 Django 语义处理——单段整数样式走数组下标（-> 0），
+    -- 多段走 #>（text[] 路径在数组语境自动把数字串当下标）。
+    it("resume 数字下标 has_key 真正命中数组元素 (Django 对齐)", function()
+      local r = Author:where { resume__0__has_key = 'start_date' }:exec()
+      assert.is_true(#r >= 1, "resume[0] 含 start_date 键，应命中")
+      local r2 = Author:where { resume__0__has_key = 'no_such_key' }:exec()
+      assert.are.same(#r2, 0)
     end)
 
-    it("resume 数字下标 contains 能正确执行", function()
-      assert.has_no_error(function()
-        Author:where { resume__0__contains = { start_date = '2025-01-01' } }:exec()
-      end)
+    it("resume 数字下标 contains 真正命中数组元素", function()
+      local r = Author:where { resume__0__contains = { start_date = '2025-01-01' } }:exec()
+      assert.is_true(#r >= 1, "resume[0].start_date = 2025-01-01，应命中")
     end)
 
-    it("payload 用对象的字符串数字键时 has_key 命中 (绕过 array 限制)", function()
+    it("对象的字符串数字键不支持直查 (Django 同款取舍)", function()
+      -- payload = { ['0'] = {...} } 这种对象数字键：payload__0 现在解析为
+      -- 数组下标 (payload -> 0)，对 jsonb 对象取下标得 NULL → 不命中。
+      -- Django 的 KeyTransform 对整数样式 key 同样按数组下标处理。
       Author:insert {
         name = 'jsonNum', email = 'n@a.com', age = 22,
         payload = { ['0'] = { x = 1 }, ['2'] = { score = 99 } },
       }:exec()
       local r = Author:where { payload__0__has_key = 'x' }:exec()
-      assert.is_true(#r >= 1)
+      assert.are.same(#r, 0)
       Author:delete { name = 'jsonNum' }:exec()
     end)
 

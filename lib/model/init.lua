@@ -196,28 +196,42 @@ end
 ---@return Model
 local function create_model_proxy(ModelClass)
   local proxy = {}
+  -- wrapper 闭包缓存：方法集是静态的，没必要每次属性访问都新分配闭包
+  -- （Blog:where / Blog:get 是全库最热路径）。缓存放独立表而非 proxy 自身：
+  -- rawset 进 proxy 会让后续同名赋值绕开 __newindex，proxy 与 ModelClass 分裂
+  local method_cache = {}
   local function __index(_, k)
+    local cached = method_cache[k]
+    if cached ~= nil then
+      return cached
+    end
     local sql_k = Sql[k]
     if type(sql_k) == 'function' then
-      return function(_, ...)
+      local method = function(_, ...)
         return sql_k(ModelClass:create_sql(), ...)
       end
+      method_cache[k] = method
+      return method
     end
     local model_k = ModelClass[k]
     if type(model_k) == 'function' then
-      return function(cls, ...)
+      local method = function(cls, ...)
         if cls == proxy then
           return model_k(ModelClass, ...)
         else
           error(format("Invalid call to model proxy method %s: the first argument must be itself.", k))
         end
       end
+      method_cache[k] = method
+      return method
     else
       return model_k
     end
   end
   local function __newindex(t, k, v)
     rawset(ModelClass, k, v)
+    -- 方法被重定义时使旧 wrapper 失效
+    method_cache[k] = nil
   end
   local function __call(t, ...)
     return ModelClass:create_record(...)
@@ -411,6 +425,24 @@ function Model:is_model_class(model)
   return type(model) == 'table' and model.__IS_MODEL_CLASS__
 end
 
+-- 字段名不得占用的内部机制属性（实例级，Model/Sql 表上查不到）。
+-- label/admin/preload 等"软冲突"属性不拦：字段名常用，且不破坏内部机制，
+-- 仅在 proxy 属性访问时遮蔽字段对象
+local RESERVED_FIELD_NAMES = {
+  fields = true,
+  field_names = true,
+  names = true,
+  detail_names = true,
+  foreignkey_fields = true,
+  reversed_fields = true,
+  RecordClass = true,
+  table_name = true,
+  class_name = true,
+  primary_key = true,
+  unique_together = true,
+  query = true,
+}
+
 ---@param name string
 function Model:check_field_name(name)
   check_conflicts(name);
@@ -418,8 +450,15 @@ function Model:check_field_name(name)
     format("%s is a postgresql reserved word, can't be used as a table or column name", name))
   assert(not Sql.EXPR_OPERATORS[name:upper()],
     format("%s is a sql expression operator, can't be used as a table or column name", name))
-  if (self[name] ~= nil and name ~= 'class') then
-    error(format("field name '%s' conflicts with model class attributes", name))
+  -- 注意：normalize 阶段以静态调用传入的 self 是半成品 opts 表，
+  -- self[name] 查不到类属性——必须显式对 Model/Sql 的方法与内部属性检查，
+  -- 否则字段名 execr/group_by/count 之类会被 proxy 的同名方法遮蔽
+  if name ~= 'class' then
+    if RESERVED_FIELD_NAMES[name]
+        or type(Model[name]) == 'function'
+        or type(Sql[name]) == 'function' then
+      error(format("field name '%s' conflicts with model class attributes", name))
+    end
   end
 end
 

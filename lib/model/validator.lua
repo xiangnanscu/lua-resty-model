@@ -264,10 +264,8 @@ local function valid_date(year, month, day)
       -- else 28 days is the max
       return nil, "普通年份2月最多28天"
     end
-  elseif day > 31 then
-    -- all other months can have at most 31 days
-    return nil, string_format("%s月只有31天", month)
   end
+  -- 注：day > 31 的分支不必再写——函数开头已统一拦截
   return year, month, day
 end
 
@@ -391,6 +389,8 @@ local function encode_as_array(v)
   if type(v) ~= "table" then
     return nil, "value must be a table"
   else
+    -- 注意：会覆盖 v 已有的 metatable（如 Array）——当前调用链里
+    -- 该值只用于 cjson 编码，覆盖无害
     return setmetatable(v, ENCODE_AS_ARRAY)
   end
 end
