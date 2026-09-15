@@ -13,6 +13,97 @@ Model 是一个基于 Lua 的 PostgreSQL ORM 库，设计理念深受 Django ORM
 
 ---
 
+## 数据库连接与超时
+
+连接参数由 `lualib/model/query.lua` 的 `Query(options)` 组装，取值优先级是
+**`options` 显式传值 > `.env` > 硬编码默认值**。
+
+### 三个超时，各管各的
+
+| `.env` 键              | `options` 键        | 默认值  | 谁来中止           | 管什么                                 |
+| ---------------------- | ------------------- | ------- | ------------------ | -------------------------------------- |
+| `PG_CONNECT_TIMEOUT`   | `CONNECT_TIMEOUT`   | `2000`  | 客户端             | TCP 连接 + startup/auth 握手           |
+| `PG_QUERY_TIMEOUT`     | `QUERY_TIMEOUT`     | `10000` | 客户端（不发 cancel）| 单条 SQL 等回包                       |
+| `PG_STATEMENT_TIMEOUT` | `STATEMENT_TIMEOUT` | 不下发  | **服务端（真 cancel）** | 单条 SQL 在 PG 上的执行时间       |
+
+推荐配比：**`STATEMENT_TIMEOUT` < `QUERY_TIMEOUT`**（如 10000 / 12000）。
+服务端先动手把查询 cancel 掉，客户端的读超时只做「PG 完全没响应」的兜底；
+反过来配的话每次都是客户端先撒手，查询在服务端继续烧。
+
+`STATEMENT_TIMEOUT` 只在**新建连接**上下发一次（会话级参数，池里复用的 socket 依然有效），
+不配则一条 `SET` 都不发，省掉那次往返。也可以不走客户端、直接挂在库或角色上：
+
+```sql
+ALTER DATABASE mydb SET statement_timeout = '10s';
+```
+
+### `receive_message: failed to get type: timeout` 是什么
+
+```
+ERROR: lualib/model/query.lua:xxx: receive_message: failed to get type: timeout
+```
+
+**这不是 pgmoon 的 bug，也不是 PostgreSQL 出了问题**，是 pgmoon 等 PG 回包时**客户端读超时**，
+即撞上了 `QUERY_TIMEOUT`。
+
+历史坑：老版本只有 `PG_CONNECT_TIMEOUT` 一个旋钮，它经 `conn:settimeout()` 一次性设成
+connect / send / **receive** 三个超时（cosocket `settimeout` 的语义，名字里的 "connect" 有误导性），
+所以那个值实际上就是单条 SQL 的时限。web 端为了快速失败常把它配成 1 秒级，
+于是所有报表查询和 CLI 脚本（迁移、回填、盘点）全被按握手的尺度砍掉。
+
+**兼容**：没配 `PG_QUERY_TIMEOUT` 时仍回落到 `PG_CONNECT_TIMEOUT`（行为与升级前一致），
+但会打一条 WARN 提醒去拆开配。
+
+### 怎么确认是客户端超时而不是数据库的问题
+
+客户端超时**不会给 PG 发 cancel**，服务端那条查询还在继续跑。报错的同时开另一个 psql：
+
+```sql
+select now() - query_start, state, left(query, 80)
+from pg_stat_activity
+where datname = current_database() and state <> 'idle';
+```
+
+还能看到它 `active`，就说明是客户端超时；查询已经不在了才需要怀疑连接被服务端切断
+（或者是 `statement_timeout` 生效了 —— 那种情况报的是 PG 的
+`canceling statement due to statement timeout`，不是这条）。
+
+### 脚本怎么写
+
+脚本不要继承 web 那套量级，三个都显式传，把 `.env` 顶掉（`options` 优先于 `.env`）：
+
+```lua
+local query = Query {
+  DATABASE = ...,
+  CONNECT_TIMEOUT = 5000,
+  QUERY_TIMEOUT = 600000, -- 10 分钟
+  STATEMENT_TIMEOUT = 0,  -- 解开服务端护栏，0 = 不限
+}
+```
+
+只放宽客户端是不够的：库或角色上挂着 `statement_timeout` 的话，SQL 照样被 PG 自己 cancel。
+
+调大 `.env` 里的 `PG_QUERY_TIMEOUT` 来迁就脚本是错的解法 —— 那会连带放宽 web 请求的闸门。
+
+### 其它连接项
+
+| `.env` 键                | `options` 键          | 默认值  | 说明                                            |
+| ------------------------ | --------------------- | ------- | ----------------------------------------------- |
+| `PGHOST` / `PGPORT`      | `HOST` / `PORT`       | `127.0.0.1` / `5432` |                                    |
+| `PGDATABASE` / `PGUSER` / `PGPASSWORD` | `DATABASE` / `USER` / `PASSWORD` | `postgres` |                 |
+| `PG_MAX_IDLE_TIMEOUT`    | `MAX_IDLE_TIMEOUT`    | `10000` | 连接归还池后的最大空闲时间（毫秒）              |
+| `PG_POOL_SIZE`           | `POOL_SIZE`           | `100`   | 连接池大小                                      |
+| `PG_POOL_NAME`           | `POOL_NAME`           | `host:port:database:user` | 同名共享同一个池与同一份 Query 实例 |
+| `PG_SSL` / `PG_SSL_VERIFY` / `PG_SSL_REQUIRED` | `SSL` / `SSL_VERIFY` / `SSL_REQUIRED` | 关 | 布尔项走 `coalesce`，`false` 能覆盖 env |
+
+`Query(options)` 按 `pool_name` 缓存实例：同一 `host:port:database:user` 反复调用拿到的是
+**同一个 Query**，三个超时以首次构造时为准。这是有意为之 —— 事务连接
+（`transaction`）要靠共享实例才能让跨 model 的写入进同一个事务。
+换句话说，想给某个脚本单独放宽超时，它得是这个进程里第一个构造该 pool 的人，
+否则要么换 `POOL_NAME`，要么老老实实走同一份配置。
+
+---
+
 ## 快速入门
 
 ```lua
@@ -323,7 +414,7 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `__null`            | `{age__null=true}`               | `age IS NULL`                                    |
 | `__null`            | `{age__null=false}`              | `age IS NOT NULL`                                |
 | `__range`           | `{age__range={18,30}}`           | `age BETWEEN 18 AND 30`                          |
-| `__year`            | `{pub_date__year=2023}`          | `pub_date BETWEEN '2023-01-01' AND '2023-12-31'` |
+| `__year`            | `{pub_date__year=2023}`          | `pub_date >= '2023-01-01' AND < '2024-01-01'` |
 | `__month`           | `{pub_date__month=1}`            | `EXTRACT('month' FROM pub_date) = '1'`           |
 | `__day`             | `{pub_date__day=15}`             | `EXTRACT('day' FROM pub_date) = '15'`            |
 | `__regex`           | `{name__regex='^T'}`             | `name ~ '^T'`                                    |

@@ -344,7 +344,7 @@ Entry:exclude(Q{rating=5} / Q{headline__contains='draft'}):exec()
 | 正则 | `regex` / `iregex` | `~ 'pat'` / `~* 'pat'` | PostgreSQL 正则 |
 | NULL | `null` / `isnull` | `IS NULL` / `IS NOT NULL` | 值为 `true`/`false` |
 | 日期 | `date` | `field::date = v` | 日期部分等值 |
-| 日期 | `year` | `BETWEEN 'yyyy-01-01' AND 'yyyy-12-31'` | 年份（范围形式，可用索引） |
+| 日期 | `year` | `>= 'yyyy-01-01' AND < 'yyyy+1-01-01'`（半开区间） | 年份（可用索引）。用半开区间而非 `BETWEEN ...-12-31`，否则 timestamp 列会漏掉 12-31 当天 00:00 之后的数据 |
 | 日期 | `iso_year` | `EXTRACT('isoyear' FROM ...)` | ISO 8601 年（周历） |
 | 日期 | `month` / `day` | `EXTRACT('month'/'day' ...)` | 月份 / 日 |
 | 日期 | `quarter` | `EXTRACT('quarter' ...)` | 季度（1-4） |
@@ -821,12 +821,20 @@ Blog:merge(
 通过 CTE VALUES 实现批量更新（仅更新已存在行，不插入）：
 
 ```lua
-Blog:updates {
+-- 按非主键列匹配时必须显式传 key（Blog 有主键 id，不传 key 会默认用 id 匹配，
+-- 而 rows 里没有 id → 抛 "ID不能为空"）
+Blog:updates({
   { name = 'Blog 1', tagline = 'Updated 1' },
   { name = 'Blog 2', tagline = 'Updated 2' },
-}:exec()
+}, 'name'):exec()
 -- WITH V(tagline, name) AS (VALUES ...)
 -- UPDATE blog T SET tagline = V.tagline, utime = CURRENT_TIMESTAMP FROM V WHERE V.name = T.name
+
+-- 有 id 时可省略 key（默认按主键匹配）
+Blog:updates {
+  { id = 1, tagline = 'Updated 1' },
+  { id = 2, tagline = 'Updated 2' },
+}:exec()
 
 -- 子查询作为数据源
 Blog:updates(
@@ -857,8 +865,20 @@ Blog:where{ name__startswith = 'sync_' }:align {
   { name = 'sync_2', tagline = 'b' },
 }:exec()
 -- WITH U AS (INSERT INTO blog ... ON CONFLICT (name) DO UPDATE ... RETURNING name)
--- DELETE FROM blog T WHERE (T.name) NOT IN (SELECT name FROM U) RETURNING *
+-- DELETE FROM blog T WHERE (T.name LIKE 'sync\_%' ESCAPE '\') AND (T.name) NOT IN (SELECT name FROM U) RETURNING *
+--                          ^^^^ 前置 where 会进入 DELETE，这正是限定删除范围的安全边界
 ```
+
+> ⚠️ **align 会删数据，务必先用 where 圈定范围**
+>
+> 上例的 `:where{ name__startswith = 'sync_' }` **不是可选项**——它决定了 DELETE 的作用域。
+> 省略前置 where 时，`DELETE ... WHERE key NOT IN (SELECT key FROM U)` 会作用于**整张表**，
+> 把所有不在本次 rows 里的存量行全部删除。
+>
+> 另注：当对齐列只有键列（`columns` 与 `key` 重合）时，实现会用
+> `ON CONFLICT ... DO UPDATE SET <key> = EXCLUDED.<key>` 的空更新而非 `DO NOTHING`——
+> 因为 PG 规定 `DO NOTHING` 跳过的冲突行**不出现在 RETURNING 中**，
+> 若走 DO NOTHING，CTE `U` 只含新插入行，随后的 DELETE 会把已存在行全部误删。
 
 ---
 

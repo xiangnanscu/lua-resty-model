@@ -327,12 +327,13 @@ Blog:annotate { cnt = Count('entry') }
   :exec()
 -- HAVING COUNT(T0.id) >= 2
 
--- WHERE: 在聚合中使用注解名
-Blog:annotate { cnt = Count('entry') }
-  :group('name')
-  :where { cnt__lt = 100 }
+-- WHERE: **只能放非聚合注解**（F 表达式）。聚合注解放 where 会展开成
+-- `WHERE COUNT(T1.id) < 100`，PG 直接报 "aggregate functions are not allowed in WHERE"，
+-- 聚合别名的过滤一律用 having。
+Blog:annotate { double_id = F('id') * 2 }
+  :where { double_id__lt = 100 }
   :exec()
--- 注意: 此处 cnt 在 WHERE 中会被解析为聚合表达式
+-- WHERE (T.id * 2) < 100
 
 -- ORDER: 按聚合结果排序
 Blog:annotate { cnt = Count('entry') }

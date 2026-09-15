@@ -192,8 +192,12 @@ Blog:annotate { total_comments = Sum('entry__number_of_comments') }:group('name'
 Blog:annotate { cnt = Count('entry') }:group('name'):having { cnt__gt = 2 }:exec()
 -- HAVING COUNT(T0.id) > 2
 
--- annotate 值可在 where/order 中使用
-Blog:annotate { cnt = Count('entry') }:group('name'):where { cnt__lt = 5 }:order('-cnt'):exec()
+-- annotate 别名用于过滤时：**聚合**注解只能放 having，放 where 会生成
+-- `WHERE COUNT(T1.id) < 5`，PG 禁止 WHERE 中出现聚合函数（报 aggregate functions are not allowed in WHERE）。
+-- 只有非聚合的 F 表达式注解才可以放 where。排序两者都可以。
+Blog:annotate { cnt = Count('entry') }:group('name'):having { cnt__lt = 5 }:order('-cnt'):exec()
+-- 非聚合注解（F 表达式）放 where 是合法的：
+Blog:annotate { double_id = F('id') * 2 }:where { double_id__lt = 100 }:exec()
 ```
 
 > **注意（annotate 别名后只能接一个 op）**：`annotate` 注册的别名展开成一段完整 SQL 表达式（`Count(...)` / `F(...) * ...`），它不是一个列，所以无法再 `__` traversal 进去；只允许 0 或 1 个比较 op（`cnt`、`cnt__gte=1`）：
@@ -274,10 +278,12 @@ Log:where{ level = 'error' }:datetimes('created', 'hour', 'DESC')
 
 ```lua
 -- 字符串形式的 CTE
+-- 必须 :as('recent_blogs')：select('name') 恒按主表别名解析成 `T.name`，
+-- 而 from() 已把主表换成 CTE，FROM 里没有 T，PG 会报 missing FROM-clause entry for table "t"
 Blog:with('recent_blogs', Blog:select('id', 'name'):where{id__gt=5})
-  :from('recent_blogs'):select('name'):exec()
+  :as('recent_blogs'):from('recent_blogs'):select('name'):exec()
 -- WITH recent_blogs AS (SELECT T.id, T.name FROM blog T WHERE T.id > 5)
--- SELECT name FROM recent_blogs
+-- SELECT recent_blogs.name FROM recent_blogs
 
 -- 多个 CTE
 Blog:with('cte1', Blog:select('id'):where{id__gt=5})
@@ -328,8 +334,11 @@ Category:where_recursive('parent_id', 1, {'name', 'level'}):exec()
 快捷创建 VALUES CTE：
 
 ```lua
+-- 同上：用 :as('v') 把主表别名换成 CTE 名，再 select('name')。
+-- 写成 select('v.name') 会在**构建期**直接抛 Lua 错 `invalid column name 'v.name'`
+-- （parser.lua 无法解析不带 `__` 的点号列名）
 Blog:with_values('v', { {id=1, name='a'}, {id=2, name='b'} })
-  :from('v'):select('v.name'):exec()
+  :as('v'):from('v'):select('name'):exec()
 -- WITH v(id, name) AS (VALUES (1::integer, 'a'::varchar), (2, 'b'))
 -- SELECT v.name FROM v
 ```
@@ -382,6 +391,20 @@ local q3 = Blog:select('name'):where{id=3}
 q1:union_all(q2):union_all(q3):exec()
 -- ((SELECT ...) UNION ALL (SELECT ...)) UNION ALL (SELECT ...)
 ```
+
+集合操作按**调用顺序线性折叠、左结合**，混用不同算子也不会丢：
+
+```lua
+q1:except(q2):except(q3):exec()
+-- ((SELECT ...) EXCEPT (SELECT ...)) EXCEPT (SELECT ...)
+
+q1:union(q2):except(q3):exec()
+-- ((SELECT ...) UNION (SELECT ...)) EXCEPT (SELECT ...)
+```
+
+> 左结合对 `EXCEPT`/`INTERSECT` 是语义要求：这两个算子不满足结合律，
+> `(A EXCEPT B) EXCEPT C` 与 `A EXCEPT (B EXCEPT C)` 结果不同。
+> `UNION ALL` 满足结合律，形状不同但结果一致。
 
 ---
 
@@ -551,11 +574,15 @@ Blog:upsert(
 ### UPDATES 子查询
 
 ```lua
+-- key 必须显式传：不传时 `_get_bulk_key(columns, true)` 因 is_update=true 强制返回主键 id，
+-- 生成 `... FROM V WHERE V.id = T.id`，而 CTE `V(name, tagline)` 里没有 id 列，PG 报
+-- `column v.id does not exist`
 Blog:updates(
-  BlogBin:select{'name', 'tagline'}:where{name__contains='sync'}
+  BlogBin:select{'name', 'tagline'}:where{name__contains='sync'},
+  'name'
 ):exec()
 -- WITH V(name, tagline) AS (SELECT T.name, T.tagline FROM blog_bin T WHERE ...)
--- UPDATE blog T SET tagline = V.tagline FROM V WHERE V.name = T.name
+-- UPDATE blog AS T SET tagline = V.tagline, utime = CURRENT_TIMESTAMP FROM V WHERE V.name = T.name
 ```
 
 ### F 表达式中的子查询

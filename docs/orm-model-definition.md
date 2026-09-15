@@ -72,6 +72,8 @@ local Store = Model {
 { "username", maxlength = 20 }
 ```
 
+> **改名有数据丢失风险**：迁移器只在「除名字外所有属性完全不变」且「同签名旧字段恰好一个」时才生成 `RENAME`，否则退化成 `DROP COLUMN` + `ADD COLUMN`，该列数据永久丢失；改 `table_name` 则完全不生成 `RENAME TO`（等于建空新表 + 旧表遗留）。动手前先读 `backend-models.md` 的「字段改名」「表改名」两节。
+
 > **保留字段名陷阱**：字段名不能与模型类自身属性冲突，否则建模即报 `field name 'xxx' conflicts with model class attributes`。典型如 `label`（模型自带 `label` 元属性）、`name`、`fields`、`table_name` 等。需要"标签/名称"语义时改用 `code`、`title`、`seat_no` 等替代名。
 
 ### 通用字段选项
@@ -190,6 +192,8 @@ local Store = Model {
 | `on_delete`              | 'CASCADE'              | 删除策略                  |
 | `on_update`              | 'CASCADE'              | 更新策略                  |
 
+> ⚠️ **同表多外键指向同一模型的陷阱**：`related_query_name` 默认值是**本表的 `table_name`**，与字段名无关。若同一模型里有两个（或以上）字段都 `reference` 同一个模型（如 `user_id` 和 `approved_by_id` 都指向 `User`），二者的 `related_query_name` 默认值相同 → 冲突，报错 `related_query_name 'xxx' on model 'yyy' is already taken by field 'zzz'`。此错误发生在**模型解析阶段**（`collect_models`），意味着不仅 `yarn migrate` 会失败，**nginx worker 重启/reload 时整个 app 会起不来**（只是不重启就不会暴露）。规则：同一模型里第二个及以后指向同一 reference 模型的外键，必须显式传 `related_query_name`，如 `related_query_name = 'approved_rescuer'`。
+
 #### email / password / id_card / uuid
 
 字符串子类，自带专用校验：
@@ -227,14 +231,14 @@ local Store = Model {
 { "files",   type = 'alioss_list',  size = '5M' }
 ```
 
-| 选项                | 说明                                   |
-| ------------------- | -------------------------------------- |
-| `size`              | 单文件大小上限，支持 `'1M'`, `'200K'`  |
-| `compress`          | 自动压缩到目标大小（仅 image）         |
-| `lifetime`          | 直传签名有效期（秒）                   |
-| `key_id` / `key_secret` | OSS 凭证（默认从环境变量读取）     |
-| `prefix`            | OSS 上传 key 前缀                      |
-| `media_type`        | `image` / `video` 等                   |
+| 选项                    | 说明                                  |
+| ----------------------- | ------------------------------------- |
+| `size`                  | 单文件大小上限，支持 `'1M'`, `'200K'` |
+| `compress`              | 自动压缩到目标大小（仅 image）        |
+| `lifetime`              | 直传签名有效期（秒）                  |
+| `key_id` / `key_secret` | OSS 凭证（默认从环境变量读取）        |
+| `prefix`                | OSS 上传 key 前缀                     |
+| `media_type`            | `image` / `video` 等                  |
 
 #### table (结构化子表)
 
@@ -270,6 +274,19 @@ local Author = Model:create_model {
 
 > `max_rows` 只有**显式声明**时才在后端校验（超行数报错）；不声明时类默认值 1
 > 仅作为前端展示提示，后端不限制行数。
+
+**字段选项默认值的放置位置（改字段类时必看）**
+
+"是否显式声明"靠自有属性判定：lua 用 `rawget(self, name)`，js 用
+`Object.prototype.hasOwnProperty` / `Object.getOwnPropertyDescriptor`（`get_options` 亦然，
+决定该选项进不进 `json()`）。因此这类默认值**必须挂在类/原型上**：
+
+- lua：`TableField = BaseArrayField:class { max_rows = TABLE_MAX_ROWS }`
+- js：`TableField.prototype.max_rows = TABLE_MAX_ROWS`
+
+绝不能在构造函数里并进 options（`super({ max_rows: DEFAULT, ...options })`）——那样默认值
+变成自有属性，"显式声明"判定恒为真，默认值会被当成用户声明强制校验；同时它还会被
+`json()` 序列化出去，模型 json 传到前端重建字段后又变成显式声明，错误随之扩散。
 
 ---
 
@@ -389,14 +406,39 @@ local data = Blog:validate_update { name = 'Updated Blog' }
 
 所有校验失败都会 `error()` 一个 `ValidateError` 表，**类型恒为 `field_error`**。表格根据出错位置的不同会带额外字段：
 
-| 字段          | 何时出现                              | 含义                            |
-| ------------- | ------------------------------------- | ------------------------------- |
-| `type`        | 总是                                  | 恒为 `'field_error'`            |
-| `name`        | 总是                                  | 出错字段名                      |
-| `label`       | 总是                                  | 字段 `label`（默认等于 `name`） |
-| `message`     | 总是                                  | 错误描述（中文，可用 `error_messages` 覆盖） |
-| `index`       | `table` / `array` 字段子元素出错时    | 出错的 1-based 行号             |
-| `batch_index` | `insert` / `merge` / `upsert` / `updates` 批量调用时 | 出错的 1-based 行号 |
+| 字段          | 何时出现                                             | 含义                                         |
+| ------------- | ---------------------------------------------------- | -------------------------------------------- |
+| `type`        | 总是                                                 | 恒为 `'field_error'`                         |
+| `name`        | 总是                                                 | 出错字段名                                   |
+| `label`       | 总是                                                 | 字段 `label`（默认等于 `name`）              |
+| `message`     | 总是                                                 | 错误描述（中文，可用 `error_messages` 覆盖） |
+| `index`       | `table` / `array` 字段子元素出错时                   | 出错的 1-based 行号                          |
+| `batch_index` | `insert` / `merge` / `upsert` / `updates` 批量调用时 | 出错的 1-based 行号                          |
+
+#### 例外：`field:validate(value)` 不抛异常，返回 `nil, err`
+
+上面说的「校验失败 `error()`」是 `Model:validate*` 与各种写入方法的行为。
+**直接拿单个字段校验单个值时不是这样**——`BaseField:validate`（`lualib/model/fields.lua`）
+走的是 `return nil, err` 的老约定：
+
+```lua
+local value, err = Model.fields.some_date:validate('不是日期')
+-- value = nil, err = '日期格式错误, 正确格式举例: 2010-01-01'
+```
+
+手写端点校验 jsonb 里的自由数据时最容易踩：
+
+```lua
+-- ❌ pcall 永远成功，validated 是 nil，坏值被静默当成「没填」
+local ok, validated = pcall(function() return field:validate(v) end)
+if not ok then error { "填写有误" } end
+
+-- ✅ 必须判返回值本身
+local ok, validated = pcall(function() return field:validate(v) end)
+if not ok or validated == nil then error { "填写有误" } end
+```
+
+现成用法见 `api/project_apply.lua` 的 `sanitize_flows`。
 
 #### 单条 insert / update 出错
 
@@ -670,6 +712,21 @@ local json = Blog:to_json()
 -- 导出指定字段
 local json = Blog:to_json { 'name', 'tagline' }
 ```
+
+**字段子集必须连带裁剪「引用字段名的属性」**。传了 `names` 就是把模型投影成一个更小的模型，
+而模型上有一批属性存的是**字段名**而不是值：
+
+| 属性              | 传子集时的处理             | 不处理的后果                                                       |
+| ----------------- | -------------------------- | ------------------------------------------------------------------ |
+| `unique_together` | 整组字段都在才保留         | 消费方建模型时直接抛 `invalid unique_together name X for model Y`  |
+| `admin.*_names`   | 逐个过滤（裁空则重新生成） | 列表/表单按不存在的字段渲染                                        |
+| `detail_names`    | 逐个过滤                   | 详情页按不存在的字段取值                                           |
+| `primary_key`     | 原样保留                   | 子集不含主键时它指向一个不存在的字段（目前无人解引用，属已知悬空） |
+
+框架的 `to_json(names)` 已经做了前三项。**自己动手裁模型 JSON 的地方要照做**——
+典型场景是前端按角色隐藏字段（从 `fields`/`names` 里删几个再交给 `Model.class`）：
+只删 `fields` 不删 `unique_together`，页面就会崩在建模型这一步，且报错信息指向的是
+一个「模型定义明明写着」的字段名，很难联想到是投影漏了。
 
 ### Model:is_model_class(model)
 
