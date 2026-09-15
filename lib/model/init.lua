@@ -80,13 +80,21 @@ local MODEL_MERGE_NAMES = {
   label = true,
   db_config = true,
   abstract = true,
-  is_role_model = true,
   auto_primary_key = true,
   primary_key = true,
   unique_together = true,
   referenced_label_column = true,
   preload = true,
   app_label = true,
+  -- 权限引擎（xodel.perm_engine）的两处编译期声明，见 docs/perm-engine.md：
+  --   perm_scope_root  = true                      本表可作为作用域根（授权时 perm.scope_model 填它）
+  --   perm_no_propagate = true                     共享资源（模板类），权限不经由本表传播给下游表
+  --   m2m              = { from = 'a_id', to = 'b_id' }  横向桥接（M2M 中间表），只允许一跳
+  --   perm_path        = { <作用域根 table_name> = '首跳外键字段名' }  等长多路径消歧
+  perm_scope_root = true,
+  perm_no_propagate = true,
+  m2m = true,
+  perm_path = true,
 }
 local BaseModel = {
   abstract = true,
@@ -243,7 +251,25 @@ local function create_model_proxy(ModelClass)
   })
 end
 
----@class Model:Sql
+---@class Model<T>: Sql<T>
+---@field create fun(self: Model<T>, input: Record): T
+---@field save fun(self: Model<T>, input: Record, names?: string[], key?: string): T
+---@field save_create fun(self: Model<T>, input: Record, names?: string[], key?: string): T
+---@field save_update fun(self: Model<T>, input: Record, names?: string[], key?: string): T
+---@field save_cascade_update fun(self: Model<T>, input: Record, names?: string[], key?: string): T
+---@field load fun(self: Model<T>, data: Record): T
+---@field create_record fun(self: Model<T>, data: table): T
+---@field validate fun(self: Model<T>, input: Record, names?: string[], key?: string): Record
+---@field validate_create fun(self: Model<T>, input: Record, names?: string[]): Record
+---@field validate_update fun(self: Model<T>, input: Record, names?: string[]): Record
+---@field validate_cascade_update fun(self: Model<T>, input: Record, names?: string[]): Record
+---@field to_json fun(self: Model<T>, names?: string[]): table
+---@field check_unique_key fun(self: Model<T>, key: string): string
+---@field create_sql fun(self: Model<T>): Sql<T>
+---@field create_sql_as fun(self: Model<T>, table_name: string, rows: Record[]): Sql<T>
+---@field is_instance fun(self: Model<T>, row: any): boolean
+---@field transaction fun(self: Model<T>, callback: function): any
+---@field atomic fun(self: Model<T>, func: function): fun(request: table): any
 ---@operator call:Model
 ---@field private __index Model
 ---@field private __normalized__? boolean
@@ -259,7 +285,10 @@ end
 ---@field RecordClass table
 ---@field extends? table
 ---@field admin? table
----@field is_role_model? boolean
+---@field perm_scope_root? boolean
+---@field perm_no_propagate? boolean
+---@field m2m? {from:string, to:string}
+---@field perm_path? {[string]:string}
 ---@field table_name string
 ---@field class_name string
 ---@field referenced_label_column? string
@@ -329,7 +358,10 @@ Model.__index = Model
 ---@field extends? table
 ---@field mixins? table[]
 ---@field abstract? boolean
----@field is_role_model? boolean
+---@field perm_scope_root? boolean
+---@field perm_no_propagate? boolean
+---@field m2m? {from:string, to:string}
+---@field perm_path? {[string]:string}
 ---@field admin? table
 ---@field table_name? string
 ---@field class_name? string
@@ -357,6 +389,8 @@ end
 
 ---@param callback function
 function Model:transaction(callback)
+  -- query.transaction 是单参函数；LuaLS 会按名误配到 Model 的 transaction @field（双参）
+  ---@diagnostic disable-next-line: missing-parameter
   return self.query.transaction(callback)
 end
 
@@ -482,13 +516,17 @@ function Model:_make_model_class(opts)
     mixins = opts.mixins,
     extends = opts.extends,
     abstract = opts.abstract,
-    is_role_model = opts.is_role_model,
     primary_key = opts.primary_key,
     unique_together = opts.unique_together,
     auto_primary_key = auto_primary_key,
     referenced_label_column = opts.referenced_label_column,
     preload = opts.preload,
     app_label = opts.app_label,
+    -- 权限引擎的编译期声明，见 MODEL_MERGE_NAMES 处注释
+    perm_scope_root = opts.perm_scope_root,
+    perm_no_propagate = opts.perm_no_propagate,
+    m2m = opts.m2m,
+    perm_path = opts.perm_path,
     names = Array {},
     detail_names = Array {},
     foreignkey_fields = {},
@@ -678,6 +716,13 @@ function Model:set_label_name_dict()
   self.label_to_name = {}
   self.name_to_label = {}
   for name, field in pairs(self.fields) do
+    -- label 必须唯一：label_to_name 经 to_json 导出给前端做「表头/Excel 列名 → 字段名」反查，
+    -- 重复时后写覆盖前写且 pairs 顺序不定，会静默把数据导到另一个字段上
+    local exists = self.label_to_name[field.label]
+    if exists and exists ~= name then
+      error(format("duplicated field label in model %s: '%s' used by both '%s' and '%s'",
+        self.table_name or self.class_name or '?', tostring(field.label), exists, name))
+    end
     self.label_to_name[field.label] = name
     self.name_to_label[name] = field.label
   end
@@ -922,6 +967,42 @@ function Model:to_json(names)
       name_to_label[field.name] = field.label
       fields[name] = field:json()
     end
+    -- names 是字段子集，凡是**引用字段名**的属性都要跟着裁剪，否则消费方
+    -- （前端 Model.class / 后端 normalize）会按不存在的字段建模型：
+    --   unique_together：整组引用不全就丢掉。不丢的话消费方直接在
+    --                    「unique_together 名字不在 fields 里」的断言处抛错，
+    --                    表单页拿字段子集渲染就崩在建模型这一步。
+    --   admin.*_names / detail_names：留着不报错，但会让列表/详情按不存在的字段取值。
+    --                    admin.list_names 被裁空后消费方的 ensure_admin_list_names
+    --                    会按子集重新生成，正是想要的结果。
+    local unique_together = {}
+    for _, unique_group in ipairs(self.unique_together or {}) do
+      local all_present = true
+      for _, name in ipairs(unique_group) do
+        if not fields[name] then
+          all_present = false
+          break
+        end
+      end
+      if all_present then
+        unique_together[#unique_together + 1] = clone(unique_group)
+      end
+    end
+    local function keep_present(name_list)
+      local kept = {}
+      for _, name in ipairs(name_list or {}) do
+        if fields[name] then
+          kept[#kept + 1] = name
+        end
+      end
+      return kept
+    end
+    local admin = clone(self.admin) or {}
+    for key, value in pairs(admin) do
+      if key:match('_names$') and type(value) == 'table' then
+        admin[key] = keep_present(value)
+      end
+    end
     return {
       table_name = self.table_name,
       class_name = self.class_name,
@@ -932,9 +1013,9 @@ function Model:to_json(names)
       field_names = names,
       label_to_name = label_to_name,
       name_to_label = name_to_label,
-      admin = clone(self.admin),
-      unique_together = clone(self.unique_together),
-      detail_names = clone(self.detail_names),
+      admin = admin,
+      unique_together = unique_together,
+      detail_names = keep_present(self.detail_names),
       reversed_fields = reversed_fields,
       fields = fields,
     }
@@ -1005,11 +1086,15 @@ function Model:save_update(input, names, key)
     error("no primary or unique key value for save_update")
   end
   local prepared = self:_prepare_for_db(data, names)
+  -- RETURNING '*'：与 save_create/Model:create 的契约对齐。只回主键时返回的 record
+  -- 仅含本次提交的字段，缺未提交列，且 DB 刚刷新的 auto_now(utime) 也拿不到
   local updated = self:create_sql():_base_update(prepared):where { [key] = look_value }
-      :_base_returning(key):execr()
+      :_base_returning('*'):execr()
   ---@cast updated Record
   if #updated == 1 then
-    data[key] = updated[1][key]
+    for k, v in pairs(updated[1]) do
+      data[k] = v
+    end
     return self:create_record(data)
   elseif #updated == 0 then
     error(format("update failed, record does not exist(model:%s, key:%s, value:%s)", self.table_name,
@@ -1361,7 +1446,9 @@ function Model:_validate_create_rows(rows, key, columns)
   -- 先做数据校验：columns 里的非法字段名（invalid field name）比
   -- key 缺失更根本，应当优先报出来
   local cleaned = self:_validate_create_data(rows, columns)
-  self:_check_upsert_key_error(rows, key)
+  -- 校验 cleaned 而非原始 rows：key 列带 default 时原始行可能没有该键，
+  -- 但 create 语义下 cleaned 已回填默认值，检查原始行会误报"不能为空"
+  self:_check_upsert_key_error(cleaned, key)
   return cleaned
 end
 
@@ -1371,7 +1458,8 @@ end
 ---@return Records
 function Model:_validate_update_rows(rows, key, columns)
   local cleaned = self:_validate_update_data(rows, columns)
-  self:_check_upsert_key_error(rows, key)
+  -- 同 _validate_create_rows：以校验后的数据判断 key 是否为空
+  self:_check_upsert_key_error(cleaned, key)
   return cleaned
 end
 

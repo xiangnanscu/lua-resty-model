@@ -455,7 +455,14 @@ function BaseField:init(options)
     self.label = self.name
   end
   if self.null == nil then
-    if self.required or self.db_type == 'varchar' or self.db_type == 'text' then
+    if self.unique and not self.required then
+      -- unique 且非必填的字段默认可空（review lualib-05 P1）：
+      -- Model:validate_update 对「清空的 unique 字段」写 NULL（多个 NULL 不冲突，多个 '' 会冲突），
+      -- StringField 又对 unique 字段不给 default ''，两条路径都需要列可空；
+      -- 若这里推成 NOT NULL，「更新清空」与「创建缺失」都会落到 PG 原始 not-null 错误 500，
+      -- 而不是友好的 field_error。业务确实必填时请显式写 required = true。
+      self.null = true
+    elseif self.required or self.db_type == 'varchar' or self.db_type == 'text' then
       self.null = false
     else
       self.null = true
@@ -519,6 +526,30 @@ function BaseField:get_validators(validators)
       self:get_error_message('choices'),
       self.type == 'array')
     table_insert(validators, self.static_choice_validator)
+  elseif self.group and type(self.group) == 'table' and #self.group > 0
+      and type(self.choices) == 'table' and #self.choices > 0 and (self.strict == nil or self.strict) then
+    -- 级联（fui/cascader）choices 是一组原始记录，本字段的值取最后一级的 value_key。
+    -- 这里补上后端校验：不做校验时前端限定的级联选项后端可写任意值。
+    local last_level = self.group[#self.group]
+    local value_key = last_level and last_level.value_key
+    if value_key then
+      local valid_values = {}
+      for _, c in ipairs(self.choices) do
+        if type(c) == 'table' and c[value_key] ~= nil then
+          valid_values[c[value_key]] = true
+        end
+      end
+      local message = self:get_error_message('choices')
+      local function group_choice_validator(val)
+        if valid_values[val] then
+          return val
+        end
+        return nil, message
+      end
+
+      self.static_choice_validator = group_choice_validator
+      table_insert(validators, group_choice_validator)
+    end
   end
   return validators
 end
@@ -1239,6 +1270,10 @@ function ForeignkeyField:get_validators(validators)
       -- 动态读 reference_column：reference='self' 时它在本闭包创建之后
       -- 才由 resolve_foreignkey_self 填充，捕获成局部变量会拿到 nil
       v = v[self.reference_column]
+      if v == nil then
+        -- convert 多为 tostring，nil 会被写成字面量 "nil" 入库
+        return nil, string_format("外键对象缺少字段 %s", self.reference_column)
+      end
     end
     v, err = self.convert(v)
     if err then
@@ -1364,12 +1399,24 @@ function JsonField:prepare_for_db(value)
   end
 end
 
-local function skip_validate_when_string(v)
-  if type(v) == "string" then
-    return v, v
-  else
+-- 数组/表系字段收到字符串时，按 JSON 解析后继续走完整校验（review lualib-05 P1）。
+-- 原实现是 `return v, v`——命中 Field:validate 的「value == err 则保留值并跳过其余校验」短路，
+-- 于是任意非空字符串都能绕过 check_array_type/required/元素校验，被 JsonField 二次编码成
+-- JSON 标量入库；此后 TableField:load 读到标量直接 error，该记录在 load 路径**永久 500**。
+-- 攻击面：HTTP 把数组字段发成字符串即触发。
+local function decode_string_as_array(v)
+  if type(v) ~= "string" then
     return v
   end
+  if v == "" then
+    -- 空串等价于「没填」，交给后续 required 校验判定
+    return {}
+  end
+  local decoded = Validator.decode(v)
+  if type(decoded) ~= "table" then
+    return nil, "值必须是数组，或数组的 JSON 文本"
+  end
+  return decoded
 end
 
 local function check_array_type(v)
@@ -1409,7 +1456,7 @@ function BaseArrayField:get_validators(validators)
     table_insert(validators, 1, non_empty_array_required(self:get_error_message('required')))
   end
   table_insert(validators, 1, check_array_type)
-  table_insert(validators, 1, skip_validate_when_string)
+  table_insert(validators, 1, decode_string_as_array)
   table_insert(validators, Validator.encode_as_array)
   return JsonField.get_validators(self, validators)
 end
@@ -1509,7 +1556,10 @@ function TableField:init(options)
     error("please define model for a table field: " .. self.name)
   end
   if not self.model.__IS_MODEL_CLASS__ then
-    self.model = self.ModelClass:create_model {
+    -- ModelClass 全仓无赋值点：这里改为延迟 require（fields 与 model 循环依赖，
+    -- 只能在实例化阶段取），否则传普通 opts 表定义 table 字段必崩
+    local ModelClass = self.ModelClass or require("model")
+    self.model = ModelClass:create_model {
       extends = self.model.extends,
       mixins = self.model.mixins,
       abstract = self.model.abstract,
@@ -1682,14 +1732,18 @@ function AliossField:get_options()
     ret.compress = ret.compress_arg
     ret.compress_arg = nil
   end
+  -- 密钥在 get_options 一并剥除：ArrayField 序列化子字段走的是 get_options 而非 json()，
+  -- 只在 json() 里剥会让以字段选项配置密钥的项目把 key_id/key_secret 发到前端
+  ret.key_secret = nil
+  ret.key_id = nil
   return ret
 end
 
 ---@param options AliossPayloadArgs
 ---@return AliossPayload
 function AliossField:get_payload(options)
-  -- 惰性 require：resty.alioss 只有真正生成上传凭证时才需要
-  local get_payload = require("resty.alioss").get_payload
+  -- 惰性 require：vendor.alioss 只有真正生成上传凭证时才需要
+  local get_payload = require("vendor.alioss").get_payload
   return get_payload(dict(self, options))
 end
 

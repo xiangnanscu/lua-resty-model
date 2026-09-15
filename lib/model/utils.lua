@@ -380,8 +380,16 @@ local NON_OPERATOR_CONTEXTS = {
 -- SQL Construction & ORM Helpers
 -- =========================================================================
 
+-- 标识符输出：PG 关键字必须加引号；非「字母/下划线开头 + 字母数字下划线」的标识符
+-- （如别名来自用户输入、含空格/引号/大小写敏感）同样加引号并转义，
+-- 否则会原样拼进 SQL —— 那是一条只靠「调用方别名都是常量」这一约定成立的防线。
+-- 只对「含 [%w_] 之外字符 或 数字开头」的标识符补引号：ASCII 大小写混排保持原样，
+-- 以免把 PG 的大小写折叠语义改成大小写敏感、影响既有列名返回键。
+local function need_quote(s)
+  return s:find("[^%w_]") ~= nil or s:find("^%d") ~= nil
+end
 local function smart_quote(s)
-  if IS_PG_KEYWORDS[s:upper()] then
+  if IS_PG_KEYWORDS[s:upper()] or need_quote(s) then
     -- 防御性转义内部双引号（标识符正常不含引号，但引用时必须完整）
     return '"' .. (s:gsub('"', '""')) .. '"'
   else

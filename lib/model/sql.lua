@@ -79,11 +79,105 @@ function SqlMeta.__call(self, args)
   end
 end
 
----@class Sql
----@field model Model
+---@class Sql<T>
+---@field model Model<T>
 ---@field table_name string
 ---@field as_token  fun(DBValue):string
 ---@field as_literal  fun(DBValue):string
+---@field get fun(self: Sql<T>, cond?: table|string|(fun(ctx:table):string), op?: string, dval?: DBValue): T
+---@field try_get fun(self: Sql<T>, cond?: table|string|(fun(ctx:table):string), op?: string, dval?: DBValue): T|false
+---@field first fun(self: Sql<T>): T?
+---@field last fun(self: Sql<T>): T?
+---@field latest fun(self: Sql<T>, ...: string): T?
+---@field earliest fun(self: Sql<T>, ...: string): T?
+---@field exec fun(self: Sql<T>): Array<T>, number
+---@field filter fun(self: Sql<T>, kwargs: table): Array<T>, number
+---@field in_bulk fun(self: Sql<T>, ids?: table, field_name?: string): table<any, T>
+---@field get_or_create fun(self: Sql<T>, params: table, defaults?: table, columns?: string[]|'*'): T, boolean
+---@field update_or_create fun(self: Sql<T>, params: table, defaults?: table, columns?: string[]): T, boolean
+---@field where fun(self: Sql<T>, cond: table|string|(fun(ctx:table):string), op?: string, dval?: DBValue): Sql<T>
+---@field where_or fun(self: Sql<T>, cond: table|string|(fun(ctx:table):string), op?: string, dval?: DBValue): Sql<T>
+---@field or_where fun(self: Sql<T>, cond: table|string|(fun(ctx:table):string), op?: string, dval?: DBValue): Sql<T>
+---@field or_where_or fun(self: Sql<T>, cond: table|string|(fun(ctx:table):string), op?: string, dval?: DBValue): Sql<T>
+---@field exclude fun(self: Sql<T>, cond: table|string|(fun(ctx:table):string), op?: string, dval?: DBValue): Sql<T>
+---@field where_in fun(self: Sql<T>, cols: string|string[], range: Sql|table): Sql<T>
+---@field where_not_in fun(self: Sql<T>, cols: string|string[], range: Sql|table): Sql<T>
+---@field where_recursive fun(self: Sql<T>, name: string, value: any, select_names?: string[]): Sql<T>
+---@field having fun(self: Sql<T>, cond: {[string]: DBValue}|QClass): Sql<T>
+---@field select fun(self: Sql<T>, a: DBValue|(fun(ctx:table):string), b?: DBValue, ...: DBValue): Sql<T>
+---@field select_as fun(self: Sql<T>, kwargs: {[string]: string}|string, as?: string): Sql<T>
+---@field select_literal fun(self: Sql<T>, a: DBValue, b?: DBValue, ...: DBValue): Sql<T>
+---@field select_literal_as fun(self: Sql<T>, kwargs: {[string]: string}): Sql<T>
+---@field select_related fun(self: Sql<T>, fk_name: string|ForeignkeyField, select_names: string[]|string, more_name?: string, ...: string): Sql<T>
+---@field select_related_labels fun(self: Sql<T>, names?: string[]): Sql<T>
+---@field select_for_update fun(self: Sql<T>, opts?: {nowait?: boolean, skip_locked?: boolean, of?: string|string[], no_key?: boolean}): Sql<T>
+---@field returning fun(self: Sql<T>, a: DBValue|(fun(ctx:table):string), b?: DBValue, ...: DBValue): Sql<T>
+---@field returning_literal fun(self: Sql<T>, a: DBValue, b?: DBValue, ...: DBValue): Sql<T>
+---@field group fun(self: Sql<T>, a: string, ...: string): Sql<T>
+---@field group_by fun(self: Sql<T>, ...: string): Sql<T>
+---@field order fun(self: Sql<T>, a: string|table|(fun(ctx:table):string), ...: string|FClass): Sql<T>
+---@field order_by fun(self: Sql<T>, ...: string): Sql<T>
+---@field reverse fun(self: Sql<T>): Sql<T>
+---@field nulls_first fun(self: Sql<T>): Sql<T>
+---@field nulls_last fun(self: Sql<T>): Sql<T>
+---@field using fun(self: Sql<T>, ...: string): Sql<T>
+---@field from fun(self: Sql<T>, ...: string): Sql<T>
+---@field limit fun(self: Sql<T>, n: integer|string): Sql<T>
+---@field offset fun(self: Sql<T>, n: integer|string): Sql<T>
+---@field distinct fun(self: Sql<T>, ...: string): Sql<T>
+---@field distinct_on fun(self: Sql<T>, ...: DBValue): Sql<T>
+---@field none fun(self: Sql<T>): Sql<T>
+---@field all fun(self: Sql<T>): Sql<T>
+---@field increase fun(self: Sql<T>, name: string|table, amount?: number): Sql<T>
+---@field decrease fun(self: Sql<T>, name: string|table, amount?: number): Sql<T>
+---@field annotate fun(self: Sql<T>, kwargs: {[string]: table}): Sql<T>
+---@field alias fun(self: Sql<T>, kwargs: {[string]: table}): Sql<T>
+---@field insert fun(self: Sql<T>, rows: Record|Record[]|Sql, columns?: string[]): Sql<T>
+---@field update fun(self: Sql<T>, row: Record|string|(fun(ctx:table):string), columns?: string[]): Sql<T>
+---@field align fun(self: Sql<T>, rows: Record[], key?: Keys, columns?: string[]): Sql<T>
+---@field merge fun(self: Sql<T>, rows: Record[]|Sql, key?: Keys, columns?: string[]): Sql<T>
+---@field upsert fun(self: Sql<T>, rows: Record[]|Sql, key?: Keys, columns?: string[]): Sql<T>
+---@field updates fun(self: Sql<T>, rows: Record[]|Sql, key?: Keys, columns?: string[]): Sql<T>
+---@field gets fun(self: Sql<T>, keys: Record[], columns?: string[]): Sql<T>
+---@field merge_gets fun(self: Sql<T>, rows: Record[], key: Keys, columns?: string[]): Sql<T>|Record[]
+---@field delete fun(self: Sql<T>, cond?: table|string|(fun(ctx:table):string), op?: string, dval?: DBValue): Sql<T>
+---@field prepend fun(self: Sql<T>, ...: Sql|Model|string): Sql<T>
+---@field append fun(self: Sql<T>, ...: Sql|Model|string): Sql<T>
+---@field with fun(self: Sql<T>, name: string, token: string|Sql): Sql<T>
+---@field with_recursive fun(self: Sql<T>, name: string, token: string|Sql): Sql<T>
+---@field with_values fun(self: Sql<T>, name: string, rows: Record[]): Sql<T>
+---@field union fun(self: Sql<T>, other_sql: Sql<any>): Sql<T>
+---@field union_all fun(self: Sql<T>, other_sql: Sql<any>): Sql<T>
+---@field except fun(self: Sql<T>, other_sql: Sql<any>): Sql<T>
+---@field except_all fun(self: Sql<T>, other_sql: Sql<any>): Sql<T>
+---@field intersect fun(self: Sql<T>, other_sql: Sql<any>): Sql<T>
+---@field intersect_all fun(self: Sql<T>, other_sql: Sql<any>): Sql<T>
+---@field as fun(self: Sql<T>, table_alias: string): Sql<T>
+---@field copy fun(self: Sql<T>): Sql<T>
+---@field clear fun(self: Sql<T>): Sql<T>
+---@field compact fun(self: Sql<T>): Sql<T>
+---@field return_all fun(self: Sql<T>): Sql<T>
+---@field raw fun(self: Sql<T>, is_raw?: boolean): Sql<T>
+---@field commit fun(self: Sql<T>, bool?: boolean): Sql<T>
+---@field join_type fun(self: Sql<T>, jtype: string): Sql<T>
+---@field skip_validate fun(self: Sql<T>, bool?: boolean): Sql<T>
+---@field only fun(self: Sql<T>, ...: string): Sql<T>
+---@field defer fun(self: Sql<T>, ...: string): Sql<T>
+---@field statement fun(self: Sql<T>): string
+---@field get_table fun(self: Sql<T>): string
+---@field count fun(self: Sql<T>, cond?: table|string|(fun(ctx:table):string), op?: string, dval?: DBValue): integer
+---@field exists fun(self: Sql<T>): boolean
+---@field aggregate fun(self: Sql<T>, kwargs: {[string]: table}): table
+---@field execr fun(self: Sql<T>): table|Array<Record>, number
+---@field flat fun(self: Sql<T>, col?: string|(fun(ctx:table):string)): Array<Record>
+---@field values fun(self: Sql<T>, ...: string): Array<Record>, number
+---@field values_list fun(self: Sql<T>, fields: string|string[], opts?: {flat?: boolean}): Array
+---@field dates fun(self: Sql<T>, field: string, kind: "year"|"month"|"week"|"day", order?: "ASC"|"DESC"): Array
+---@field datetimes fun(self: Sql<T>, field: string, kind: "year"|"month"|"week"|"day"|"hour"|"minute"|"second", order?: "ASC"|"DESC"): Array
+---@field contains fun(self: Sql<T>, obj: table): boolean
+---@field explain fun(self: Sql<T>, opts?: table): any
+---@field as_set fun(self: Sql<T>): Set
+---@field meta_query fun(self: Sql<T>, data: selectArgs): table, number?
 ---@field private _pcall? boolean
 ---@field private _as?  string
 ---@field private _with?  string
@@ -117,8 +211,8 @@ end
 ---@field private _group_args? string[]
 ---@field private _join_proxy_models?  Model[]
 ---@field private _join_alias?  string[]
----@field private _prepend?  (Sql|string)[]
----@field private _append?  (Sql|string)[]
+---@field private _prepend?  (Sql|Model|string)[]
+---@field private _append?  (Sql|Model|string)[]
 ---@field private _join_keys? table
 ---@field private _select_related? table
 ---@field private _skip_validate? boolean
@@ -127,6 +221,7 @@ end
 ---@field private _return_all? boolean
 ---@field private _raw? boolean
 ---@field private _set_operation? boolean
+---@field private _set_ops? {op:SqlSet, statement:string}[] 按调用顺序记录的集合操作链（左结合折叠）
 ---@field private _for_update? boolean
 ---@field private _for_update_nowait? boolean
 ---@field private _for_update_skip_locked? boolean
@@ -140,7 +235,32 @@ Sql.__index = Sql
 Sql.__SQL_BUILDER__ = true
 Sql.as_token = as_token
 Sql.as_literal = as_literal
+---冲突处理是否无可更新列：只按「列集合减去键集合是否为空」判断，不能只比数量
+---（键与列数量相同但集合不同时会误入 DO NOTHING，典型是 update_or_create 的
+---defaults 键 ⊆ params 键时，已存在行不进 RETURNING 而抛 "expected 1 record, got 0"）
+---@param key Keys
+---@param columns string[]
+---@return boolean
+local function has_no_updatable_column(key, columns)
+  local key_set = {}
+  if type(key) == "string" then
+    key_set[key] = true
+  elseif type(key) == "table" then
+    for _, k in ipairs(key) do
+      key_set[k] = true
+    end
+  end
+  for _, c in ipairs(columns) do
+    if not key_set[c] then
+      return false
+    end
+  end
+  return true
+end
+
 Sql.MAX_LIMIT = 10000
+-- 深分页 DoS 面：超大 offset 会让 PG 扫描并丢弃海量行，需要更大跨度请改用游标/键集分页
+Sql.MAX_OFFSET = 1000000
 Sql.EXPR_OPERATORS = EXPR_OPERATORS
 
 function Sql:__tostring()
@@ -322,7 +442,7 @@ function Sql:_base_merge(rows, key, columns)
       :_base_select(vals_columns)
       :_base_join_raw("LEFT", "U AS W", join_cond) -- `U AS W` to reuse join_cond token
   local intersect_subquery
-  if (type(key) == "table" and #key == #columns) or #columns == 1 then
+  if has_no_updatable_column(key, columns) then
     intersect_subquery = Sql:new { table_name = "V" }
         :_base_select(vals_columns)
         :_base_join_raw("INNER", self.table_name .. " AS W", join_cond)
@@ -672,7 +792,7 @@ end
 ---@param rows Record[]
 ---@param columns string[]
 ---@return DBValue[][]
-function Sql:_rows_to_array(rows, columns, is_update)
+function Sql:_rows_to_array(rows, columns, is_update, allow_default)
   local c = #columns
   local n = #rows
   local res = table_new(n, 0)
@@ -692,9 +812,15 @@ function Sql:_rows_to_array(rows, columns, is_update)
         local default = fields[col].default
         if default ~= nil then
           res[j][i] = fields[col]:get_default()
+        elseif allow_default then
+          -- 批量 INSERT ... VALUES 与单行 insert 对齐：缺列走 DB 的 DEFAULT，
+          -- 而不是强插 NULL 绕过列默认值（同一份数据单行成功、批量 not-null violation）
+          res[j][i] = DEFAULT
         else
           res[j][i] = NULL
         end
+      elseif allow_default then
+        res[j][i] = DEFAULT
       else
         res[j][i] = NULL
       end
@@ -739,7 +865,8 @@ end
 ---@return string[], string[]
 function Sql:_get_bulk_insert_values_token(rows, columns)
   columns = columns or get_keys(rows)
-  rows = self:_rows_to_array(rows, columns)
+  -- allow_default=true：INSERT 的 VALUES 列表允许 DEFAULT 关键字（CTE 里的 VALUES 不允许，故只在此开）
+  rows = self:_rows_to_array(rows, columns, false, true)
   return map(rows, as_literal), columns
 end
 
@@ -943,7 +1070,13 @@ function Sql:_get_upsert_token(row, key, columns)
     as_token(insert_columns),
     as_literal(values_list),
     as_token(key))
-  if (type(key) == "table" and #key == #insert_columns) or #insert_columns == 1 then
+  if has_no_updatable_column(key, insert_columns) then
+    -- 无非键列可更新时默认 DO NOTHING；但 PG 规定 DO NOTHING 跳过的冲突行不进 RETURNING，
+    -- update_or_create 这类需要拿回记录的调用方置 _upsert_noop_update 走空更新（同 align，review T1-11）
+    if self._upsert_noop_update then
+      local first_key = type(key) == "string" and key or key[1]
+      return format("%s DO UPDATE SET %s = EXCLUDED.%s", insert_token, first_key, first_key)
+    end
     return format("%s DO NOTHING", insert_token)
   else
     return format("%s DO UPDATE SET %s", insert_token,
@@ -980,7 +1113,15 @@ function Sql:_get_bulk_upsert_token(rows, key, columns)
     as_token(columns),
     as_token(rows),
     as_token(key))
-  if (type(key) == "table" and #key == #columns) or #columns == 1 then
+  if has_no_updatable_column(key, columns) then
+    -- 无非键列可更新。默认 DO NOTHING；但 PG 规定 DO NOTHING 跳过的冲突行不出现在 RETURNING 中，
+    -- align 依赖 RETURNING 判定"应保留的行"，故 align 置 _upsert_noop_update 强制走
+    -- `DO UPDATE SET <key>=EXCLUDED.<key>` 的空更新，使冲突行也进入 RETURNING（review T1-11）
+    if self._upsert_noop_update then
+      -- 只写一个键列的空更新（不碰 auto_now，避免把未变更的行标记为刚更新）
+      local first_key = type(key) == "string" and key or key[1]
+      return format("%s DO UPDATE SET %s = EXCLUDED.%s", insert_token, first_key, first_key)
+    end
     return format("%s DO NOTHING", insert_token)
   else
     return format("%s DO UPDATE SET %s", insert_token,
@@ -997,7 +1138,13 @@ function Sql:_set_select_subquery_upsert_token(rows, key, columns)
     as_token(columns),
     rows:statement(),
     as_token(key))
-  if (type(key) == "table" and #key == #columns) or #columns == 1 then
+  if has_no_updatable_column(key, columns) then
+    -- 同 _get_bulk_upsert_token：align 需要冲突行进入 RETURNING（review T1-11）
+    if self._upsert_noop_update then
+      local first_key = type(key) == "string" and key or key[1]
+      self._insert = format("%s DO UPDATE SET %s = EXCLUDED.%s", insert_token, first_key, first_key)
+      return
+    end
     self._insert = format("%s DO NOTHING", insert_token)
   else
     self._insert = format("%s DO UPDATE SET %s", insert_token,
@@ -1050,7 +1197,7 @@ function Sql:_set_cud_subquery_upsert_token(rows, key, columns)
     as_token(columns),
     Sql:new { table_name = 'V', _select = as_token(columns) }:statement(),
     as_token(key))
-  if (type(key) == "table" and #key == #columns) or #columns == 1 then
+  if has_no_updatable_column(key, columns) then
     self._insert = format("%s DO NOTHING", insert_token)
   else
     self._insert = format("%s DO UPDATE SET %s", insert_token,
@@ -1196,6 +1343,12 @@ end
 ---@return string
 function Sql:_get_condition_token_or(cond, op, dval)
   if type(cond) == "table" then
+    if cond.__IS_LOGICAL_BUILDER__ then
+      -- 误把 Q 对象传给 where_or 时，pairs 会遍历 cond/logic/left/right 这些内部键并
+      -- 送进 _parse_column，产出错误 SQL；这里按 Q 正常解析
+      ---@cast cond QClass
+      return self:_resolve_Q(cond)
+    end
     return self:_get_condition_token_from_table(cond, "OR")
   else
     return self:_get_condition_token(cond, op, dval)
@@ -1220,15 +1373,21 @@ end
 ---@param other_sql Sql
 ---@param set_operation_attr SqlSet
 ---@return self
+-- 集合操作按调用顺序记入有序链（review lualib-04 P1）：
+-- 旧实现每种算子各存一个属性，statement() 用 elseif 链只输出第一个命中的属性，
+-- `q1:union(q2):except(q3)` 会把 except **静默丢弃**；同类链式又拼成右结合
+-- `(q1) EXCEPT ((q2) EXCEPT (q3))`，而 EXCEPT/INTERSECT 不满足结合律，结果集是错的。
+-- 现按调用顺序左结合折叠，与 SQL 标准及文档一致。
 function Sql:_handle_set_operation(other_sql, set_operation_attr)
-  if not self[set_operation_attr] then
-    self[set_operation_attr] = other_sql:statement();
-  else
-    self[set_operation_attr] = format("(%s) %s (%s)",
-      self[set_operation_attr],
-      PG_SET_MAP[set_operation_attr],
-      other_sql:statement());
+  if not self._set_ops then
+    self._set_ops = {}
   end
+  self._set_ops[#self._set_ops + 1] = {
+    op = set_operation_attr,
+    statement = other_sql:statement(),
+  }
+  -- 兼容：仍记录各算子最后一次的右操作数，供外部读取/调试
+  self[set_operation_attr] = self._set_ops[#self._set_ops].statement
   self._set_operation = true
   return self;
 end
@@ -1252,8 +1411,29 @@ function Sql:_get_bulk_key(columns, is_update)
   if is_update and self.model.primary_key then
     return self.model.primary_key
   end
-  if self.model.unique_together and self.model.unique_together[1] then
-    return clone(self.model.unique_together[1])
+  -- 推导出的键必须落在实际参与写入的 columns 内，否则 ON CONFLICT arbiter / CTE
+  -- 会引用不存在的列，PG 直接报 column does not exist（review lualib-04 P1）
+  local column_set
+  if columns then
+    column_set = {}
+    for _, c in ipairs(columns) do
+      column_set[c] = true
+    end
+  end
+  local unique_group = self.model.unique_together and self.model.unique_together[1]
+  if unique_group then
+    local usable = true
+    if column_set then
+      for _, name in ipairs(unique_group) do
+        if not column_set[name] then
+          usable = false
+          break
+        end
+      end
+    end
+    if usable then
+      return clone(unique_group)
+    end
   end
   for _, name in ipairs(columns or self.model.names) do
     local f = self.model.fields[name]
@@ -1314,12 +1494,34 @@ end
 ---@param key string
 ---@param op string
 ---@return string
+-- F 表达式只在等值/比较类 lookup 里有意义：它解析成「列表达式」token，
+-- 而 contains/startswith 等要把值当字符串拼进 LIKE、year/range 等要读具体值，
+-- 传 F 会生成 `LIKE '%function: 0x..%'` 或直接 assert 崩，这里显式报错替代静默错误 SQL
+local F_ALLOWED_OPS = {
+  eq = true,
+  ne = true,
+  lt = true,
+  lte = true,
+  gt = true,
+  gte = true,
+}
+
+---@private
+---@param value DBValue
+---@param key string
+---@param op? string
+---@return string
 function Sql:_get_expr_token(value, key, op)
   -- https://docs.djangoproject.com/en/5.1/ref/models/querysets/#field-lookups
+  local is_f = type(value) == 'table' and value.__IS_FIELD_BUILDER__
   value = self:_resolve_F(value)
   local handler = EXPR_OPERATORS[op]
   if not handler then
     error("invalid sql op: " .. tostring(op))
+  end
+  if is_f and op ~= nil and not F_ALLOWED_OPS[op] then
+    error(format("F expression is not supported by lookup '%s' (only %s)",
+      op, "eq/ne/lt/lte/gt/gte"))
   end
   return handler(key, value)
 end
@@ -1397,10 +1599,27 @@ function Sql:_resolve_Q(q, context)
   -- 递归必须透传 context：having(Q{...}*Q{...}) 的复合分支若掉回 where 解析，
   -- FK 遍历会额外造 JOIN，与 having 别名解析路径产生分歧
   if q.logic == "NOT" then
-    return format("NOT (%s)", self:_resolve_Q(q.left, context))
+    local inner = self:_resolve_Q(q.left, context)
+    -- 空 Q 降级：`NOT ()` 是 PG 语法错误。空条件本身恒真，其否定恒假
+    if inner == '' then
+      return 'FALSE'
+    end
+    return format("NOT (%s)", inner)
   elseif q.left and q.right then
     local left_token = self:_resolve_Q(q.left, context)
     local right_token = self:_resolve_Q(q.right, context)
+    -- 空 Q 降级：`() OR (T.a = 1)` 是 PG 语法错误。
+    -- 空条件恒真：AND 时取另一侧，OR 时整体恒真
+    if left_token == '' or right_token == '' then
+      local other = left_token ~= '' and left_token or right_token
+      if other == '' then
+        return ''
+      end
+      if q.logic == 'OR' then
+        return 'TRUE'
+      end
+      return other
+    end
     return format("(%s) %s (%s)", left_token, q.logic, right_token)
   elseif context == nil or context == "where" then
     return self:_get_condition_token_from_table(q.cond, q.logic)
@@ -1495,7 +1714,7 @@ function Sql:new(attrs)
   return setmetatable(attrs or {}, self)
 end
 
----@param ... Sql|string
+---@param ... Sql|Model|string
 ---@return self
 function Sql:prepend(...)
   if not self._prepend then
@@ -1509,7 +1728,7 @@ function Sql:prepend(...)
   return self
 end
 
----@param ... Sql|string
+---@param ... Sql|Model|string
 ---@return self
 function Sql:append(...)
   if not self._append then
@@ -1523,6 +1742,12 @@ end
 
 ---@return string
 function Sql:statement()
+  -- 全表 UPDATE/DELETE 防呆：不带 WHERE 的写操作多数是漏写条件而非本意，
+  -- 确实要作用于全表时显式调用 `:allow_full_table()` 声明。
+  if (self._delete or self._update) and not self._where and not self._allow_full_table then
+    error(format("refuse to run %s without WHERE on table %s: call :allow_full_table() if intended",
+      self._delete and "DELETE" or "UPDATE", self.table_name))
+  end
   local statement = assemble_sql {
     table_name = self.table_name,
     as = self._as,
@@ -1550,24 +1775,11 @@ function Sql:statement()
     for_update_of = self._for_update_of_raw and self:_resolve_for_update_of() or nil,
     for_update_no_key = self._for_update_no_key,
   }
-  if self._set_operation then
-    if self._intersect then
-      statement = format("(%s) INTERSECT (%s)", statement, self._intersect)
-    elseif self._intersect_all then
-      statement = format("(%s) INTERSECT ALL (%s)", statement, self._intersect_all)
-    elseif self._union then
-      statement = format("(%s) UNION (%s)", statement, self._union)
-    elseif self._union_all then
-      -- 这种情况必须加上括号，否则报错
-      -- (SELECT id FROM t1 ORDER BY id LIMIT 2)
-      -- UNION ALL
-      -- SELECT id FROM t2;
-      -- 又不能加,因为statement包含with的时候with又必须在括号外面. 先照顾with, 以后再想办法.
-      statement = format("%s UNION ALL (%s)", statement, self._union_all)
-    elseif self._except then
-      statement = format("(%s) EXCEPT (%s)", statement, self._except)
-    elseif self._except_all then
-      statement = format("(%s) EXCEPT ALL (%s)", statement, self._except_all)
+  if self._set_operation and self._set_ops then
+    -- 按调用顺序左结合折叠；左操作数一律加括号：左侧带 ORDER BY/LIMIT 时不加括号 PG 直接语法错，
+    -- 且 `(WITH ... SELECT ...) UNION ALL (...)` 在 PG 中合法，加括号不影响 CTE（已实测）
+    for _, item in ipairs(self._set_ops) do
+      statement = format("(%s) %s (%s)", statement, PG_SET_MAP[item.op], item.statement)
     end
   end
   if self._prepend then
@@ -1673,6 +1885,12 @@ end
 ---@return self
 function Sql:with_values(name, rows)
   local columns = get_keys(rows)
+  -- 列名会原样拼进 CTE 定义（no_check 路径不做字段校验），此处限定为合法标识符
+  for _, c in ipairs(columns) do
+    if type(c) ~= 'string' or not c:find("^[%a_][%w_]*$") then
+      error(format("invalid column name for with_values: %s", tostring(c)))
+    end
+  end
   -- create_sql_as is not suitable for this case, because it will treat non-existed columns as error
   -- rows = self.model:_prepare_db_rows(rows, columns)
   local cte_rows = self:_get_cte_values_literal(rows, columns, true)
@@ -1705,6 +1923,12 @@ end
 ---@return self|Record[]
 function Sql:merge_gets(rows, key, columns)
   columns = columns or get_keys(rows)
+  -- 同 with_values：列名直接进 CTE 头部，先做标识符校验
+  for _, c in ipairs(columns) do
+    if type(c) ~= 'string' or not c:find("^[%a_][%w_]*$") then
+      error(format("invalid column name for merge_gets: %s", tostring(c)))
+    end
+  end
   rows = self.model:_prepare_db_rows(rows, columns)
   local cte_rows = self:_get_cte_values_literal(rows, columns, true)
   local join_cond = self:_get_join_condition_from_key(key, "V", self._as or self.table_name)
@@ -1996,6 +2220,9 @@ function Sql:offset(n)
   if type(n) ~= "number" or n ~= math.floor(n) or n < 0 then
     error("invalid offset value: " .. tostring(n))
   end
+  if n > self.MAX_OFFSET then
+    error(format("offset too large: %s (max %s), use keyset pagination instead", n, self.MAX_OFFSET))
+  end
   self._offset = n
   return self
 end
@@ -2163,6 +2390,13 @@ function Sql:all()
   return self:copy()
 end
 
+---显式允许不带 WHERE 的 UPDATE/DELETE（全表写操作）
+---@return self
+function Sql:allow_full_table()
+  self._allow_full_table = true
+  return self
+end
+
 ---@param name string|table
 ---@param amount? number
 ---@return self
@@ -2230,6 +2464,11 @@ function Sql:annotate(kwargs)
   end
   for alias, func in pairs(kwargs) do
     if type(alias) == 'number' then
+      -- 数字下标 = 自动命名，只有聚合函数（Count/Sum...）才有 column+suffix；
+      -- F 表达式没有 suffix、组合 F 连 column 都没有，直接拼会 "concatenate a nil value"
+      if not (func.__IS_FUNCTION__ and func.column and func.suffix) then
+        error("F expression must be named explicitly, e.g. annotate{ total = F('a') * F('b') }")
+      end
       alias = func.column .. func.suffix
     end
     if self.model.fields[alias] then
@@ -2259,6 +2498,11 @@ function Sql:alias(kwargs)
   end
   for alias, func in pairs(kwargs) do
     if type(alias) == 'number' then
+      -- 数字下标 = 自动命名，只有聚合函数（Count/Sum...）才有 column+suffix；
+      -- F 表达式没有 suffix、组合 F 连 column 都没有，直接拼会 "concatenate a nil value"
+      if not (func.__IS_FUNCTION__ and func.column and func.suffix) then
+        error("F expression must be named explicitly, e.g. annotate{ total = F('a') * F('b') }")
+      end
       alias = func.column .. func.suffix
     end
     if self.model.fields[alias] then
@@ -2278,6 +2522,11 @@ function Sql:aggregate(kwargs)
   local select_parts = {}
   for alias, func in pairs(kwargs) do
     if type(alias) == 'number' then
+      -- 数字下标 = 自动命名，只有聚合函数（Count/Sum...）才有 column+suffix；
+      -- F 表达式没有 suffix、组合 F 连 column 都没有，直接拼会 "concatenate a nil value"
+      if not (func.__IS_FUNCTION__ and func.column and func.suffix) then
+        error("F expression must be named explicitly, e.g. annotate{ total = F('a') * F('b') }")
+      end
       alias = func.column .. func.suffix
     end
     if func.__IS_FUNCTION__ then
@@ -2356,6 +2605,9 @@ function Sql:align(rows, key, columns)
   end
   rows = self.model:_prepare_db_rows(rows, columns)
   upsert_query:returning(key)
+  -- 仅键列对齐（columns 与 key 重合）时，DO NOTHING 会让冲突行不出现在 RETURNING，
+  -- 导致后续 DELETE ... NOT IN (SELECT key FROM U) 误删已存在行（review T1-11）
+  upsert_query._upsert_noop_update = true
   Sql._base_upsert(upsert_query, rows, key, columns)
   self:with("U", upsert_query):where_not_in(key, Sql:new { table_name = 'U' }:_base_select(key)):delete()
   return self
@@ -2425,7 +2677,9 @@ function Sql:upsert(rows, key, columns)
       end
     end
     if key == nil then
-      key = self:_get_bulk_key()
+      -- 必须传 columns：否则推导出的 unique 字段可能不在子查询的选择列中，
+      -- ON CONFLICT arbiter 与插入列失配（对照 merge 分支一直有传）（review lualib-04 P1）
+      key = self:_get_bulk_key(columns)
     end
     return Sql._base_upsert(self, rows, key, columns)
   else
@@ -2521,7 +2775,10 @@ function Sql:exec_statement(statement)
     records = records[1]
   end
   local is_cud = self._update or self._insert or self._delete
-  if (self._raw == nil or self._raw) or self._compact or is_cud then
+  -- CUD 带 RETURNING 且显式 raw(false) 时也要走 load：否则 alioss/table 等字段不反序列化，
+  -- 与 SELECT 路径行为不一致（仅无 returning 的 CUD 才必然走 raw 分支，其结果是 affected_rows）
+  local cud_needs_raw = is_cud and not (self._returning and self._raw == false)
+  if (self._raw == nil or self._raw) or self._compact or cud_needs_raw then
     if is_cud and self._returning then
       records.affected_rows = nil
     end
@@ -2534,6 +2791,9 @@ function Sql:exec_statement(statement)
   else
     ---@type Model
     local model = self.model
+    if is_cud and self._returning then
+      records.affected_rows = nil
+    end
     if not self._select_related then
       for i, record in ipairs(records) do
         records[i] = model:load(record)
@@ -3072,6 +3332,19 @@ end
 ---@return Record, boolean created
 function Sql:get_or_create(params, defaults, columns)
   assert(next(params) ~= nil, "params can't be empty for get_or_create")
+  -- 列名直接拼进 INSERT 列清单与 ON CONFLICT，必须先校验是本模型的字段
+  -- （对照 update_or_create 走 validate_update 会拦截非法字段名）
+  local model_fields = self.model.fields
+  for k in pairs(params) do
+    if type(k) ~= 'string' or not model_fields[k] then
+      error(format("invalid field name for get_or_create: %s", tostring(k)))
+    end
+  end
+  for k in pairs(defaults or {}) do
+    if type(k) ~= 'string' or not model_fields[k] then
+      error(format("invalid field name for get_or_create: %s", tostring(k)))
+    end
+  end
   local values_list, insert_columns = Sql:_get_insert_values_token(dict(params, defaults))
   local key_columns = get_keys(params)
   local all_columns_token
@@ -3119,6 +3392,9 @@ function Sql:update_or_create(params, defaults, columns)
   local row = dict(params, defaults)
   local row_columns = get_keys(row)
   local key_columns = get_keys(params)
+  -- defaults 键 ⊆ params 键时没有可更新列，需强制空更新让冲突行进入 RETURNING，
+  -- 否则已存在行会 DO NOTHING 后抛 "expected 1 record, got 0"
+  self._upsert_noop_update = true
   if not self._skip_validate then
     row = self.model:validate_update(row, row_columns)
   end
@@ -3181,11 +3457,11 @@ local function ensure_array(o)
   return o
 end
 
+local terminal_args = { flat = true, get = true, try_get = true, exists = true }
+
 ---@param data selectArgs
 ---@return table
 ---@return number? num_queries
-local terminal_args = { flat = true, get = true, try_get = true, exists = true }
-
 function Sql:meta_query(data)
   for i, arg_name in ipairs(select_args) do
     if data[arg_name] ~= nil then

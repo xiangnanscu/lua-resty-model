@@ -12,6 +12,31 @@ local as_literal = Utils.as_literal
 local as_literal_without_brackets = Utils.as_literal_without_brackets
 local escape_like_value = Utils.escape_like_value
 
+-- jsonb 字面量：cjson.encode 不转义单引号，直插会构成 SQL 注入（review T1-7）。
+-- encode 后再把 ' 转义为 '' 与 as_literal 对齐。
+local function json_literal(value)
+  return (encode(value):gsub("'", "''"))
+end
+
+-- __regex/__iregex 的值原样下发给 PG 正则引擎（PG 用回溯式实现）。
+-- 值若来自不可信输入，`(a+)+$` 这类模式可构成灾难性回溯（ReDoS）拖垮连接。
+-- 这里做长度与嵌套量词的粗粒度闸门：正常业务正则不受影响，明显的攻击载荷被挡。
+local MAX_REGEX_LENGTH = 200
+local function check_regex_value(value)
+  local s = tostring(value)
+  if #s > MAX_REGEX_LENGTH then
+    error(format("regex pattern too long: %s chars (max %s)", #s, MAX_REGEX_LENGTH))
+  end
+  -- 嵌套量词：`(...)+`/`(...)*`/`(...){n,}` 内部还带量词，是灾难性回溯的典型形状
+  if s:find("%b()[%*%+{]") then
+    local inner = s:match("(%b())[%*%+{]")
+    if inner and inner:find("[%*%+]") then
+      error("regex pattern rejected: nested quantifier may cause catastrophic backtracking")
+    end
+  end
+  return (s:gsub("'", "''"))
+end
+
 ---@type {[string]: fun(key:string, value:DBValue):string}
 local EXPR_OPERATORS = {
   eq = function(key, value)
@@ -117,10 +142,10 @@ local EXPR_OPERATORS = {
     return format("%s::time = %s", key, as_literal(value))
   end,
   regex = function(key, value)
-    return format("%s ~ '%s'", key, (tostring(value):gsub("'", "''")))
+    return format("%s ~ '%s'", key, check_regex_value(value))
   end,
   iregex = function(key, value)
-    return format("%s ~* '%s'", key, (tostring(value):gsub("'", "''")))
+    return format("%s ~* '%s'", key, check_regex_value(value))
   end,
   null = function(key, value)
     if value then
@@ -146,28 +171,28 @@ local EXPR_OPERATORS = {
     return format("(%s) ?| ARRAY[%s]", key, as_literal_without_brackets(value))
   end,
   json_contains = function(key, value)
-    return format("(%s) @> '%s'", key, encode(value))
+    return format("(%s) @> '%s'", key, json_literal(value))
   end,
   json_eq = function(key, value)
-    return format("(%s) = '%s'", key, encode(value))
+    return format("(%s) = '%s'", key, json_literal(value))
   end,
   json_ne = function(key, value)
-    return format("(%s) <> '%s'", key, encode(value))
+    return format("(%s) <> '%s'", key, json_literal(value))
   end,
   json_gt = function(key, value)
-    return format("(%s) > '%s'", key, encode(value))
+    return format("(%s) > '%s'", key, json_literal(value))
   end,
   json_gte = function(key, value)
-    return format("(%s) >= '%s'", key, encode(value))
+    return format("(%s) >= '%s'", key, json_literal(value))
   end,
   json_lt = function(key, value)
-    return format("(%s) < '%s'", key, encode(value))
+    return format("(%s) < '%s'", key, json_literal(value))
   end,
   json_lte = function(key, value)
-    return format("(%s) <= '%s'", key, encode(value))
+    return format("(%s) <= '%s'", key, json_literal(value))
   end,
   contained_by = function(key, value)
-    return format("(%s) <@ '%s'", key, encode(value))
+    return format("(%s) <@ '%s'", key, json_literal(value))
   end,
 }
 

@@ -18,7 +18,9 @@ local traceback     = debug.traceback
 ---@field SSL_VERIFY? boolean verify server certificate
 ---@field SSL_REQUIRED? boolean abort if the server does not support SSL connections
 ---@field SSL_VERSION? string efaults to highest available, no less than TLS v1.1
----@field CONNECT_TIMEOUT? number set the timeout value in milliseconds for subsequent socket operations (connect, receive, and iterators returned from receiveuntil).
+---@field CONNECT_TIMEOUT? number 毫秒。只覆盖 TCP 连接 + startup/auth 握手（默认 2000）
+---@field QUERY_TIMEOUT? number 毫秒。连上之后单条 SQL 等回包的上限（默认 10000）。没配则回落到 CONNECT_TIMEOUT（老行为）
+---@field STATEMENT_TIMEOUT? number 毫秒。服务端 `SET statement_timeout`，0 = 不限。nil = 不下发（省一次往返）
 ---@field MAX_IDLE_TIMEOUT? number can be used to specify the maximal idle timeout (in milliseconds) for the current connection. If omitted, the default setting in the lua_socket_keepalive_timeout config directive will be used. If the 0 value is given, then the timeout interval is unlimited
 ---@field SOCKET_TYPE? string the type of socket to use, one of: "nginx", "luasocket", cqueues (default: "nginx" if in nginx, "luasocket" otherwise)
 ---@field APPLICATION_NAME? string
@@ -37,7 +39,9 @@ local traceback     = debug.traceback
 ---@field ssl_verify? boolean verify server certificate
 ---@field ssl_required? boolean abort if the server does not support SSL connections
 ---@field ssl_version? string defaults to highest available, no less than TLS v1.1
----@field connect_timeout? number set the timeout value in milliseconds for subsequent socket operations (connect, receive, and iterators returned from receiveuntil).
+---@field connect_timeout? number 毫秒，TCP 连接 + 握手
+---@field query_timeout? number 毫秒，单条 SQL 等回包
+---@field statement_timeout? number 毫秒，服务端 statement_timeout；nil 表示不下发
 ---@field max_idle_timeout number can be used to specify the maximal idle timeout (in milliseconds) for the current connection. If omitted, the default setting in the lua_socket_keepalive_timeout config directive will be used. If the 0 value is given, then the timeout interval is unlimited
 ---@field socket_type string the type of socket to use, one of: "nginx", "luasocket", cqueues (default: "nginx" if in nginx, "luasocket" otherwise)
 ---@field application_name string set the name of the connection as displayed in pg_stat_activity. (default: "pgmoon")
@@ -68,10 +72,53 @@ local function coalesce(a, b)
   return b
 end
 
+-- 超时旋钮拆分（见 docs/orm-index.md「数据库连接与超时」）：
+-- 老版本只有 `PG_CONNECT_TIMEOUT` 一个值，经 `conn:settimeout()` 一次性设死
+-- connect / send / **receive** 三者 —— 名字写着 connect，实际效果却是「单条 SQL 的时限」。
+-- 这两个预算量级差 5 倍以上（握手 2s 级 vs 查询 10s 级），合成一个数必然有一头不合适，
+-- 典型症状就是脚本/报表查询报 `receive_message: failed to get type: timeout`。
+-- 现在拆成 CONNECT_TIMEOUT（只管握手）+ QUERY_TIMEOUT（只管查询）。
+-- 老键仍然生效：QUERY_TIMEOUT 没配就回落到它，保证存量 .env 行为不变，只是提醒一次。
+local warned_legacy_timeout = false
+local function warn_legacy_timeout()
+  if warned_legacy_timeout then
+    return
+  end
+  warned_legacy_timeout = true
+  local msg = "[model.query] PG_CONNECT_TIMEOUT 现在只管连接握手，" ..
+      "单条 SQL 的时限请改用 PG_QUERY_TIMEOUT。" ..
+      "建议 .env 写成 PG_CONNECT_TIMEOUT=2000 与 PG_QUERY_TIMEOUT=10000，" ..
+      "详见 docs/orm-index.md「数据库连接与超时」"
+  if ngx then
+    ngx.log(ngx.WARN, msg)
+  else
+    io.stderr:write(msg, "\n")
+  end
+end
+
+---@param options QueryOpts
+---@param env table
+---@return number connect_timeout
+---@return number query_timeout
+local function resolve_timeouts(options, env)
+  local legacy = tonumber(env.PG_CONNECT_TIMEOUT)
+  local connect_timeout = options.CONNECT_TIMEOUT or legacy or 2000
+  local query_timeout = options.QUERY_TIMEOUT or tonumber(env.PG_QUERY_TIMEOUT)
+  if not query_timeout then
+    -- 没有新键：沿用老键，行为与升级前完全一致
+    query_timeout = legacy or 10000
+    if legacy then
+      warn_legacy_timeout()
+    end
+  end
+  return connect_timeout, query_timeout
+end
+
 ---@param options QueryOpts
 ---@return ConnOpts
 local function get_connect_table(options)
   local env = get_env()
+  local connect_timeout, query_timeout = resolve_timeouts(options, env)
   local res = {
     host = options.HOST or env.PGHOST or "127.0.0.1",
     port = options.PORT or tonumber(env.PGPORT) or 5432,
@@ -83,7 +130,9 @@ local function get_connect_table(options)
     ssl_required = coalesce(options.SSL_REQUIRED, env.PG_SSL_REQUIRED),
     pool_name = options.POOL_NAME or env.PG_POOL_NAME or nil,
     pool_size = options.POOL_SIZE or tonumber(env.PG_POOL_SIZE) or 100,
-    connect_timeout = options.CONNECT_TIMEOUT or tonumber(env.PG_CONNECT_TIMEOUT) or 10000,
+    connect_timeout = connect_timeout,
+    query_timeout = query_timeout,
+    statement_timeout = options.STATEMENT_TIMEOUT or tonumber(env.PG_STATEMENT_TIMEOUT),
     max_idle_timeout = options.MAX_IDLE_TIMEOUT or tonumber(env.PG_MAX_IDLE_TIMEOUT) or 10000,
     socket_type = options.SOCKET_TYPE,
     application_name = options.APPLICATION_NAME,
@@ -170,7 +219,8 @@ function ConnProxy:query(statement, compact)
   if type(statement) == 'table' then
     statement = process_statement_table(statement)
   end
-  if get_env().DEBUG_SQL == 'on' then
+  local env = get_env()
+  if env.DEBUG_SQL == 'on' then
     self.debug(statement)
   end
   self.conn.compact = compact
@@ -211,6 +261,8 @@ end
 ---@param connect_table ConnOpts
 local function create_query(options, connect_table)
   local connect_timeout = connect_table.connect_timeout
+  local query_timeout = connect_table.query_timeout
+  local statement_timeout = connect_table.statement_timeout
   local debug_func = options.DEBUG or print
   -- local max_idle_timeout = connect_table.max_idle_timeout
   -- local pool_size = connect_table.pool_size
@@ -218,11 +270,59 @@ local function create_query(options, connect_table)
   ---@return ConnProxy
   local function make_conn()
     local conn = pgmoon.new(connect_table)
+    -- 握手期用 connect_timeout：pgmoon 的 connect() 在新建连接上还会跑
+    -- startup message + auth + wait_until_ready，都要读服务端回包，所以这个值
+    -- 不只是 TCP connect 的预算。复用池里的连接时这几步会跳过
     conn:settimeout(connect_timeout)
     local ok, err = conn:connect()
     if not ok then
       error(err)
     end
+    -- 连上之后换成 query_timeout：cosocket 的 settimeout 会一直作用到这个 socket
+    -- 后续所有 receive 上，也就是「单条 SQL 等回包的上限」。与握手不是一个量级，
+    -- 混用会让报表/迁移这类慢查询按握手的尺度被砍掉
+    conn:settimeout(query_timeout)
+    -- 服务端护栏。客户端超时不会给 PG 发 cancel（查询会继续烧 CPU 到跑完），
+    -- 真正能中止查询的只有 statement_timeout。只在新建连接上下发：
+    -- 这是会话级参数，池里复用的 socket 上依然有效，每请求重发纯属浪费往返
+    if statement_timeout then
+      local sock = conn.sock
+      local times = sock and sock.getreusedtimes and sock:getreusedtimes()
+      if not times or times == 0 then
+        -- 走 %d 前先取整：配成小数时 string.format("%d") 会直接抛错
+        local set_ok, set_err = conn:query(string_format("SET statement_timeout = %d", math.floor(statement_timeout)))
+        if not set_ok then
+          -- 设不上就别把这条半吊子连接放回池里
+          pcall(conn.disconnect, conn)
+          error("failed to set statement_timeout: " .. tostring(set_err))
+        end
+      end
+    end
+    -- -- 显式锁定 standard_conforming_strings（review T3-2）：
+    -- -- model/utils.lua 的 as_literal/escape_like_value 只转义单引号、不转义反斜杠，
+    -- -- 其安全性隐含依赖该参数为 on（PG 默认值）。一旦服务端/角色级配置被改为 off，
+    -- -- `\'` 可逃逸字面量造成注入、且 LIKE 的 ESCAPE '\' 失效。这里把"约定"变成"强制"。
+    -- -- 连接池复用的 socket 上该会话参数依然有效，故仅在新建连接（复用次数 0）时执行，避免每请求多一次往返。
+    -- local is_fresh = true
+    -- local sock = conn.sock
+    -- if sock and sock.getreusedtimes then
+    --   local times = sock:getreusedtimes()
+    --   is_fresh = not times or times == 0
+    -- end
+    -- if is_fresh then
+    --   local set_ok, set_err = conn:query("SET standard_conforming_strings = on")
+    --   if not set_ok then
+    --     error("failed to set standard_conforming_strings: " .. tostring(set_err))
+    --   end
+    --   -- 锁定会话时区（review T3-2）：datetime 列是 timestamptz，回读字符串形态取决于会话时区。
+    --   -- 不锁定则同一份数据在 PG 会话 UTC 与应用机 UTC+8 下解析出的时间相差数小时，
+    --   -- 使派单超时/位置新鲜度判断整体偏移。与 lualib/lib/timeutil.lua 的解析基准配套。
+    --   local tz = get_env().PGTIMEZONE or "Asia/Shanghai"
+    --   local tz_ok, tz_err = conn:query("SET TIME ZONE '" .. tz:gsub("'", "''") .. "'")
+    --   if not tz_ok then
+    --     error("failed to set time zone: " .. tostring(tz_err))
+    --   end
+    -- end
     return ConnProxy:new { conn = conn, options = connect_table, debug = debug_func }
   end
 

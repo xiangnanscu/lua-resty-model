@@ -89,15 +89,15 @@ local function boolean(v)
   end
 end
 
+-- cn 只影响「接受什么输入 / 错误文案」，返回值仍是 boolean：
+-- 列类型是 boolean，且 choices 的 value 也是 true/false，
+-- 返回 "是"/"否" 会同时踩 choices 校验失败与 PG 类型错误
 local function boolean_cn(v)
   local bv = bool_map[v]
   if bv == nil then
     return nil, "请填“是”或“否”"
-  elseif bv == true then
-    return "是"
-  else
-    return "否"
   end
+  return bv
 end
 
 local function as_is(v)
@@ -126,7 +126,8 @@ end
 
 local function year_month(v)
   local err
-  v, err = match(v, [[^\d{4}[-.][01]\d$]], "josui")
+  -- 月份 01-12（review T2-4）：原 [01]\d 会放过 00 与 13-19，前后端同步收紧
+  v, err = match(v, [[^\d{4}[-.](0[1-9]|1[0-2])$]], "josui")
   if v then
     return v[0]
   elseif err then
@@ -318,7 +319,7 @@ end
 local function datetime(v)
   local err
   -- 为了兼容"2023-09-24T13:41:52+08:00"，时区偏移允许正负
-  v, err = match(tostring(v), [[^(\d{4})([^\d])(\d\d?)(\2)(\d\d?)[ T](\d\d?):(\d\d?):(\d\d?)([+-]\d\d?(:\d\d)?)?$]],
+  v, err = match(tostring(v), [[^(\d{4})([^\d])(\d\d?)(\2)(\d\d?)[ T](\d\d?):(\d\d?):(\d\d?)(Z|[+-]\d\d?(:\d\d)?)?$]],
     "josui")
   if v then
     local valid, msg = valid_date(tonumber(v[1]), tonumber(v[3]), tonumber(v[5]))
@@ -341,7 +342,12 @@ local function datetime(v)
     if second > 59 then
       return nil, "秒数字" .. v[8] .. "错误"
     end
-    return string_format("%s-%s-%s %s:%s:%s", v[1], v[3], v[5], v[6], v[7], v[8])
+    -- 保留时区偏移：丢弃后 '+00:00' 会被 DB 会话时区重新解释，跨时区整体偏移
+    local tz = v[9]
+    if tz == 'Z' or tz == 'z' then
+      tz = '+00:00'
+    end
+    return string_format("%s-%s-%s %s:%s:%s%s", v[1], v[3], v[5], v[6], v[7], v[8], tz or '')
   elseif err == nil then
     return nil, "日期格式错误, 正确格式举例: 2010-01-01 01:30:00"
   else
@@ -398,6 +404,11 @@ end
 local a = { 7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2 }
 local b = { "1", "0", "X", "9", "8", "7", "6", "5", "4", "3", "2" }
 local function validate_id_card(s)
+  -- 本函数被导出、可被裸调用：没有输入防御时非数字/短串会在 `nil * number` 处抛运行时错误，
+  -- 而不是返回友好的校验失败（经 id_card 调用时有正则兜底，裸用则崩）
+  if type(s) ~= "string" or not s:find("^%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d[%dXx]$") then
+    return nil, "身份证号错误"
+  end
   local n = 0
   for i = 1, 17 do
     n = n + tonumber(s:sub(i, i)) * a[i]
