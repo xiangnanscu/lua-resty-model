@@ -11,6 +11,7 @@ local format = string.format
 local as_literal = Utils.as_literal
 local as_literal_without_brackets = Utils.as_literal_without_brackets
 local escape_like_value = Utils.escape_like_value
+local NULL = Utils.NULL
 
 -- jsonb 字面量：cjson.encode 不转义单引号，直插会构成 SQL 注入（review T1-7）。
 -- encode 后再把 ' 转义为 '' 与 as_literal 对齐。
@@ -40,6 +41,12 @@ end
 ---@type {[string]: fun(key:string, value:DBValue):string}
 local EXPR_OPERATORS = {
   eq = function(key, value)
+    -- SQL 的三值逻辑：`col = NULL` 恒为 unknown，筛选结果永远是空集、更新永远 0 行，
+    -- 而且不报任何错。调用方写 `Model.NULL`/`ngx.null` 的意思就是「为空」
+    -- （Django 的 `col=None` 同样转 IS NULL），所以这里按意图转（B8）
+    if value == NULL then
+      return format("%s IS NULL", key)
+    end
     return format("%s = %s", key, as_literal(value))
   end,
   iexact = function(key, value)
@@ -58,6 +65,10 @@ local EXPR_OPERATORS = {
     return format("%s >= %s", key, as_literal(value))
   end,
   ne = function(key, value)
+    -- 同 eq：`col <> NULL` 也恒为 unknown
+    if value == NULL then
+      return format("%s IS NOT NULL", key)
+    end
     return format("%s <> %s", key, as_literal(value))
   end,
   ['in'] = function(key, value)
