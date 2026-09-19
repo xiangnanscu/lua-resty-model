@@ -186,7 +186,15 @@ end
 
 function ConnProxy:release()
   local ok, err
-  if self.conn.sock_type == "nginx" then
+  if self.broken then
+    -- 传输层错误（读超时/断链）之后 socket 上还滞留着——或即将到达——上一条查询的回包，
+    -- 协议状态没有同步到 ReadyForQuery。cosocket 的 setkeepalive 在读超时后依然返回成功，
+    -- 这条脏 socket 一旦进池，下一个借到它的查询读到的是上一条的结果集，并从此永久错位一格
+    -- （见 docs/orm-review.md B1）。这种连接只能关掉。
+    -- 关闭本身也可能抛错（socket 已被对端断开），pcall 兜住：连接无论如何不再进池
+    local closed, close_err = pcall(self.disconnect, self)
+    ok, err = closed, (closed and nil or close_err)
+  elseif self.conn.sock_type == "nginx" then
     ok, err = self:keepalive()
   else
     ok, err = self:disconnect()
@@ -224,13 +232,24 @@ function ConnProxy:query(statement, compact)
     self.debug(statement)
   end
   self.conn.compact = compact
-  local result, num_queries, notifications, notices = self.conn:query(statement)
-  if result == nil then
-    -- ignore the rest return values when error
-    error(num_queries)
-  else
+  -- pgmoon 的两种失败形态必须分开对待（pgmoon/init.lua receive_query_result 末尾）：
+  --   PG 报错（已收到 ReadyForQuery，协议状态同步）：nil, err, result, num_queries, notifications, notices
+  --   传输层错误（超时/断链，协议状态未同步）      ：nil, err
+  -- 判据就是第 4 个返回值是不是 number：不是 number 就说明这轮根本没等到 ReadyForQuery。
+  local result, num_queries, notifications, notices, pg_notifications, pg_notices =
+      self.conn:query(statement)
+  if result ~= nil then
     return result, num_queries, notifications, notices
   end
+  -- 出错分支下返回值整体右移一格：num_queries 位上是错误信息，notices 位上才是 num_queries
+  local err, pg_num_queries = num_queries, notices
+  local _ = pg_notifications, pg_notices
+  if type(pg_num_queries) ~= 'number' then
+    -- 传输层错误：连接不可再用，release() 会把它关掉而不是放回池子
+    self.broken = true
+  end
+  -- ignore the rest return values when error
+  error(err)
 end
 
 function ConnProxy:begin()
@@ -397,7 +416,11 @@ local function create_query(options, connect_table)
     if not ok then
       -- 回滚可能因网络中断再次抛错；pcall 兜住，保证 release 必然执行一次，
       -- 且回滚的二次错误不掩盖 callback 根因 cb_res。
-      pcall(conn.rollback, conn)
+      -- 连接已因传输层错误损坏时跳过 ROLLBACK：那条 ROLLBACK 只会读到滞留的回包并
+      -- 「成功」，反而把脏状态坐实（B1）。
+      if not conn.broken then
+        pcall(conn.rollback, conn)
+      end
       conn:release()
       error(cb_res, 0) -- 原样重抛（level 0，不加本文件位置），保持错误对象供上层分类
     end
