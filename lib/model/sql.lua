@@ -133,7 +133,7 @@ end
 ---@field annotate fun(self: Sql<T>, kwargs: {[string]: table}): Sql<T>
 ---@field alias fun(self: Sql<T>, kwargs: {[string]: table}): Sql<T>
 ---@field insert fun(self: Sql<T>, rows: Record|Record[]|Sql, columns?: string[]): Sql<T>
----@field update fun(self: Sql<T>, row: Record|string|(fun(ctx:table):string), columns?: string[]): Sql<T>
+---@field update fun(self: Sql<T>, row: Record, columns?: string[]): Sql<T>
 ---@field align fun(self: Sql<T>, rows: Record[], key?: Keys, columns?: string[]): Sql<T>
 ---@field merge fun(self: Sql<T>, rows: Record[]|Sql, key?: Keys, columns?: string[]): Sql<T>
 ---@field upsert fun(self: Sql<T>, rows: Record[]|Sql, key?: Keys, columns?: string[]): Sql<T>
@@ -2272,7 +2272,20 @@ end
 ---@param op? string
 ---@param dval? DBValue
 ---@return self
-function Sql:where(cond, op, dval)
+function Sql:where(...)
+  -- 参数个数必须用 select('#') 数：声明成具名形参的话，`where('name', nil)` 与
+  -- `where("name = 'x'")` 在函数体里长得一模一样，前者会被当成一参裸 SQL 而生成
+  -- `WHERE name`——varchar 列 PG 报类型错误（还能发现），boolean 列则静默变成
+  -- 「筛选该列为真的行」，语义被悄悄改掉（B16）
+  local argc = select('#', ...)
+  local cond, op, dval = ...
+  if argc == 2 and op == nil and type(cond) == 'string' then
+    error(format(
+      "where('%s', nil): value is nil. " ..
+      "Use where { %s = Model.NULL } (IS NULL) or where { %s__isnull = true }; " ..
+      "if a raw SQL fragment was intended, pass it as the only argument",
+      cond, cond, cond))
+  end
   if type(cond) == 'table' then
     if not cond.__IS_LOGICAL_BUILDER__ then
       local where_token = Sql._get_condition_token_from_table(self, cond)
@@ -2632,6 +2645,8 @@ function Sql:align(rows, key, columns)
   return self
 end
 
+---只接受 table：实现直接 `pairs(row)`，传字符串会报 `bad argument #1 to 'pairs'`。
+---`_base_update` 支持字符串，但那是内部的裸 SQL 通道，公开方法不提供（B15）
 ---@param row Record
 ---@param columns? string[]
 ---@return self
@@ -3184,7 +3199,13 @@ end
 ---@return table<any, Record>
 function Sql:in_bulk(ids, field_name)
   field_name = field_name or self.model.primary_key
-  if ids and #ids > 0 then
+  if ids ~= nil and #ids == 0 then
+    -- 空 id 列表就是「没有要取的东西」，不是「不筛选」。以前空表等同于不传参，
+    -- 一个「请求里 id 列表恰好为空」就会把整张表拉回来（Django 的 in_bulk([]) 返回 {}）。
+    -- 不传参仍然是「取全集」的既有语义（B12）
+    return {}
+  end
+  if ids then
     self:where({ [field_name .. '__in'] = ids })
   end
   local records = self:exec()
