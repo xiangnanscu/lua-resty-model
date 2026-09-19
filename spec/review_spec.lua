@@ -381,6 +381,50 @@ local function main()
       assert.is_truthy(tostring(stmt2):find("name = 'review-blog-1'", 1, true), 'sql=' .. tostring(stmt2))
     end)
   end)
+
+  describe("REVIEW: 疑似问题与设计建议回归", function()
+    before_each(function()
+      seed_data()
+    end)
+
+    -------------------------------------------------------------------
+    it("S2/T13 新建连接必须强制 standard_conforming_strings = on", function()
+      -- 用一条管理连接把**库级默认**改成 off，模拟「服务端/角色级配置被改掉」的部署。
+      -- 转义安全不能建立在「PG 默认值没人动过」这个假设上，这里就是把假设打掉。
+      local admin = Query {
+        DATABASE = 'test',
+        USER = 'postgres',
+        PASSWORD = 'postgres',
+        POOL_NAME = 'review_scs_admin',
+      }
+      admin("ALTER DATABASE test SET standard_conforming_strings = off")
+
+      -- 独立池名保证下面这条走的是新建连接（getreusedtimes() == 0），即会话初始化路径
+      local q = Query {
+        DATABASE = 'test',
+        USER = 'postgres',
+        PASSWORD = 'postgres',
+        POOL_NAME = 'review_scs',
+      }
+      local probe = { pcall(q, "SHOW standard_conforming_strings") }
+      -- `a\'b`：as_literal 只转义单引号，渲染成 'a\''b'。
+      -- scs=on 时它是一个字面量 a\'b；scs=off 时 \' 变成转义引号，字面量提前闭合，
+      -- 后面的内容漏到 SQL 正文里 —— 这正是 S2 描述的注入面。
+      local payload = [[a\'b]]
+      local round = { pcall(q, "SELECT " .. Model.as_literal(payload) .. " AS v") }
+
+      -- 断言之前先恢复库级默认：用例中途失败也不能把本机环境留在 off 上
+      admin("ALTER DATABASE test RESET standard_conforming_strings")
+
+      assert.is_true(probe[1], 'T13: SHOW 查询不应报错; err=' .. tostring(probe[2]))
+      assert.are.same(first_field(probe[2], 'standard_conforming_strings'), 'on',
+        'T13: 库级默认被改成 off 时，ORM 必须在建连时把它强制回 on')
+      assert.is_true(round[1],
+        'T13: scs=off 下含反斜杠的值会拼出越界的 SQL; err=' .. tostring(round[2]))
+      assert.are.same(first_field(round[2], 'v'), payload,
+        'T13: 反斜杠 + 单引号的值必须原样往返')
+    end)
+  end)
 end
 
 ---------------------------------------------------------------------

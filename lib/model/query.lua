@@ -372,47 +372,31 @@ local function create_query(options, connect_table)
         return val
       end)
     end
-    -- 服务端护栏。客户端超时不会给 PG 发 cancel（查询会继续烧 CPU 到跑完），
-    -- 真正能中止查询的只有 statement_timeout。只在新建连接上下发：
-    -- 这是会话级参数，池里复用的 socket 上依然有效，每请求重发纯属浪费往返
-    if statement_timeout then
-      local sock = conn.sock
-      local times = sock and sock.getreusedtimes and sock:getreusedtimes()
-      if not times or times == 0 then
+    -- 新建连接上的会话初始化。下面两条都是**会话级**参数，池里复用的 socket 上依然有效，
+    -- 所以只在复用次数为 0 时下发；两条 SET 拼成一条简单查询走一次往返，
+    -- 复用连接的热路径上一条多余的往返都不留。
+    local sock = conn.sock
+    local times = sock and sock.getreusedtimes and sock:getreusedtimes()
+    if not times or times == 0 then
+      -- 强制 standard_conforming_strings = on（S2）：model/utils.lua 的 as_literal 与
+      -- model/expr.lua 的 LIKE/正则转义都只处理单引号、不转义反斜杠，其安全性隐含依赖
+      -- 该参数为 on（PG 9.1 起的默认值）。它可以在库级/角色级被改成 off，那时 `\'` 能
+      -- 逃逸字符串字面量造成注入，`ESCAPE '\'` 的语义也一并变掉。这里把「约定」变成
+      -- 建连时的「强制」，代价并到下面这一次往返里，等于零。
+      local sets = { "SET standard_conforming_strings = on" }
+      -- 服务端护栏。客户端超时不会给 PG 发 cancel（查询会继续烧 CPU 到跑完），
+      -- 真正能中止查询的只有 statement_timeout
+      if statement_timeout then
         -- 走 %d 前先取整：配成小数时 string.format("%d") 会直接抛错
-        local set_ok, set_err = conn:query(string_format("SET statement_timeout = %d", math.floor(statement_timeout)))
-        if not set_ok then
-          -- 设不上就别把这条半吊子连接放回池里
-          pcall(conn.disconnect, conn)
-          error("failed to set statement_timeout: " .. tostring(set_err))
-        end
+        sets[#sets + 1] = string_format("SET statement_timeout = %d", math.floor(statement_timeout))
+      end
+      local set_ok, set_err = conn:query(table_concat(sets, "; "))
+      if not set_ok then
+        -- 设不上就别把这条半吊子连接放回池里：转义假设不成立的连接，继续用比连不上更危险
+        pcall(conn.disconnect, conn)
+        error("failed to init session (standard_conforming_strings/statement_timeout): " .. tostring(set_err))
       end
     end
-    -- -- 显式锁定 standard_conforming_strings（review T3-2）：
-    -- -- model/utils.lua 的 as_literal/escape_like_value 只转义单引号、不转义反斜杠，
-    -- -- 其安全性隐含依赖该参数为 on（PG 默认值）。一旦服务端/角色级配置被改为 off，
-    -- -- `\'` 可逃逸字面量造成注入、且 LIKE 的 ESCAPE '\' 失效。这里把"约定"变成"强制"。
-    -- -- 连接池复用的 socket 上该会话参数依然有效，故仅在新建连接（复用次数 0）时执行，避免每请求多一次往返。
-    -- local is_fresh = true
-    -- local sock = conn.sock
-    -- if sock and sock.getreusedtimes then
-    --   local times = sock:getreusedtimes()
-    --   is_fresh = not times or times == 0
-    -- end
-    -- if is_fresh then
-    --   local set_ok, set_err = conn:query("SET standard_conforming_strings = on")
-    --   if not set_ok then
-    --     error("failed to set standard_conforming_strings: " .. tostring(set_err))
-    --   end
-    --   -- 锁定会话时区（review T3-2）：datetime 列是 timestamptz，回读字符串形态取决于会话时区。
-    --   -- 不锁定则同一份数据在 PG 会话 UTC 与应用机 UTC+8 下解析出的时间相差数小时，
-    --   -- 使派单超时/位置新鲜度判断整体偏移。与 lualib/lib/timeutil.lua 的解析基准配套。
-    --   local tz = get_env().PGTIMEZONE or "Asia/Shanghai"
-    --   local tz_ok, tz_err = conn:query("SET TIME ZONE '" .. tz:gsub("'", "''") .. "'")
-    --   if not tz_ok then
-    --     error("failed to set time zone: " .. tostring(tz_err))
-    --   end
-    -- end
     return ConnProxy:new { conn = conn, options = connect_table, debug = debug_func }
   end
 
