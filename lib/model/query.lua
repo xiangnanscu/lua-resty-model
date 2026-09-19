@@ -24,6 +24,7 @@ local traceback     = debug.traceback
 ---@field MAX_IDLE_TIMEOUT? number can be used to specify the maximal idle timeout (in milliseconds) for the current connection. If omitted, the default setting in the lua_socket_keepalive_timeout config directive will be used. If the 0 value is given, then the timeout interval is unlimited
 ---@field SOCKET_TYPE? string the type of socket to use, one of: "nginx", "luasocket", cqueues (default: "nginx" if in nginx, "luasocket" otherwise)
 ---@field APPLICATION_NAME? string
+---@field BIGINT_AS_STRING? boolean bigint(int8) 列按原始十进制字符串读回，不经 tonumber（默认 false）
 ---@field BACKLOG? number OpenResty only, specify the size of the connection pool. If omitted and no backlog option was provided, no pool will be created. If omitted but backlog was provided, the pool will be created with a default size equal to the value of the lua_socket_pool_size directive
 ---@field DEBUG? fun(statement: string): nil
 
@@ -45,6 +46,7 @@ local traceback     = debug.traceback
 ---@field max_idle_timeout number can be used to specify the maximal idle timeout (in milliseconds) for the current connection. If omitted, the default setting in the lua_socket_keepalive_timeout config directive will be used. If the 0 value is given, then the timeout interval is unlimited
 ---@field socket_type string the type of socket to use, one of: "nginx", "luasocket", cqueues (default: "nginx" if in nginx, "luasocket" otherwise)
 ---@field application_name string set the name of the connection as displayed in pg_stat_activity. (default: "pgmoon")
+---@field bigint_as_string boolean bigint(int8) 列按原始十进制字符串读回
 ---@field backlog number OpenResty only, specify the size of the connection pool. If omitted and no backlog option was provided, no pool will be created. If omitted but backlog was provided, the pool will be created with a default size equal to the value of the lua_socket_pool_size directive
 
 ---@class PgmoonConn
@@ -114,6 +116,11 @@ local function resolve_timeouts(options, env)
   return connect_timeout, query_timeout
 end
 
+---.env 里的布尔开关统一按字符串 "true" 判定，未配置时为 false
+local function get_env_flag(env, key)
+  return env[key] == "true"
+end
+
 ---@param options QueryOpts
 ---@return ConnOpts
 local function get_connect_table(options)
@@ -136,6 +143,7 @@ local function get_connect_table(options)
     max_idle_timeout = options.MAX_IDLE_TIMEOUT or tonumber(env.PG_MAX_IDLE_TIMEOUT) or 10000,
     socket_type = options.SOCKET_TYPE,
     application_name = options.APPLICATION_NAME,
+    bigint_as_string = coalesce(options.BIGINT_AS_STRING, get_env_flag(env, "PG_BIGINT_AS_STRING")),
     backlog = options.BACKLOG,
   }
   if not res.pool_name then
@@ -302,6 +310,7 @@ local function create_query(options, connect_table)
   local connect_timeout = connect_table.connect_timeout
   local query_timeout = connect_table.query_timeout
   local statement_timeout = connect_table.statement_timeout
+  local bigint_as_string = connect_table.bigint_as_string
   local debug_func = options.DEBUG or print
   -- local max_idle_timeout = connect_table.max_idle_timeout
   -- local pool_size = connect_table.pool_size
@@ -321,6 +330,15 @@ local function create_query(options, connect_table)
     -- 后续所有 receive 上，也就是「单条 SQL 等回包的上限」。与握手不是一个量级，
     -- 混用会让报表/迁移这类慢查询按握手的尺度被砍掉
     conn:settimeout(query_timeout)
+    -- bigint 读回（B3/D4）：pgmoon 把 oid 20(int8) 归到 "number" 类，一律 tonumber，
+    -- 超过 2^53 的值末位直接错掉且不报错。打开这个开关后 int8 按原始十进制字符串返回，
+    -- 精度由调用方决定怎么用（字符串比较 / int64 cdata / 直接透传给前端）。
+    -- 默认关：开启会把 `rec.id` 从 number 变成 string，是行为变化，必须由业务方自己选
+    if bigint_as_string then
+      conn:set_type_deserializer(20, "int8_text", function(_, val)
+        return val
+      end)
+    end
     -- 服务端护栏。客户端超时不会给 PG 发 cancel（查询会继续烧 CPU 到跑完），
     -- 真正能中止查询的只有 statement_timeout。只在新建连接上下发：
     -- 这是会话级参数，池里复用的 socket 上依然有效，每请求重发纯属浪费往返

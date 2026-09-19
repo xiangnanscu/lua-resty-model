@@ -923,15 +923,62 @@ local function add_min_or_max_validators(self, validators)
   end
 end
 
+-- bigint 支持（B3/D4）：雪花 ID、微信/支付平台 ID、毫秒时间戳这类值超过 2^53，
+-- double 已经无法精确表示，所以它们必须以「精确的十进制字符串」或 int64 cdata 的形态
+-- 一路穿过校验 → 拼 SQL → 读回三段，中途任何一次 tonumber 都会把末位抹掉。
+local BIGINT_MAX_SAFE = 2 ^ 53
+
+---@param v any
+---@return string|nil 去掉首尾空白后的十进制整数串
+local function exact_integer_string(v)
+  if type(v) ~= 'string' then
+    return nil
+  end
+  return v:match("^%s*([-+]?%d+)%s*$")
+end
+
+---bigint 口径的整数校验：double 能精确表示的转成 number（与 integer 校验器一致），
+---超出范围的保留原样的十进制字符串（`as_literal` 会把字符串当字面量，PG 侧按 bigint 解析）
+local function bigint_validator(v)
+  if type(v) == 'cdata' then
+    -- int64/uint64 cdata 本来就是精确的，原样透传给 as_literal
+    return v
+  end
+  local digits = exact_integer_string(v)
+  if digits then
+    local n = tonumber(digits)
+    if n and n >= -BIGINT_MAX_SAFE and n <= BIGINT_MAX_SAFE then
+      return n
+    end
+    return digits
+  end
+  return Validator.integer(v)
+end
+
+---bigint 列的读回：BIGINT_AS_STRING 打开时 int8 按字符串回来，
+---安全范围内转回 number（保持既有调用习惯），超出范围保留字符串（保住精度）
+local function bigint_load(_, value)
+  local digits = exact_integer_string(value)
+  if not digits then
+    return value
+  end
+  local n = tonumber(digits)
+  if n and n >= -BIGINT_MAX_SAFE and n <= BIGINT_MAX_SAFE then
+    return n
+  end
+  return digits
+end
+
 ---@class IntegerField:BaseField
 ---@field type "integer"
----@field db_type "integer"
+---@field db_type "integer"|"bigint"
 ---@field min? number
 ---@field max? number
 ---@field step? number
 ---@field serial? boolean
+---@field bigint? boolean `db_type = 'bigint'` 的简写
 IntegerField = BaseField:class {
-  option_names = { "min", "max", "step", "serial" },
+  option_names = { "min", "max", "step", "serial", "bigint" },
 }
 
 function IntegerField:init(options)
@@ -939,13 +986,22 @@ function IntegerField:init(options)
     type = "integer",
     db_type = "integer",
   }, options))
+  if self.bigint then
+    self.db_type = "bigint"
+  end
+  if self.db_type == "bigint" then
+    self.bigint = true
+    -- 只有 bigint 字段才挂 load：Model:load 对每行每列都会查一次 field.load，
+    -- 普通 integer 列没必要为此多一次函数调用
+    self.load = bigint_load
+  end
 end
 
 ---@param validators function[]
 ---@return function[]
 function IntegerField:get_validators(validators)
   add_min_or_max_validators(self, validators)
-  table_insert(validators, 1, Validator.integer)
+  table_insert(validators, 1, self.bigint and bigint_validator or Validator.integer)
   return BaseField.get_validators(self, validators)
 end
 

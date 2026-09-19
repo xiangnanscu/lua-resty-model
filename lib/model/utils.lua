@@ -469,6 +469,57 @@ local function extract_column_names(sql_text)
   return columns
 end
 
+-- =========================================================================
+-- 数字字面量（B3 / D4）
+-- =========================================================================
+
+-- double 能精确表示的整数上界。超过它，`123456789012345678` 这类 19 位雪花 ID
+-- 在 Lua 的词法阶段就已经变成 123456789012345680，任何渲染都取不回原值
+local MAX_SAFE_INTEGER = 2 ^ 53
+
+local has_ffi, ffi = pcall(require, "ffi")
+local int64_t, uint64_t
+if has_ffi then
+  int64_t = ffi.typeof("int64_t")
+  uint64_t = ffi.typeof("uint64_t")
+end
+
+---把 Lua number 渲染成 SQL 数字字面量。
+---不能直接 tostring：LuaJIT 对 number 用 `%.14g`，`1e14` 起的整数会变成科学计数法
+---（`1e+14`、`1.2345678901235e+17`）。拼进 WHERE 就是匹配错行或匹配不到，
+---拼进 INSERT 就是写入被四舍五入的值，而且全程不报错。
+---@param value number
+---@return string
+local function number_literal(value)
+  if value ~= value then
+    error("NaN is not a valid SQL number literal")
+  elseif value == math.huge or value == -math.huge then
+    error("inf is not a valid SQL number literal")
+  elseif value % 1 ~= 0 then
+    -- 非整数：`%.14g` 就是它本来的表示形态，PG 侧按 numeric/float 解析
+    return tostring(value)
+  elseif value >= -MAX_SAFE_INTEGER and value <= MAX_SAFE_INTEGER then
+    return format("%d", value)
+  else
+    -- 到这里 value 已经不是调用方写下的那个整数了。与其静默写入一个被舍入过的值，
+    -- 不如报错，让调用方改用 int64 cdata（`123456789012345678LL`）或十进制字符串
+    error(format(
+      "integer %s exceeds 2^53 and has already lost precision as a Lua number; " ..
+      "pass it as an int64 cdata (123LL) or a decimal string instead",
+      format("%.0f", value)))
+  end
+end
+
+---int64/uint64 cdata：tostring 会带上 `LL`/`ULL` 后缀，SQL 里要去掉
+---@param value ffi.cdata*
+---@return string
+local function cdata_literal(value)
+  if has_ffi and (ffi.istype(int64_t, value) or ffi.istype(uint64_t, value)) then
+    return (tostring(value):gsub("U?LL$", ""))
+  end
+  error(format("don't know how to escape cdata value: %s", tostring(value)))
+end
+
 ---构造值转 SQL 文本的函数
 ---@param quote_string boolean 字符串是否加引号并转义（literal），否则原样当 token
 ---@param add_brackets boolean 数组值是否包一层括号
@@ -483,7 +534,9 @@ local function _escape_factory(quote_string, add_brackets)
         return value
       end
     elseif "number" == value_type then
-      return tostring(value)
+      return number_literal(value)
+    elseif "cdata" == value_type then
+      return cdata_literal(value)
     elseif "boolean" == value_type then
       return value and "TRUE" or "FALSE"
     elseif "function" == value_type then
