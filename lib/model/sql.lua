@@ -1740,14 +1740,20 @@ function Sql:append(...)
   return self
 end
 
----@return string
-function Sql:statement()
-  -- 全表 UPDATE/DELETE 防呆：不带 WHERE 的写操作多数是漏写条件而非本意，
-  -- 确实要作用于全表时显式调用 `:allow_full_table()` 声明。
+---全表 UPDATE/DELETE 防呆：`Model:update(row)` 漏写 `:where{}` 多半不是本意，
+---确实要作用于全表时显式调用 `:allow_full_table()` 声明。
+---只在**真正执行**时检查：`:statement()` 只是拼字符串，作为子查询/CTE 被内嵌的写操作
+---（`upsert(BlogBin:update{...}:returning{...})`）也由外层语句负责，都不该被拦。
+---@private
+function Sql:_check_full_table_write()
   if (self._delete or self._update) and not self._where and not self._allow_full_table then
     error(format("refuse to run %s without WHERE on table %s: call :allow_full_table() if intended",
       self._delete and "DELETE" or "UPDATE", self.table_name))
   end
+end
+
+---@return string
+function Sql:statement()
   local statement = assemble_sql {
     table_name = self.table_name,
     as = self._as,
@@ -1975,6 +1981,10 @@ function Sql:delete(cond, op, dval)
   self._delete = true
   if cond ~= nil then
     self:where(cond, op, dval)
+  else
+    -- 不带条件调用 `delete()` 是显式的「删全表」写法（Django 的 `.all().delete()` 同义），
+    -- 与「写了条件却没生效」不同，不必再要求 allow_full_table()
+    self._allow_full_table = true
   end
   return self
 end
@@ -2838,6 +2848,7 @@ end
 ---@return Array<Record>
 ---@return number num_queries
 function Sql:exec()
+  self:_check_full_table_write()
   return self:exec_statement(self:statement())
 end
 

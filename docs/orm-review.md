@@ -617,3 +617,31 @@ resty -I lib -I spec --main-conf 'env NODE_ENV;' path/to/script.lua
 ```
 
 脚本开头 `require "model_spec"` 即可拿到 `Blog/Entry/Author/ViewLog` 等模型（该文件在非 busted 下返回模型表）。B1 的复现需要独立 `POOL_NAME`，避免污染其它用例共用的连接池。
+
+---
+
+## 7. 执行中发现
+
+任务执行过程中发现、但第 2 节未列出的问题记在这里（按发现顺序编号 F1、F2…）。
+
+### F1 [高] 现有 263 例在本机并非全绿：5 例因 96ff0ff 的实现变更而失效
+
+- 发现于：T0 开工前跑基线（`yarn test`），实际结果是 **258 ok / 5 not ok**，与第 1 节「本次运行全部通过」的记述不符。失败的 5 例：
+
+| TAP 编号 | 用例                                                    | 报错                                                                   |
+| -------- | ------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 18       | `bug_spec` REVIEW-B8: time/datetime 边界与负时区        | 期望 `'2023-09-24 13:41:52'`，实际 `'2023-09-24 13:41:52-08:00'`       |
+| 23       | `bug_spec` REVIEW-B10d: F 表达式用于 json 字段          | `refuse to run UPDATE without WHERE on table author`                   |
+| 158      | `model_spec` upsert from SELECT 子查询 (注入新 name)    | `refuse to run DELETE without WHERE on table blog_bin`                 |
+| 159      | `model_spec` upsert from UPDATE+RETURNING 子查询        | `refuse to run UPDATE without WHERE on table blog_bin`                 |
+| 166      | `model_spec` updates from SELECT 子查询                 | `refuse to run DELETE without WHERE on table blog_bin`                 |
+
+- 根因（`git log -S` 定位到同一个 commit `96ff0ff`）：
+  1. **全表写防呆放在了 `Sql:statement()` 里**（`sql.lua:1744`）。`statement()` 只是拼字符串，既覆盖了「只生成 SQL 不执行」的用法，也覆盖了「写操作被当作子查询/CTE 内嵌进外层语句」的用法（`Blog:upsert(BlogBin:update{...}:returning{...})`）。同时 `Model:delete()` 不传条件本来就是显式的「删全表」写法（Django 的 `.all().delete()` 同义），也被一并拦下。
+  2. **`Validator.datetime` 改成保留时区偏移**，但 `bug_spec` REVIEW-B8 锁的是「返回不带偏移的规范形态」。保留偏移的动机（丢弃后 `+00:00` 会被 DB 会话时区重新解释）只对**入库**成立，而 `Validator.datetime` 同时被当作表单校验器导出。
+- 处置（按 CLAUDE.md「测试不通过一律改实现代码」，既有断言语义未动）：
+  1. 防呆拆成 `Sql:_check_full_table_write()`，只在 `Sql:exec()` 里调用；`Sql:delete()` 不传条件时置 `_allow_full_table`。防呆对真正的事故场景（`Model:update(row):exec()` 漏写 `:where{}`）依然生效。
+  2. `validator.lua` 把解析抽成 `parse_datetime()`，分出两个口径：`datetime`（表单口径，不带偏移，恢复 `bug_spec` 锁定的契约）与 `datetime_tz`（入库口径，保留偏移）。`DatetimeField:get_validators` 与 `VALID_FOREIGN_KEY_TYPES.datetime` 改用后者，所以 B4 的前提（带偏移的值确实会进 SQL）不变。
+- 改动文件：`lib/model/sql.lua`、`lib/model/validator.lua`、`lib/model/fields.lua`
+- 结果：`yarn test` 从 258 ok / 5 not ok 变为 **263 ok / 13 not ok**，13 例全部是 T0 新增的红用例（见 T0 小节的完整输出）。
+- 遗留：`allow_full_table()` 这个公开方法在 `docs/orm-*.md` 里没有任何说明，T16 补文档时要一并写上（包括「`delete()` 不传条件即全表」这条语义）。

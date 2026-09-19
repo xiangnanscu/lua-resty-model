@@ -190,7 +190,7 @@ local VALID_FOREIGN_KEY_TYPES = {
   id_card = tostring,
   integer = Validator.integer,
   float = tonumber,
-  datetime = Validator.datetime,
+  datetime = Validator.datetime_tz,
   date = Validator.date,
   time = Validator.time
 }
@@ -1090,7 +1090,7 @@ function DatetimeField:init(options)
 end
 
 function DatetimeField:get_validators(validators)
-  table_insert(validators, 1, Validator.datetime)
+  table_insert(validators, 1, Validator.datetime_tz)
   return BaseField.get_validators(self, validators)
 end
 

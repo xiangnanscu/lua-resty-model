@@ -316,43 +316,65 @@ local function time(v)
   end
 end
 
+---datetime 的公共解析。两个口径共用同一套合法性检查，只在「偏移要不要带出去」上分叉：
+---`datetime` 是表单口径（返回不带偏移的规范形态），`datetime_tz` 是入库口径（保留偏移）。
+---@param v any
+---@return string? base "YYYY-MM-DD HH:MM:SS"
+---@return string? tz 规范化后的时区偏移；输入没带偏移时是空串
+---@return string? err
+local function parse_datetime(v)
+  -- 为了兼容"2023-09-24T13:41:52+08:00"，时区偏移允许正负，也认 ISO 8601 的 Z
+  local m, err = match(tostring(v),
+    [[^(\d{4})([^\d])(\d\d?)(\2)(\d\d?)[ T](\d\d?):(\d\d?):(\d\d?)(Z|[+-]\d\d?(:\d\d)?)?$]], "josui")
+  if not m then
+    if err == nil then
+      return nil, nil, "日期格式错误, 正确格式举例: 2010-01-01 01:30:00"
+    end
+    return nil, nil, err
+  end
+  local valid, msg = valid_date(tonumber(m[1]), tonumber(m[3]), tonumber(m[5]))
+  if not valid then
+    return nil, nil, msg
+  end
+  local hour = tonumber(m[6])
+  local minute = tonumber(m[7])
+  local second = tonumber(m[8])
+  if hour == 24 then
+    if minute ~= 0 or second ~= 0 then
+      return nil, nil, "小时为24时只能是24:00:00"
+    end
+  elseif hour > 23 then
+    return nil, nil, "小时数字" .. m[6] .. "错误"
+  end
+  if minute > 59 then
+    return nil, nil, "分钟数字" .. m[7] .. "错误"
+  end
+  if second > 59 then
+    return nil, nil, "秒数字" .. m[8] .. "错误"
+  end
+  local tz = m[9]
+  if tz == 'Z' or tz == 'z' then
+    tz = '+00:00'
+  end
+  return string_format("%s-%s-%s %s:%s:%s", m[1], m[3], m[5], m[6], m[7], m[8]), tz or ''
+end
+
 local function datetime(v)
-  local err
-  -- 为了兼容"2023-09-24T13:41:52+08:00"，时区偏移允许正负
-  v, err = match(tostring(v), [[^(\d{4})([^\d])(\d\d?)(\2)(\d\d?)[ T](\d\d?):(\d\d?):(\d\d?)(Z|[+-]\d\d?(:\d\d)?)?$]],
-    "josui")
-  if v then
-    local valid, msg = valid_date(tonumber(v[1]), tonumber(v[3]), tonumber(v[5]))
-    if not valid then
-      return nil, msg
-    end
-    local hour = tonumber(v[6])
-    local minute = tonumber(v[7])
-    local second = tonumber(v[8])
-    if hour == 24 then
-      if minute ~= 0 or second ~= 0 then
-        return nil, "小时为24时只能是24:00:00"
-      end
-    elseif hour > 23 then
-      return nil, "小时数字" .. v[6] .. "错误"
-    end
-    if minute > 59 then
-      return nil, "分钟数字" .. v[7] .. "错误"
-    end
-    if second > 59 then
-      return nil, "秒数字" .. v[8] .. "错误"
-    end
-    -- 保留时区偏移：丢弃后 '+00:00' 会被 DB 会话时区重新解释，跨时区整体偏移
-    local tz = v[9]
-    if tz == 'Z' or tz == 'z' then
-      tz = '+00:00'
-    end
-    return string_format("%s-%s-%s %s:%s:%s%s", v[1], v[3], v[5], v[6], v[7], v[8], tz or '')
-  elseif err == nil then
-    return nil, "日期格式错误, 正确格式举例: 2010-01-01 01:30:00"
-  else
+  local base, _, err = parse_datetime(v)
+  if not base then
     return nil, err
   end
+  return base
+end
+
+---入库口径：保留时区偏移。丢弃后 '+00:00' 会被 DB 会话时区重新解释，跨时区整体偏移，
+---所以 DatetimeField 走这一支（见 docs/orm-review.md B4）
+local function datetime_tz(v)
+  local base, tz, err = parse_datetime(v)
+  if not base then
+    return nil, err
+  end
+  return base .. tz
 end
 
 local function non_empty_array_required(message)
@@ -467,6 +489,7 @@ return {
   year = year,
   date = date,
   datetime = datetime,
+  datetime_tz = datetime_tz,
   time = time,
   trim = trim,
   delete_spaces = delete_spaces,
