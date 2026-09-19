@@ -1166,16 +1166,17 @@ function Model:validate_create(input, names)
     local value, err, index = field:validate(rawget(input, name))
     if err ~= nil then
       error(self:make_field_error(name, err, index))
-    elseif field.default and (value == nil or value == "") then
-      if type(field.default) ~= "function" then
-        value = field.default
-      else
-        value, err = field.default()
-        if value == nil then
-          ---@cast err string
-          error(self:make_field_error(name, tostring(err), index))
-        end
+    elseif field.default ~= nil and (value == nil or value == "") then
+      -- 必须走 get_default()：它对 table 型 default 会 clone 一份。直接
+      -- `value = field.default` 等于把字段定义上的那张表交给调用方，调用方一改
+      -- （`rec.tags[#rec.tags + 1] = x`、`rec.payload.k = v`）就污染了字段定义，
+      -- 本 worker 后续所有创建都带着这次的修改，直到进程重启（B6）
+      local default_value, default_err = field:get_default()
+      if default_value == nil and type(field.default) == "function" then
+        ---@cast default_err string
+        error(self:make_field_error(name, tostring(default_err), index))
       end
+      value = default_value
     end
     data[name] = value
   end
