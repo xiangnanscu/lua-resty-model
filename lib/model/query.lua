@@ -1,5 +1,7 @@
 local pgmoon        = require "pgmoon"
 local dotenv        = require "resty.dotenv"
+-- 只为拿 NULL 哨兵：model.utils 不依赖本模块，不构成循环 require
+local NULL          = require("model.utils").NULL
 local type          = type
 local table_concat  = table.concat
 local string_format = string.format
@@ -25,6 +27,7 @@ local traceback     = debug.traceback
 ---@field SOCKET_TYPE? string the type of socket to use, one of: "nginx", "luasocket", cqueues (default: "nginx" if in nginx, "luasocket" otherwise)
 ---@field APPLICATION_NAME? string
 ---@field BIGINT_AS_STRING? boolean bigint(int8) 列按原始十进制字符串读回，不经 tonumber（默认 false）
+---@field CONVERT_NULL? boolean 非 compact 结果里 NULL 列也用 `Model.NULL` 占位而不是缺键（默认 false）
 ---@field BACKLOG? number OpenResty only, specify the size of the connection pool. If omitted and no backlog option was provided, no pool will be created. If omitted but backlog was provided, the pool will be created with a default size equal to the value of the lua_socket_pool_size directive
 ---@field DEBUG? fun(statement: string): nil
 
@@ -47,6 +50,7 @@ local traceback     = debug.traceback
 ---@field socket_type string the type of socket to use, one of: "nginx", "luasocket", cqueues (default: "nginx" if in nginx, "luasocket" otherwise)
 ---@field application_name string set the name of the connection as displayed in pg_stat_activity. (default: "pgmoon")
 ---@field bigint_as_string boolean bigint(int8) 列按原始十进制字符串读回
+---@field convert_null boolean 非 compact 结果里 NULL 列也占位
 ---@field backlog number OpenResty only, specify the size of the connection pool. If omitted and no backlog option was provided, no pool will be created. If omitted but backlog was provided, the pool will be created with a default size equal to the value of the lua_socket_pool_size directive
 
 ---@class PgmoonConn
@@ -144,6 +148,7 @@ local function get_connect_table(options)
     socket_type = options.SOCKET_TYPE,
     application_name = options.APPLICATION_NAME,
     bigint_as_string = coalesce(options.BIGINT_AS_STRING, get_env_flag(env, "PG_BIGINT_AS_STRING")),
+    convert_null = coalesce(options.CONVERT_NULL, get_env_flag(env, "PG_CONVERT_NULL")),
     backlog = options.BACKLOG,
   }
   if not res.pool_name then
@@ -240,6 +245,13 @@ function ConnProxy:query(statement, compact)
     self.debug(statement)
   end
   self.conn.compact = compact
+  -- compact 结果集的语义是「按位置取列」，而 pgmoon 在 convert_null = false 时
+  -- **不写入** NULL 列，整行就少一格：`values_list({'id','rating'})` 对 NULL 行返回
+  -- `{1}` 而不是 `{1, NULL}`，`flat` 的元素数也会少于行数，与同序的 id 列表对不上（B5）。
+  -- 位置敏感的路径一律要占位，所以 compact 查询无条件打开；
+  -- 非 compact 路径默认保持「缺键」的老行为（`ngx.null` 为真值，会改变 `if rec.x then` 的判断），
+  -- 需要的业务用 CONVERT_NULL 显式打开（D3 第二档）
+  self.conn.convert_null = compact == true or self.options.convert_null == true
   -- pgmoon 的两种失败形态必须分开对待（pgmoon/init.lua receive_query_result 末尾）：
   --   PG 报错（已收到 ReadyForQuery，协议状态同步）：nil, err, result, num_queries, notifications, notices
   --   传输层错误（超时/断链，协议状态未同步）      ：nil, err
@@ -330,6 +342,9 @@ local function create_query(options, connect_table)
     -- 后续所有 receive 上，也就是「单条 SQL 等回包的上限」。与握手不是一个量级，
     -- 混用会让报表/迁移这类慢查询按握手的尺度被砍掉
     conn:settimeout(query_timeout)
+    -- pgmoon 默认的 NULL 哨兵是它自己的 `{"NULL"}` 表，与 ORM 对外的 `Model.NULL`
+    -- （ngx.null）不是同一个对象。统一成后者，调用方才能用 `v == Model.NULL` 判断占位
+    conn.NULL = NULL
     -- bigint 读回（B3/D4）：pgmoon 把 oid 20(int8) 归到 "number" 类，一律 tonumber，
     -- 超过 2^53 的值末位直接错掉且不报错。打开这个开关后 int8 按原始十进制字符串返回，
     -- 精度由调用方决定怎么用（字符串比较 / int64 cdata / 直接透传给前端）。
