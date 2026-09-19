@@ -487,6 +487,17 @@ function BaseField:get_option_names()
   return list(base_option_names, self.option_names)
 end
 
+---CTE 首行（`merge`/`updates`/`gets`/`merge_gets`/`with_values`）给字面量加的类型后缀。
+---不能直接用 `db_type`：`db_type` 同时被 `resty.migrate` 拿去比对 schema，而这里需要的是
+---「这个值在 SQL 里应该被解释成什么类型」。两者对 datetime/time 恰好不一致——列由
+---`timezone = true` 建成 `timestamp(0) with time zone`，而 `db_type` 写的是 `timestamp`，
+---用它做 cast 会让 PG **忽略**值里的 `+08:00`/`Z` 偏移，再隐式转回 timestamptz 时
+---按会话时区重新解释，同一个值走 insert 和走 updates 就差了一个时区偏移量（B4/D5）。
+---@return string
+function BaseField:get_cast_type()
+  return self.db_type
+end
+
 ---@param key string
 ---@return string
 function BaseField:get_error_message(key)
@@ -1150,6 +1161,15 @@ function DatetimeField:get_validators(validators)
   return BaseField.get_validators(self, validators)
 end
 
+---带时区的 datetime 列实际类型是 `timestamptz`，cast 必须跟着走，否则偏移被丢掉
+---@return string
+function DatetimeField:get_cast_type()
+  if self.timezone then
+    return "timestamptz"
+  end
+  return self.db_type
+end
+
 function DatetimeField:json()
   local ret = BaseField.json(self)
   if ret.disabled == nil and (ret.auto_now or ret.auto_now_add) then
@@ -1218,6 +1238,15 @@ end
 function TimeField:get_validators(validators)
   table_insert(validators, 1, Validator.time)
   return BaseField.get_validators(self, validators)
+end
+
+---同 DatetimeField：`timezone = true` 的 time 列是 `timetz`
+---@return string
+function TimeField:get_cast_type()
+  if self.timezone then
+    return "timetz"
+  end
+  return self.db_type
 end
 
 ---@param value ""|nil|string

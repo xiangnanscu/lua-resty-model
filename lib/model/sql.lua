@@ -1649,7 +1649,9 @@ function Sql:_array_to_values(row, columns, no_check, type_suffix)
     local field = self.model.fields[col]
     if field then
       if type_suffix then
-        row[i] = format("%s::%s", as_literal(row[i]), field.db_type)
+        -- cast 用 get_cast_type() 而不是 db_type：后者同时服务于 resty.migrate 的
+        -- schema 比对，datetime/time 上与列的真实类型（timestamptz/timetz）不一致（B4）
+        row[i] = format("%s::%s", as_literal(row[i]), field:get_cast_type())
       else
         row[i] = as_literal(row[i])
       end
