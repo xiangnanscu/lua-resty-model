@@ -247,17 +247,29 @@ function ConnProxy:query(statement, compact)
   if type(pg_num_queries) ~= 'number' then
     -- 传输层错误：连接不可再用，release() 会把它关掉而不是放回池子
     self.broken = true
+  elseif self.in_transaction and not self.aborted then
+    -- 事务内的 PG 报错：此后整个会话进入 aborted 状态，COMMIT 会被 PG 当作 ROLLBACK
+    -- 静默执行。记下首个错误，transaction() 在 callback 正常返回时据此拒绝提交（B2）
+    self.aborted = true
+    self.aborted_error = err
   end
   -- ignore the rest return values when error
   error(err)
 end
 
+---事务状态机：begin 置位，commit/rollback 清零，rollback_to 让事务从 aborted 恢复可用
 function ConnProxy:begin()
-  return self:query("BEGIN")
+  local res = self:query("BEGIN")
+  self.in_transaction = true
+  return res
 end
 
 function ConnProxy:commit()
-  return self:query("COMMIT")
+  local res = self:query("COMMIT")
+  self.in_transaction = false
+  self.aborted = false
+  self.aborted_error = nil
+  return res
 end
 
 function ConnProxy:savepoint(name)
@@ -265,11 +277,19 @@ function ConnProxy:savepoint(name)
 end
 
 function ConnProxy:rollback()
-  return self:query("ROLLBACK")
+  local res = self:query("ROLLBACK")
+  self.in_transaction = false
+  self.aborted = false
+  self.aborted_error = nil
+  return res
 end
 
 function ConnProxy:rollback_to(name)
-  return self:query("ROLLBACK TO SAVEPOINT " .. name)
+  local res = self:query("ROLLBACK TO SAVEPOINT " .. name)
+  -- 回到 savepoint 之后事务重新可写，之前那次报错不再阻止提交
+  self.aborted = false
+  self.aborted_error = nil
+  return res
 end
 
 -- function ConnProxy:release(name)
@@ -423,6 +443,17 @@ local function create_query(options, connect_table)
       end
       conn:release()
       error(cb_res, 0) -- 原样重抛（level 0，不加本文件位置），保持错误对象供上层分类
+    end
+    if conn.aborted then
+      -- callback 把某条 SQL 的 PG 报错吞掉了（「先试插入，失败就走另一条路」这种写法）。
+      -- 此时 PG 会话已 aborted，COMMIT 等于 ROLLBACK 且不报错，调用方会拿到「成功」
+      -- 而一个字节都没写进去。主动回滚并抛错，把假成功变成显式失败（B2）。
+      local first_error = conn.aborted_error
+      if not conn.broken then
+        pcall(conn.rollback, conn)
+      end
+      conn:release()
+      error("transaction aborted by earlier error: " .. tostring(first_error), 0)
     end
     -- COMMIT 可能因网络中断或延迟约束（deferred constraint）抛错；
     -- release 用 finally 语义放在判断之前，保证连接必然归还，避免 DB 故障下池耗尽。
