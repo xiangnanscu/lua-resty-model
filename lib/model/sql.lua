@@ -3470,16 +3470,114 @@ end
 
 local terminal_args = { flat = true, get = true, try_get = true, exists = true }
 
+-- meta_query 的定位是「把请求参数原样喂进来的声明式查询」，所以它的入口必须
+-- 只接受**数据**：`where(string)` / `get(string)` 这些裸 SQL 分支是有意保留的
+-- 代码入口，但不能从数据通道到达，否则请求体里的一行字符串就能拼进 SQL（B9/D6）。
+local function meta_query_error(arg_name, expected, value)
+  local shown
+  if type(value) == 'string' then
+    shown = format("%q", value)
+  else
+    shown = tostring(value)
+  end
+  error(format("meta_query: invalid '%s': expect %s, got %s (%s)",
+    arg_name, expected, shown, type(value)))
+end
+
+---条件类参数（where/get/try_get/having）：必须是 table。
+---数组形式只放行 `{column, value}` / `{column, op, value}` 这种三参写法，
+---单元素数组 `{"1=1"}` 解包后就是 `where(string)`，同样是裸 SQL。
+local function check_condition_arg(arg_name, value)
+  if type(value) ~= 'table' then
+    meta_query_error(arg_name, "a table of conditions (raw SQL string is not accepted here)", value)
+  end
+  if value[1] ~= nil then
+    if type(value[1]) ~= 'string' then
+      meta_query_error(arg_name, "a column name string at [1]", value[1])
+    end
+    if value[2] == nil then
+      meta_query_error(arg_name, "{column, value} or {column, op, value}", value)
+    end
+  end
+end
+
+---列名类参数：每个元素必须是字符串（之后还会经 parse_column 的字段/操作符白名单）
+local function check_column_args(arg_name, value)
+  for _, v in ipairs(ensure_array(value)) do
+    if type(v) ~= 'string' then
+      meta_query_error(arg_name, "column name string(s)", v)
+    end
+  end
+end
+
+local function check_number_arg(arg_name, value)
+  local t = type(value)
+  if (t ~= 'number' and t ~= 'string') or tonumber(value) == nil then
+    meta_query_error(arg_name, "a number or a numeric string", value)
+  end
+end
+
+local function check_boolean_arg(arg_name, value)
+  if type(value) ~= 'boolean' then
+    meta_query_error(arg_name, "a boolean", value)
+  end
+end
+
+---distinct 两种数据形态都合法：true = 整体 DISTINCT，字符串列表 = DISTINCT ON
+local function check_distinct_arg(arg_name, value)
+  if type(value) == 'boolean' then
+    return
+  end
+  check_column_args(arg_name, value)
+end
+
+local meta_query_checkers = {
+  where = check_condition_arg,
+  get = check_condition_arg,
+  try_get = check_condition_arg,
+  having = check_condition_arg,
+  select = check_column_args,
+  order = check_column_args,
+  group = check_column_args,
+  flat = check_column_args,
+  select_related = check_column_args,
+  select_related_labels = check_column_args,
+  distinct = check_distinct_arg,
+  limit = check_number_arg,
+  offset = check_number_arg,
+  raw = check_boolean_arg,
+  compact = check_boolean_arg,
+  exists = check_boolean_arg,
+}
+
+-- 布尔开关类参数只有「开」一种调用形态：值为 false 时直接跳过，
+-- 不要把 false 解包给同名方法（`compact(false)` 其实会把 compact 打开）
+local boolean_switch_args = { raw = true, compact = true, exists = true, distinct = true }
+
 ---@param data selectArgs
 ---@return table
 ---@return number? num_queries
 function Sql:meta_query(data)
   for i, arg_name in ipairs(select_args) do
-    if data[arg_name] ~= nil then
-      self = self[arg_name](self, unpack(ensure_array(data[arg_name])))
-      if terminal_args[arg_name] then
-        -- terminal 方法已执行并返回结果（非 builder），不能再链式调用
-        break
+    local value = data[arg_name]
+    if value ~= nil then
+      local check = meta_query_checkers[arg_name]
+      if check then
+        check(arg_name, value)
+      end
+      if boolean_switch_args[arg_name] and type(value) == 'boolean' then
+        if value == true then
+          self = self[arg_name](self)
+          if terminal_args[arg_name] then
+            break
+          end
+        end
+      else
+        self = self[arg_name](self, unpack(ensure_array(value)))
+        if terminal_args[arg_name] then
+          -- terminal 方法已执行并返回结果（非 builder），不能再链式调用
+          break
+        end
       end
     end
   end
