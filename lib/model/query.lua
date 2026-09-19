@@ -59,7 +59,7 @@ local traceback     = debug.traceback
 local ENV
 local function get_env()
   if not ENV then
-    ENV = dotenv { ".env" }
+    ENV = dotenv()
   end
   return ENV
 end
