@@ -2,6 +2,21 @@ local pgmoon        = require "pgmoon"
 local dotenv        = require "resty.dotenv"
 -- 只为拿 NULL 哨兵：model.utils 不依赖本模块，不构成循环 require
 local NULL          = require("model.utils").NULL
+
+-- json/jsonb 读回用的独立 cjson 实例（B13）：pgmoon 默认的 decode 不开
+-- decode_array_with_array_mt，库里的 `[]` 解出来是普通空表，原样写回就变成 `{}`。
+-- 与 model.validator 里的编码实例配套，配置只作用于本实例，不动全局 cjson
+local json_decoder  = require("cjson.safe").new()
+json_decoder.decode_array_with_array_mt(true)
+
+local function decode_json_value(_, val)
+  local decoded = json_decoder.decode(val)
+  if decoded == nil then
+    -- 解不开就把原始文本交出去，别把库里的内容丢掉
+    return val
+  end
+  return decoded
+end
 local type          = type
 local table_concat  = table.concat
 local string_format = string.format
@@ -345,6 +360,9 @@ local function create_query(options, connect_table)
     -- pgmoon 默认的 NULL 哨兵是它自己的 `{"NULL"}` 表，与 ORM 对外的 `Model.NULL`
     -- （ngx.null）不是同一个对象。统一成后者，调用方才能用 `v == Model.NULL` 判断占位
     conn.NULL = NULL
+    -- json(114) / jsonb(3802) 改用本模块的 decoder，保住空数组（B13）
+    conn:set_type_deserializer(114, "json", decode_json_value)
+    conn:set_type_deserializer(3802, "json", decode_json_value)
     -- bigint 读回（B3/D4）：pgmoon 把 oid 20(int8) 归到 "number" 类，一律 tonumber，
     -- 超过 2^53 的值末位直接错掉且不报错。打开这个开关后 int8 按原始十进制字符串返回，
     -- 精度由调用方决定怎么用（字符串比较 / int64 cdata / 直接透传给前端）。

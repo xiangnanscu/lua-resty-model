@@ -1,5 +1,16 @@
-local cjson_encode = require "cjson.safe".encode
-local cjson_decode = require "cjson.safe".decode
+-- ORM 自己的 cjson 实例（B13）：直接改全局 cjson 的配置会波及应用的其它部分，
+-- 所以用 `cjson.safe.new()` 拿一份独立配置的实例。两项配置：
+--   encode_empty_table_as_object(false)：Lua 的 `{}` 既是空表也是空数组，而 JSON 字段里
+--     出现的空表绝大多数是空数组（tags/items/children），编码成 `{}` 会让前端按数组处理时崩；
+--   decode_array_with_array_mt(true)：从库里读出来的 `[]` 带上 array_mt，
+--     「读出 → 改一个字段 → 存回」之后仍然是 `[]`，不会在往返里变形。
+-- 代价：一个**本意是空对象**的 `{}` 也会被编码成 `[]`（Lua 层面区分不了），
+-- 需要空对象时请存 `{ }` 之外的显式结构，见 docs/orm-review.md 的 F4。
+local cjson_safe = require "cjson.safe".new()
+cjson_safe.encode_empty_table_as_object(false)
+cjson_safe.decode_array_with_array_mt(true)
+local cjson_encode = cjson_safe.encode
+local cjson_decode = cjson_safe.decode
 local Utils = require "model.utils"
 local is_empty_value = Utils.is_empty_value
 local utf8len = Utils.utf8len
