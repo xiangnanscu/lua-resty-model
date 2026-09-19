@@ -2551,6 +2551,7 @@ end
 ---@param kwargs {[string]:table}
 ---@return table
 function Sql:aggregate(kwargs)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   local select_parts = {}
   for alias, func in pairs(kwargs) do
     if type(alias) == 'number' then
@@ -2881,6 +2882,12 @@ end
 ---@param dval? DBValue
 ---@return integer
 function Sql:count(cond, op, dval)
+  -- 终结方法一律在副本上跑（D8）。这类方法会改写 _select/_order/_limit/_where，
+  -- 直接改 self 会把「builder 本身」当成一次性对象：
+  --   local q = Blog:where{...}; q:count(); q:exec()  -- 第二行把 _select 改成 count(*)，
+  -- 第三行拿回的是 count 行而不是记录。模块级复用一个 builder 时更隐蔽：条件会跨请求累积。
+  -- copy() 是浅拷贝（十几个键），相对一次数据库往返可以忽略。
+  self = self:copy()
   if cond ~= nil then
     self:where(cond, op, dval)
   end
@@ -2906,6 +2913,7 @@ end
 --TODO:
 ---@return boolean
 function Sql:exists()
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   local statement = format("SELECT EXISTS (%s)", self:select(1):limit(1):compact():statement())
   local res, err = self.model.query(statement, self._compact)
   if res == nil then
@@ -2964,6 +2972,7 @@ end
 ---@param col? string|fun(ctx:table):string
 ---@return Array<Record>
 function Sql:flat(col)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   if col then
     if self._update or self._delete or self._insert then
       return self:returning(col):compact():execr():flat()
@@ -2979,6 +2988,7 @@ end
 ---@return Array<Record>
 ---@return number num_queries
 function Sql:values(...)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   if select('#', ...) > 0 then
     self._select = nil
     self:select(...)
@@ -2990,6 +3000,7 @@ end
 ---@param opts? {flat?: boolean}
 ---@return Array
 function Sql:values_list(fields, opts)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   if type(fields) == 'string' then
     fields = { fields }
   end
@@ -3033,6 +3044,7 @@ end
 ---@param order? "ASC"|"DESC"
 ---@return Array
 function Sql:dates(field, kind, order)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   local trunc_map = {
     year = "DATE_TRUNC('year', %s)::date",
     month = "DATE_TRUNC('month', %s)::date",
@@ -3055,6 +3067,7 @@ end
 ---@param order? "ASC"|"DESC"
 ---@return Array
 function Sql:datetimes(field, kind, order)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   local trunc_map = {
     year = "DATE_TRUNC('year', %s)",
     month = "DATE_TRUNC('month', %s)",
@@ -3088,6 +3101,7 @@ end
 ---@param dval? DBValue
 ---@return Record|false
 function Sql:get(cond, op, dval)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   local records
   if cond ~= nil then
     if type(cond) == 'table' and next(cond) == nil then
@@ -3106,6 +3120,7 @@ end
 
 ---@return Record|nil
 function Sql:first()
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   if not self._order then
     self:order(self.model.primary_key)
   end
@@ -3115,6 +3130,7 @@ end
 
 ---@return Record|nil
 function Sql:last()
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   if not self._order then
     self:order('-' .. self.model.primary_key)
   else
@@ -3127,6 +3143,7 @@ end
 ---@param ... string
 ---@return Record|nil
 function Sql:latest(...)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   local n = select('#', ...)
   if n == 0 then
     error("latest() requires at least one field argument")
@@ -3143,6 +3160,7 @@ end
 ---@param ... string
 ---@return Record|nil
 function Sql:earliest(...)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   local n = select('#', ...)
   if n == 0 then
     error("earliest() requires at least one field argument")
@@ -3155,6 +3173,7 @@ end
 ---@param obj table
 ---@return boolean
 function Sql:contains(obj)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   local pk = self.model.primary_key
   local pk_value = obj[pk]
   if pk_value == nil then
@@ -3198,6 +3217,7 @@ end
 ---@param field_name? string
 ---@return table<any, Record>
 function Sql:in_bulk(ids, field_name)
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   field_name = field_name or self.model.primary_key
   if ids ~= nil and #ids == 0 then
     -- 空 id 列表就是「没有要取的东西」，不是「不筛选」。以前空表等同于不传参，
@@ -3218,6 +3238,7 @@ end
 
 ---@return Set
 function Sql:as_set()
+  self = self:copy() -- 终结方法在副本上执行（D8），见 count()
   return self:compact():execr():flat():as_set()
 end
 

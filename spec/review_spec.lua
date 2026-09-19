@@ -424,6 +424,58 @@ local function main()
       assert.are.same(first_field(round[2], 'v'), payload,
         'T13: 反斜杠 + 单引号的值必须原样往返')
     end)
+
+    -------------------------------------------------------------------
+    it("D8/T15 终结方法必须在副本上执行（复用 builder 不串条件）", function()
+      local blog1 = SEED.blogs[1].id
+      local q = ReviewEntry:where { blog_id = blog1 }
+
+      -- count() 会把 _select 改成 count(*)、_order 清掉。修复前这之后再 exec()
+      -- 拿回的是 count 行而不是记录
+      assert.are.same(q:count(), 2, 'T15: blog1 下应有 2 条 entry')
+      local rows = q:exec()
+      assert.are.same(#rows, 2, 'T15: count() 之后同一个 builder 必须还能取回记录; got=' .. tostring(#rows))
+      assert.is_truthy(field_of(rows[1], 'headline'),
+        'T15: count() 之后 builder 的 _select 不能留着 count(*)')
+
+      -- count(cond) 的条件同样只能作用于副本，不能累积回原 builder
+      assert.are.same(q:count { rating = 5 }, 1, 'T15: count(cond) 应按条件计数')
+      assert.are.same(q:count(), 2, 'T15: count(cond) 的条件不能留在 builder 上')
+
+      -- exists() 会 select(1):limit(1):compact()
+      assert.is_true(q:exists(), 'T15: blog1 下有记录')
+      assert.are.same(#q:exec(), 2, 'T15: exists() 的 select 1 / limit 1 不能留在 builder 上')
+
+      -- first()/last() 会写 _order 与 _limit
+      local f = q:first()
+      local l = q:last()
+      assert.is_truthy(field_of(f, 'headline'), 'T15: first() 应返回记录')
+      assert.is_truthy(field_of(l, 'headline'), 'T15: last() 应返回记录')
+      assert.is_true(field_of(f, 'id') ~= field_of(l, 'id'), 'T15: first/last 应是不同的行')
+      assert.are.same(#q:exec(), 2, 'T15: first()/last() 的 limit 1 不能留在 builder 上')
+
+      -- get() 会写 where + limit 2
+      local got = q:get { rating = 5 }
+      assert.are.same(field_of(got, 'rating'), 5, 'T15: get(cond) 应返回那一行')
+      assert.are.same(q:count(), 2, 'T15: get(cond) 的条件与 limit 不能留在 builder 上')
+
+      -- values_list/flat 会改写 _select 并打开 compact/raw
+      local ids = q:values_list('id', { flat = true })
+      assert.are.same(#ids, 2, 'T15: values_list 应返回 2 个 id')
+      local rows2 = q:exec()
+      assert.are.same(#rows2, 2, 'T15: values_list 之后 builder 仍应取回完整记录')
+      assert.is_truthy(field_of(rows2[1], 'headline'),
+        'T15: values_list 之后 builder 的 _select 不能只剩 id')
+
+      -- latest/earliest 会重写 _order
+      assert.is_truthy(field_of(q:latest('id'), 'headline'), 'T15: latest 应返回记录')
+      assert.are.same(#q:exec(), 2, 'T15: latest() 的 order/limit 不能留在 builder 上')
+
+      -- 原 builder 从头到尾没有被任何终结方法改写：最后一次 exec 与第一次完全一致
+      local rows3 = q:order('id'):exec()
+      assert.are.same(#rows3, 2, 'T15: builder 复用一整轮之后结果不变')
+      assert.are.same(field_of(rows3[1], 'id'), field_of(rows[1], 'id'), 'T15: 行的身份也不变')
+    end)
   end)
 end
 
