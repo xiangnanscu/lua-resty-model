@@ -3358,7 +3358,18 @@ function Sql:get_or_create(params, defaults, columns)
       error(format("invalid field name for get_or_create: %s", tostring(k)))
     end
   end
-  local values_list, insert_columns = Sql:_get_insert_values_token(dict(params, defaults))
+  -- 与 update_or_create 同一套校验（B7/D7）：以前这里直接把原值喂给 as_literal，
+  -- json 对象会撞上 "empty table is not allowed"、json 数组被渲染成行值 `(1, 2)`、
+  -- 整数字段的 '' 变成 `''` 字面量让 PG 报 invalid input syntax，
+  -- 字符串也没经 compact/trim —— 同一份输入 create 能过、get_or_create 报 500，
+  -- 而且唯一键查找与 create 路径口径不一致（`' 张三'` 与 `'张三'` 被当作两条）
+  local row = dict(params, defaults)
+  local row_columns = get_keys(row)
+  if not self._skip_validate then
+    row = self.model:validate_update(row, row_columns)
+  end
+  row = self.model:_prepare_db_rows(row, row_columns)
+  local values_list, insert_columns = Sql:_get_insert_values_token(row)
   local key_columns = get_keys(params)
   local all_columns_token
   if columns == '*' then
