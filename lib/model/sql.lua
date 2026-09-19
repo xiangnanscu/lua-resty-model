@@ -760,6 +760,9 @@ function Sql:_base_get_condition_token(cond, op, dval)
     elseif argtype == "string" then
       return cond
     elseif argtype == "function" then
+      -- 回调拿到的 ctx 就是 _join_proxy_models，而它只在真正建 JOIN 时才初始化。
+      -- 文档里的回调示例恰好都没有 JOIN，照着写会 `attempt to index local 'ctx'`（B11）
+      self:_ensure_context()
       return cond(self._join_proxy_models)
     else
       error("invalid condition type: " .. argtype)
@@ -922,6 +925,8 @@ function Sql:_get_column_tokens(context, a, b, ...)
       return self:_get_column_token(a, context) --[[@as string]]
     elseif type(a) == 'function' then
       ---@cast a -DBValue
+      -- 同 where 的回调形式：没有 JOIN 时 ctx 也必须是可索引的主表代理（B11）
+      self:_ensure_context()
       local select_callback_args = a(self._join_proxy_models)
       if type(select_callback_args) == 'string' then
         return select_callback_args
@@ -1571,6 +1576,8 @@ function Sql:_get_order_columns(a, b, ...)
       return self:_get_order_column(a) --[[@as string]]
     elseif type(a) == 'function' then
       ---@cast a -DBValue
+      -- 同 where 的回调形式：没有 JOIN 时 ctx 也必须是可索引的主表代理（B11）
+      self:_ensure_context()
       local select_callback_args = a(self._join_proxy_models)
       if type(select_callback_args) == 'string' then
         return select_callback_args
