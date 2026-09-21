@@ -7721,8 +7721,479 @@ CREATE TABLE probe4_t(
   结果写入超过 int4 范围的值时 PG 报 `integer out of range`，T4 的 bigint 支持在「用本项目的迁移工具建表」这条路上够不着。
 
 - 影响面：只影响「用 `resty.migrate` 建表」的场景。对着已有 schema（外部迁移 / 手写 DDL 建成 bigint）使用时，校验、字面量、读回三段都正常。
-- 处置：`resty.migrate` 不在 `lib/` 下，按 CLAUDE.md「不要修改 pgmoon」的同类口径与「不要直接改」一并跳过，只记录。T16 已在字段文档里写明这条限制。
 - 建议改法（需要动 `resty.migrate`）：`integer` 类的 `get_create_type` 改成读 `self.field.db_type`，回落到 `"integer"`。
+- 处置：发现时按 CLAUDE.md 跳过；2026-09-21 用户要求修复。**补丁已写好并实测通过，但没有应用、也没有提交**，原因见下。
+- 状态：⏸ 补丁就绪，待在 `lib/` 之外应用（2026-09-21，提交信息含 `F9`，本次提交只含本节文档）
+- 为什么不能在本仓库里修：
+  - 根因在 migrate 的 `integer` 类型映射，`lib/` 里没有能接管建表语句的钩子。`resty.migrate` 按 `field.type` 选类，`integer` 类的 `get_create_type` 返回类属性 `type_string = "integer"`，全程不读字段对象上的任何属性。唯一的例外 `field.serial` 也只会返回 `SERIAL`。
+  - `resty.migrate` 是独立的包（`xiangnanscu/lua-resty-migrate`，装在 `/usr/local/openresty/site/lualib/resty/`），不在本仓库，也不在 `dist.ini` 的 `requires` 里。CLAUDE.md 规定只改 `lib/` 与 `spec/`。直接改系统目录里的文件不受版本控制，下次 `opm get` 就被覆盖。
+  - **也不能在 `lib/` 里放一个 `lib/resty/migrate.lua` 遮住它**：`dist.ini` 的 `lib_dir = lib` 会把它一起发布到 OPM，和真正的 lua-resty-migrate 抢同一个模块路径。
+  - **不能加断言新 DDL 的用例**：在当前安装的 migrate 下它必然是红的，而 CLAUDE.md 要求测试不过就改实现。
+- 另外发现：应用模板 `~/create/template` 用的不是 `resty.migrate`，而是分叉出去的 `lualib/xodel/migrate.lua`：`yarn migrate` / `yarn mc` → `scripts/migrate.lua` → `require "xodel.migrate"`，模板里没有任何地方 `require "resty.migrate"`。这份的 `get_db_type` 同样把 `integer` 写死，而且 `type` 不变、只有 `db_type` 变化时不会生成 `ALTER`。基于模板的项目建表走的是这一份，所以两份都给了补丁。
+- 补丁内容（两份思路相同，各 3 处）：
+  1. `integer` 的建表类型看 `db_type`，是 `'bigint'` 就返回 `bigint`；
+  2. `serial = true` 且 `db_type = 'bigint'` 时用 `BIGSERIAL`（`SERIAL` 背后的列与序列都是 int4）；
+  3. `type` 不变、`db_type` 在 integer/bigint 之间切换时产出 `ALTER COLUMN ... TYPE bigint|integer`。
+  - 指向 bigint 主键的外键列自动跟着变成 `bigint`：两份 migrate 都是递归取被引用字段的类型，不需要额外改。
+- 验证（都在 scratchpad 里用补丁副本加 `-I` 优先加载，**未改动原文件**）：
+  - `resty.migrate`：同一个探针分别在原版与补丁版下运行，结果见下；补丁版下跑本仓库全量用例 `286 ok / 0 not ok`。
+  - `xodel.migrate`：同样的探针，建表得到 `BIGSERIAL` / `bigint` / 外键列 `bigint`，`compare_models` 在 `qty` 加上 `bigint = true` 后产出 `ALTER TABLE probe_f9x_order ALTER COLUMN qty TYPE bigint`，无变化时产出 0 条。
+- 应用后的收尾：`docs/orm-model-definition.md` 里「`resty.migrate` 一律生成 `integer` 列」那条警告改成「需要 lua-resty-migrate ≥ 含此补丁的版本」，再把本节状态改为 ✅。
+
+`resty.migrate` 补丁（相对 lua-resty-migrate 2.0）：
+
+```diff
+--- a/lib/resty/migrate.lua
++++ b/lib/resty/migrate.lua
+@@ -208,8 +208,10 @@
+     end
+     if field.serial then
+       field.null = false
++      -- bigint 主键要用 BIGSERIAL，SERIAL 背后的序列与列都是 int4
++      local serial_type = field.db_type == 'bigint' and "BIGSERIAL" or "SERIAL"
+       function self.get_create_type()
+-        return "SERIAL"
++        return serial_type
+       end
+ 
+       -- tokens[#tokens + 1] = 'SERIAL'
+@@ -273,6 +275,21 @@
+   local alioss = utils.class({}, string)
+   local alioss_image = utils.class({}, string)
+   local integer = utils.class({ type_string = "integer" }, basefield)
++  -- lua-resty-model 的 `bigint = true` 只把 db_type 设成 'bigint'，type 仍是 'integer'，
++  -- 所以这里要看 db_type，否则建出来的是 int4 列，写入超过 int4 的值报 integer out of range
++  function integer.get_create_type(self)
++    if self.field.db_type == 'bigint' then
++      return "bigint"
++    end
++    return self.type_string
++  end
++
++  -- type 没变、只有 db_type 在 integer/bigint 之间切换时，compare_type 不会产出任何语句
++  function integer.compare_db_type(self, old, new)
++    if old ~= new and (old == 'bigint' or new == 'bigint') then
++      return format("ALTER COLUMN %s TYPE %s", self.field.name, self:get_create_type())
++    end
++  end
+   local float = utils.class({}, basefield)
+   function float.get_create_type(self)
+     if not self.field.precision then
+```
+
+`xodel.migrate` 补丁（相对 `~/create/template` 的 `0dc568f`）：
+
+```diff
+--- a/lualib/xodel/migrate.lua
++++ b/lualib/xodel/migrate.lua
+@@ -185,7 +185,8 @@
+   elseif field_type == "text" then
+     return "text"
+   elseif field_type == "integer" then
+-    return "integer"
++    -- model 的 `bigint = true` 只把 db_type 设成 'bigint'，type 仍是 'integer'
++    return field.db_type == "bigint" and "bigint" or "integer"
+   elseif field_type == "float" then
+     if not field.precision then
+       return "float"
+@@ -250,7 +251,8 @@
+   if field.type == "uuid" then
+     tokens[#tokens + 1] = "DEFAULT gen_random_uuid()"
+   elseif field.serial then
+-    db_type = "SERIAL"
++    -- bigint 主键要用 BIGSERIAL，SERIAL 背后的序列与列都是 int4
++    db_type = field.db_type == "bigint" and "BIGSERIAL" or "SERIAL"
+     field.null = false
+   elseif field.type == "foreignkey" then
+     local ref_sql = get_foreign_key_reference(field)
+@@ -354,6 +356,10 @@
+         "-- UNSUPPORTED: %s -- 需手工补写: ALTER TABLE %s ALTER COLUMN %s TYPE %s USING(%s::%s)",
+         msg, smart_quote(table_name), col, get_db_type(new_field), col, get_db_type(new_field))
+     end
++  elseif new_field.type == 'integer' and (old_field.db_type or 'integer') ~= (new_field.db_type or 'integer') then
++    -- type 没变、只有 db_type 在 integer/bigint 之间切换（加上或去掉 bigint = true）
++    tokens[#tokens + 1] = format("ALTER TABLE %s ALTER COLUMN %s TYPE %s",
++      smart_quote(table_name), smart_quote(new_field.name), get_db_type(new_field))
+   end
+ 
+   -- 比较NULL约束
+```
+
+探针在**原版** `resty.migrate` 下的输出：
+
+```
+-- migrate from: /usr/local/openresty/site/lualib/resty/migrate.lua
+CREATE TABLE probe_f9_order(
+  id SERIAL PRIMARY KEY NOT NULL,
+  order_no integer ,
+  qty integer 
+)
+CREATE TABLE probe_f9_line(
+  id SERIAL PRIMARY KEY NOT NULL,
+  order_id integer REFERENCES "probe_f9_order" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
+  amount integer 
+)
+probe_f9_line id integer
+probe_f9_line order_id integer
+probe_f9_line amount integer
+probe_f9_order id integer
+probe_f9_order order_no integer
+probe_f9_order qty integer
+insert big order_no: false lib/model/query.lua:341: ERROR: value "1234567890123456789" is out of range for type integer (60)
+insert big qty after ALTER: false lib/model/query.lua:341: ERROR: integer out of range
+```
+
+同一探针在**补丁版**下的输出：
+
+```
+-- migrate from: <scratchpad>/f9/b/resty/migrate.lua
+CREATE TABLE probe_f9_order(
+  id BIGSERIAL PRIMARY KEY NOT NULL,
+  order_no bigint ,
+  qty integer 
+)
+CREATE TABLE probe_f9_line(
+  id SERIAL PRIMARY KEY NOT NULL,
+  order_id bigint REFERENCES "probe_f9_order" ("id") ON DELETE CASCADE ON UPDATE CASCADE ,
+  amount bigint 
+)
+probe_f9_line id integer
+probe_f9_line order_id bigint
+probe_f9_line amount bigint
+probe_f9_order id bigint
+probe_f9_order order_no bigint
+probe_f9_order qty integer
+insert big order_no: true 1.2345678901235e+18
+ALTER: ALTER TABLE probe_f9_order ALTER COLUMN qty TYPE bigint
+insert big qty after ALTER: true 9000000000
+```
+
+补丁版 migrate 下的全量测试命令：
+
+```sh
+LUA_PATH='/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;;' LUA_CPATH='/usr/lib/x86_64-linux-gnu/lua/5.1/?.so;;' \
+  resty -I <scratchpad>/f9/b -I lib --main-conf 'env NODE_ENV;' --http-conf 'lua_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;' \
+  -I spec bin/ngx_busted.lua -o TAP
+```
+
+结果：`286 ok / 0 not ok`，TAP 计数 `1..286`（完整输出与下面 `yarn test` 的逐行相同，只有时间戳与 WARN 用例的池名随机后缀不同，不重复贴）。
+
+本仓库测试命令：
+
+```sh
+yarn test
+```
+
+完整输出：
+
+```tap
+yarn run v1.22.22
+$ LUA_PATH='/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;;' LUA_CPATH='/usr/lib/x86_64-linux-gnu/lua/5.1/?.so;;' yarn resty -I spec bin/ngx_busted.lua -o TAP
+$ resty -I lib --main-conf 'env NODE_ENV;' --http-conf 'lua_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;' -I spec bin/ngx_busted.lua -o TAP
+2026/09/21 11:56:24 [warn] 6728#0: *2 [lua] _G write guard:12: writing a global Lua variable ('lfs') which may lead to race conditions between concurrent requests, so prefer the use of 'local' variables
+stack traceback:
+	[C]: at 0x7fc116ab96d0
+	[C]: at 0x7fc116a56fa0
+	[C]: in function 'pcall'
+	/usr/share/lua/5.1/pl/path.lua:24: in main chunk
+	[C]: in function 'require'
+	/usr/share/lua/5.1/busted/runner.lua:3: in main chunk
+	[C]: in function 'require'
+	bin/ngx_busted.lua:6: in function 'file_gen'
+	init_worker_by_lua(nginx.conf:210):47: in function <init_worker_by_lua(nginx.conf:210):45>
+	[C]: in function 'xpcall'
+	init_worker_by_lua(nginx.conf:210):54: in function <init_worker_by_lua(nginx.conf:210):52>, context: ngx.timer
+ok 1 - sql.lua _parse_column / _parse_having_column 已修复 bug BUG-B1: _parse_having_column 必须拒绝嵌套 traversal
+ok 2 - sql.lua _parse_column / _parse_having_column 已修复 bug BUG-B1b: _parse_having_column 拒绝未知 op
+ok 3 - sql.lua _parse_column / _parse_having_column 已修复 bug BUG-B2: annotate 后再 traversal 应当显式报错
+ok 4 - sql.lua _parse_column / _parse_having_column 已修复 bug BUG-B2b: annotate + 单个 op 仍然合法
+ok 5 - sql.lua _parse_column / _parse_having_column 已修复 bug BUG-B5: where_in 对带 __op 的列名应当报错而非静默退化
+ok 6 - sql.lua _parse_column / _parse_having_column 已修复 bug BUG-B5b: where_in 对数组形式同样拒绝带 __op 的元素
+ok 7 - sql.lua _parse_column / _parse_having_column 已修复 bug BUG-B5c: where_in 对纯列名 / traversal 列名仍正常工作
+ok 8 - sql.lua _parse_column / _parse_having_column 已修复 bug BUG-B7: 聚合上下文中正向 FK 应改用 LEFT JOIN (Django 对齐)
+ok 9 - sql.lua _parse_column / _parse_having_column 已修复 bug BUG-B4: blog_id__id 冗余后缀后非法 op 错误信息应保留 FK 上下文
+ok 10 - sql.lua _parse_column / _parse_having_column 已修复 bug JSON path: 普通比较 op (gt/lt/ne/...) 走 jsonb 比较
+ok 11 - sql.lua _parse_column / _parse_having_column 已修复 bug JSON path: text 类 op (startswith) 走 ->> 文本提取
+ok 12 - sql.lua _parse_column / _parse_having_column 已修复 bug JSON path: 多段 + 普通 op 走 #> jsonb
+ok 13 - sql.lua _parse_column / _parse_having_column 已修复 bug JSON path: 现有 has_key / contains / eq 行为不变
+ok 14 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-B3: __year 用半开区间而非 BETWEEN，timestamp 列不漏年末数据
+ok 15 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-B4: 自引用 FK 传表值能取出 reference_column
+ok 16 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-B5: 两个 FK 指向同一 model 且都用默认 related_query_name 应报错
+ok 17 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-B6: related_query_name 与被引用方实体字段同名应报错
+ok 18 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-B8: time/datetime 边界与负时区
+ok 19 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-B9: copy() 不克隆 model，身份比较保持成立
+ok 20 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-B10a: split_string 支持任意长度分隔符
+ok 21 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-B10b: get_keys 的 columns 种子参与去重且不丢失
+ok 22 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-B10c: 数字 choices 的 StringField 不再崩溃
+ok 23 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-B10d: F 表达式用于 json 字段不再被 cjson 编码
+ok 24 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-D3: 空 __in 报错信息带列名
+ok 25 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-D11: 复合 Q 在 having 里保持 having 解析路径
+ok 26 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-D12: 字段名与 Model/Sql 方法同名应报错
+ok 27 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-D13: 单段整数样式 JSON 路径按数组下标 (Django 对齐)
+ok 28 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-D14: annotate 别名为 PG 关键字时自动加引号
+ok 29 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-D15: group 自动 select 不重复追加已选列
+ok 30 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-D17: Count DISTINCT / FILTER 语法生成
+ok 31 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-D16: 无法推断子查询列名时提前报错
+ok 32 - REVIEW 2026-07-15 回归 (statement 级，无 DB) REVIEW-D10: TableField 显式 max_rows 才校验行数
+ok 33 - 1. 模型定义 Model:create_model 基础属性
+ok 34 - 1. 模型定义 Model:create_model mixins 覆盖父字段属性
+ok 35 - 1. 模型定义 auto_primary_key=false 不自动生成 id
+ok 36 - 1. 模型定义 unique_together 标准化为 [[...]]
+ok 37 - 1. 模型定义 外键 reversed_fields 自动登记到目标模型
+ok 38 - 1. 模型定义 Model(opts) 简写自动混入 BaseModel (id/ctime/utime)
+ok 39 - 1. 模型定义 Model:is_model_class / is_instance
+ok 40 - 1. 模型定义 Model:check_unique_key
+ok 41 - 1. 模型定义 Model:to_json 导出元数据
+ok 42 - 1. 模型定义 Model:make_field_from_json 动态构造字段
+ok 43 - 2. SELECT select 单个字段
+ok 44 - 2. SELECT select 多字段 (vararg)
+ok 45 - 2. SELECT select 多字段 (table)
+ok 46 - 2. SELECT select 链式追加
+ok 47 - 2. SELECT select 不调用 = SELECT *
+ok 48 - 2. SELECT select_as 重命名字段
+ok 49 - 2. SELECT select_literal 选择字面量
+ok 50 - 2. SELECT select_literal_as 命名字面量 (含空格)
+ok 51 - 2. SELECT select_literal_as 命名字面量 (无空格)
+ok 52 - 2. SELECT select 外键字段 (跨表)
+ok 53 - 2. SELECT select_as 跨表字段重命名
+ok 54 - 2. SELECT select 嵌套外键 (ViewLog -> Entry -> Blog)
+ok 55 - 2. SELECT select_as 嵌套外键重命名
+ok 56 - 2. SELECT select 反向外键
+ok 57 - 2. SELECT select 反向外键 + order_by ASC
+ok 58 - 2. SELECT select 反向外键 + order_by DESC
+ok 59 - 2. SELECT only 覆盖式选择列
+ok 60 - 2. SELECT defer 排除指定列
+ok 61 - 3. WHERE 基础等值
+ok 62 - 3. WHERE 比较运算符 __gt / __lt / __gte / __lte / __ne
+ok 63 - 3. WHERE __in / __notin
+ok 64 - 3. WHERE __range
+ok 65 - 3. WHERE __contains / __icontains / __startswith / __endswith
+ok 66 - 3. WHERE __null = true / false (注：__null 不能用在 json 字段上 — 那会被解析为 JSON path)
+ok 67 - 3. WHERE 跨表 (1 级) 正向外键
+ok 68 - 3. WHERE 跨表 (1 级) 正向外键 + lookup
+ok 69 - 3. WHERE 跨表 (2 级) ViewLog -> Entry -> Blog
+ok 70 - 3. WHERE 跨表 + 同一查询多次 where (AND)
+ok 71 - 3. WHERE 反向外键
+ok 72 - 3. WHERE 两参数 where
+ok 73 - 3. WHERE 三参数 where
+ok 74 - 3. WHERE 两参数 where 跨表
+ok 75 - 3. WHERE Q 对象: OR
+ok 76 - 3. WHERE Q 对象: AND
+ok 77 - 3. WHERE Q 对象: NOT
+ok 78 - 3. WHERE Q 嵌套 + 跨表
+ok 79 - 3. WHERE 反向 FK + 正向 FK + 反向 FK 链路 (Django parity, 三次 JOIN)
+ok 80 - 3. WHERE 正向 FK + 反向 FK 链路 (case 4 修复在 1.4.2 cascade 也成立)
+ok 81 - 3. WHERE 链路缓存: 同一条 chain 多次 where 不重复建 join
+ok 82 - 3. WHERE 简单反向 FK 不受 case 4 修复影响 (regression)
+ok 83 - 3. WHERE 跨 jsonb / model 字段链路保留 json_keys (issue #5 regression)
+ok 84 - 3. WHERE 非法链路报错信息包含上下文 (issue #4)
+ok 85 - 3. WHERE having 支持普通字段 (issue #8)
+ok 86 - 3. WHERE exclude 单条件
+ok 87 - 3. WHERE exclude 多条件 (整体 NOT)
+ok 88 - 3. WHERE exclude + Q
+ok 89 - 3. WHERE where_in (单列)
+ok 90 - 3. WHERE where_in (子查询)
+ok 91 - 3. WHERE where_in (多列)
+ok 92 - 3. WHERE where_not_in
+ok 93 - 3. WHERE where_or 表内 OR
+ok 94 - 3. WHERE or_where 与上一个 where 用 OR
+ok 95 - 3. WHERE annotate 后再 traversal 显式报错 (B2)
+ok 96 - 3. WHERE annotate + 单个 op 仍然合法 (cnt__gte)
+ok 97 - 3. WHERE blog_id__id__notop 错误信息保留 FK 上下文 (B4)
+ok 98 - 3. WHERE blog_id__id 冗余 FK 后缀仍正常生成 (回归)
+ok 99 - 4. ORDER / LIMIT / OFFSET / DISTINCT order ASC / DESC
+ok 100 - 4. ORDER / LIMIT / OFFSET / DISTINCT order_by 别名
+ok 101 - 4. ORDER / LIMIT / OFFSET / DISTINCT 多字段 order
+ok 102 - 4. ORDER / LIMIT / OFFSET / DISTINCT nulls_last / nulls_first
+ok 103 - 4. ORDER / LIMIT / OFFSET / DISTINCT reverse 翻转排序
+ok 104 - 4. ORDER / LIMIT / OFFSET / DISTINCT limit / offset
+ok 105 - 4. ORDER / LIMIT / OFFSET / DISTINCT distinct (无参)
+ok 106 - 4. ORDER / LIMIT / OFFSET / DISTINCT distinct ON
+ok 107 - 4. ORDER / LIMIT / OFFSET / DISTINCT distinct_on 自动 prepend ORDER BY
+ok 108 - 5. GROUP BY / HAVING group + annotate Count
+ok 109 - 5. GROUP BY / HAVING group + annotate Sum
+ok 110 - 5. GROUP BY / HAVING 数字索引 annotate 自动命名
+ok 111 - 5. GROUP BY / HAVING having
+ok 112 - 5. GROUP BY / HAVING having + Q
+ok 113 - 5. GROUP BY / HAVING alias 不加入 SELECT 但可在 having 引用
+ok 114 - 5. GROUP BY / HAVING aggregate 终端方法
+ok 115 - 5. GROUP BY / HAVING aggregate StdDev (样本)
+ok 116 - 5. GROUP BY / HAVING Count DISTINCT
+ok 117 - 5. GROUP BY / HAVING Count + FILTER (kwargs 条件表)
+ok 118 - 5. GROUP BY / HAVING Count + FILTER (Q 复合条件)
+ok 119 - 5. GROUP BY / HAVING DISTINCT + FILTER 组合，annotate 同样支持
+ok 120 - 5. GROUP BY / HAVING having 拒绝嵌套 traversal (cnt__nope__gte)
+ok 121 - 5. GROUP BY / HAVING having 拒绝未知 op (cnt__bogus)
+ok 122 - 6. F 表达式 F 字段比较
+ok 123 - 6. F 表达式 F + 算术 + annotate
+ok 124 - 6. F 表达式 F 在 update 中: 字符串拼接
+ok 125 - 6. F 表达式 F 在 update 中: 跨表赋值
+ok 126 - 6. F 表达式 increase 单字段 +1
+ok 127 - 6. F 表达式 increase 单字段指定 amount
+ok 128 - 6. F 表达式 increase 多字段
+ok 129 - 6. F 表达式 decrease 单字段
+ok 130 - 7. INSERT 插入单行
+ok 131 - 7. INSERT 插入单行 + returning
+ok 132 - 7. INSERT returning vararg 与 table 结果一致
+ok 133 - 7. INSERT 批量插入
+ok 134 - 7. INSERT 批量插入 + returning *
+ok 135 - 7. INSERT 使用默认值
+ok 136 - 7. INSERT 指定 columns 限制写入
+ok 137 - 7. INSERT 从 SELECT 子查询插入
+ok 138 - 7. INSERT 从 SELECT + select_literal 插入 (显式列)
+ok 139 - 7. INSERT 从 UPDATE+RETURNING 子查询插入 (含 source 表更新)
+ok 140 - 7. INSERT 从 DELETE+RETURNING 子查询插入 (常用于归档)
+ok 141 - 7. INSERT 插入抛错: 唯一冲突
+ok 142 - 7. INSERT 插入抛错: 单行长度超限 (ValidateError)
+ok 143 - 7. INSERT 插入抛错: 批量行长度超限 (batch_index)
+ok 144 - 7. INSERT 插入抛错: 复合 table 字段子元素出错 (含 index 与嵌套 message)
+ok 145 - 7. INSERT 插入抛错: 批量+复合字段 (batch_index + index)
+ok 146 - 7. INSERT 插入抛错: 子查询列数不一致
+ok 147 - 8. UPDATE 基础 update
+ok 148 - 8. UPDATE update + returning
+ok 149 - 8. UPDATE update with cross-table where
+ok 150 - 8. UPDATE update 抛错: 字段超限
+ok 151 - 9. DELETE delete 带条件 + affected_rows
+ok 152 - 9. DELETE delete 链式 where
+ok 153 - 9. DELETE delete 三参数
+ok 154 - 9. DELETE delete + returning
+ok 155 - 9. DELETE delete 不匹配返回 0
+ok 156 - 10. UPSERT 基本 upsert (key 自动取唯一字段)
+ok 157 - 10. UPSERT upsert 单条 + 显式 key
+ok 158 - 10. UPSERT upsert from SELECT 子查询 (注入新 name)
+ok 159 - 10. UPSERT upsert from UPDATE+RETURNING 子查询
+ok 160 - 10. UPSERT upsert 抛错: 单条 age 超限
+ok 161 - 10. UPSERT upsert 抛错: 多条第二条出错 (batch_index=2)
+ok 162 - 11. MERGE merge 已有更新 + 新增插入
+ok 163 - 11. MERGE merge 仅插入新行不变更已有
+ok 164 - 11. MERGE merge 抛错: 第二条 age 超限
+ok 165 - 12. UPDATES (批量更新) updates 仅命中已存在主键
+ok 166 - 12. UPDATES (批量更新) updates from SELECT 子查询
+ok 167 - 12. UPDATES (批量更新) updates 抛错: 缺主键值
+ok 168 - 12. UPDATES (批量更新) updates 抛错: 多条第二条 age 超限
+ok 169 - 12. UPDATES (批量更新) updates 抛错: 非法字段名 (字符串)
+ok 170 - 13. ALIGN (upsert + 删除多余) align 同步子集
+ok 171 - 14. GET / TRY_GET / GETS / MERGE_GETS get 单条命中
+ok 172 - 14. GET / TRY_GET / GETS / MERGE_GETS get 不存在返回 false
+ok 173 - 14. GET / TRY_GET / GETS / MERGE_GETS get 两参数 / 三参数
+ok 174 - 14. GET / TRY_GET / GETS / MERGE_GETS try_get 等价于 get
+ok 175 - 14. GET / TRY_GET / GETS / MERGE_GETS gets 批量按键 (CTE RIGHT JOIN)
+ok 176 - 14. GET / TRY_GET / GETS / MERGE_GETS merge_gets 合并字典
+ok 177 - 15. GET_OR_CREATE / UPDATE_OR_CREATE get_or_create: 已存在 → 不创建
+ok 178 - 15. GET_OR_CREATE / UPDATE_OR_CREATE get_or_create: 不存在 → 创建
+ok 179 - 15. GET_OR_CREATE / UPDATE_OR_CREATE update_or_create: 不存在 → 创建
+ok 180 - 15. GET_OR_CREATE / UPDATE_OR_CREATE update_or_create: 已存在 → 更新
+ok 181 - 15. GET_OR_CREATE / UPDATE_OR_CREATE update_or_create: defaults 为空 → 退化为 get_or_create
+ok 182 - 15. GET_OR_CREATE / UPDATE_OR_CREATE get_or_create: params 列无唯一约束 → 报错 (原子版前提)
+ok 183 - 15. GET_OR_CREATE / UPDATE_OR_CREATE get_or_create: 重复调用幂等且 created 标志准确 (xmax 判定)
+ok 184 - 16. FILTER / COUNT / EXISTS / IN_BULK / CONTAINS filter: where + exec 快捷
+ok 185 - 16. FILTER / COUNT / EXISTS / IN_BULK / CONTAINS count 无参 / 有参
+ok 186 - 16. FILTER / COUNT / EXISTS / IN_BULK / CONTAINS exists
+ok 187 - 16. FILTER / COUNT / EXISTS / IN_BULK / CONTAINS in_bulk: 默认按主键
+ok 188 - 16. FILTER / COUNT / EXISTS / IN_BULK / CONTAINS in_bulk: 指定字段索引
+ok 189 - 16. FILTER / COUNT / EXISTS / IN_BULK / CONTAINS in_bulk: 不传 ids 返回全集
+ok 190 - 16. FILTER / COUNT / EXISTS / IN_BULK / CONTAINS contains: 主键命中
+ok 191 - 17. FIRST / LAST / LATEST / EARLIEST first 默认按主键升序
+ok 192 - 17. FIRST / LAST / LATEST / EARLIEST last 默认按主键降序
+ok 193 - 17. FIRST / LAST / LATEST / EARLIEST first 与 order 配合
+ok 194 - 17. FIRST / LAST / LATEST / EARLIEST latest
+ok 195 - 17. FIRST / LAST / LATEST / EARLIEST earliest
+ok 196 - 18. FLAT / VALUES / VALUES_LIST / AS_SET flat 单列
+ok 197 - 18. FLAT / VALUES / VALUES_LIST / AS_SET flat 在 CUD 之后
+ok 198 - 18. FLAT / VALUES / VALUES_LIST / AS_SET values 字典数组 (不经 load)
+ok 199 - 18. FLAT / VALUES / VALUES_LIST / AS_SET values_list 元组数组
+ok 200 - 18. FLAT / VALUES / VALUES_LIST / AS_SET values_list flat 单列
+ok 201 - 18. FLAT / VALUES / VALUES_LIST / AS_SET as_set
+ok 202 - 19. SELECT_RELATED select_related 单字段 (返回 flat key blog_id__name)
+ok 203 - 19. SELECT_RELATED select_related 数组形式
+ok 204 - 19. SELECT_RELATED select_related * 全部字段
+ok 205 - 19. SELECT_RELATED select_related_labels 全外键 LEFT JOIN
+ok 206 - 20. UNION / EXCEPT / INTERSECT union 去重
+ok 207 - 20. UNION / EXCEPT / INTERSECT union_all 不去重
+ok 208 - 20. UNION / EXCEPT / INTERSECT except
+ok 209 - 20. UNION / EXCEPT / INTERSECT intersect
+ok 210 - 21. CTE with_values + from (用 Model.token 注入原始列引用)
+ok 211 - 21. CTE where_recursive (Category 自引用)
+ok 212 - 22. RETURNING returning *
+ok 213 - 22. RETURNING returning 跨表列 (delete 后取 fk)
+ok 214 - 22. RETURNING returning 链式追加
+ok 215 - 22. RETURNING returning_literal
+ok 216 - 23. EXEC 控制 (statement / compact / raw / skip_validate) statement 返回 SQL 字符串 (不执行)
+ok 217 - 23. EXEC 控制 (statement / compact / raw / skip_validate) compact 紧凑模式
+ok 218 - 23. EXEC 控制 (statement / compact / raw / skip_validate) raw + execr 不调用 field:load
+ok 219 - 23. EXEC 控制 (statement / compact / raw / skip_validate) skip_validate 跳过校验 (本应超长的字段也通过)
+ok 220 - 24. 工具方法 (copy / clear / prepend / append / as / from / get_table) copy 不影响原对象
+ok 221 - 24. 工具方法 (copy / clear / prepend / append / as / from / get_table) all 返回 builder 副本 (对齐 Django QuerySet.all)
+ok 222 - 24. 工具方法 (copy / clear / prepend / append / as / from / get_table) clear 清空 builder
+ok 223 - 24. 工具方法 (copy / clear / prepend / append / as / from / get_table) as 表别名
+ok 224 - 24. 工具方法 (copy / clear / prepend / append / as / from / get_table) from + 原始字符串 (限定列名用 Model.token)
+ok 225 - 24. 工具方法 (copy / clear / prepend / append / as / from / get_table) get_table 拼接 (tablename + alias)
+ok 226 - 24. 工具方法 (copy / clear / prepend / append / as / from / get_table) prepend / append / return_all
+ok 227 - 24. 工具方法 (copy / clear / prepend / append / as / from / get_table) exec_statement 直接执行 SQL
+ok 228 - 25. JSON 字段查询 payload 顶层 key 等值
+ok 229 - 25. JSON 字段查询 payload contains
+ok 230 - 25. JSON 字段查询 payload contained_by
+ok 231 - 25. JSON 字段查询 payload has_key
+ok 232 - 25. JSON 字段查询 resume 数字下标 has_key 真正命中数组元素 (Django 对齐)
+ok 233 - 25. JSON 字段查询 resume 数字下标 contains 真正命中数组元素
+ok 234 - 25. JSON 字段查询 对象的字符串数字键不支持直查 (Django 同款取舍)
+ok 235 - 25. JSON 字段查询 JSON path + gt: payload__score__gt 走 jsonb 比较
+ok 236 - 25. JSON 字段查询 JSON path + lt / gte / lte / ne 走 jsonb 比较
+ok 237 - 25. JSON 字段查询 JSON path + startswith / icontains 走 ->> 文本提取 + LIKE
+ok 238 - 25. JSON 字段查询 JSON path 多段 + 普通 op 走 #> jsonb (语法可发送即可)
+ok 239 - 26. 校验 (validate / validate_create / validate_update) validate_create 应用默认值
+ok 240 - 26. 校验 (validate / validate_create / validate_update) validate_update 仅校验提供的字段
+ok 241 - 26. 校验 (validate / validate_create / validate_update) validate 智能分流
+ok 242 - 26. 校验 (validate / validate_create / validate_update) validate_create 抛错: 长度超限
+ok 243 - 26. 校验 (validate / validate_create / validate_update) validate_cascade_update: 子模型缺少回指 FK 时报错
+ok 244 - 26. 校验 (validate / validate_create / validate_update) validate_cascade_update happy path: 注入主键到子表外键
+ok 245 - 27. 记录实例 (Records) Model:create 校验 + 插入 + 返回完整实例
+ok 246 - 27. 记录实例 (Records) Model:save 智能 (无主键 → create)
+ok 247 - 27. 记录实例 (Records) Model:save 智能 (有主键 → update)
+ok 248 - 27. 记录实例 (Records) Model:save_create 强制创建
+ok 249 - 27. 记录实例 (Records) Model:save_update 强制更新
+ok 250 - 27. 记录实例 (Records) Model:load 返回带 fk 代理的实例
+ok 251 - 27. 记录实例 (Records) Model:create_record 设置元表后获得 save/delete 等方法
+ok 252 - 27. 记录实例 (Records) Record(data) 合并字段
+ok 253 - 28. 事务 (transaction / atomic) transaction 正常提交
+ok 254 - 28. 事务 (transaction / atomic) transaction 抛错回滚
+ok 255 - 28. 事务 (transaction / atomic) atomic 包裹函数
+ok 256 - 28. 事务 (transaction / atomic) REVIEW-B1: 回滚覆盖事务内经其它 model 的写入
+ok 257 - 29. dates / datetimes (DATE_TRUNC 去重) dates by month
+ok 258 - 29. dates / datetimes (DATE_TRUNC 去重) datetimes by hour
+ok 259 - 29b. count 回归 (REVIEW B2) select 之后 count 不再拼出非法 SQL
+ok 260 - 29b. count 回归 (REVIEW B2) order 之后 count 不再拼出非法 SQL
+ok 261 - 29b. count 回归 (REVIEW B2) group 之后 count 返回分组数
+ok 262 - 29b. count 回归 (REVIEW B2) limit 之后 count 返回截断后的行数
+ok 263 - 30. 终态：reseed 后种子完整 最后一步：reseed 让数据回到初始状态
+ok 264 - REVIEW T0: orm-review.md 已确认 bug 回归 B1 传输层错误后的连接不能放回连接池（否则读到上一条的结果集）
+ok 265 - REVIEW T0: orm-review.md 已确认 bug 回归 B2 事务内被吞掉的错误必须阻止 COMMIT（不能静默变成 ROLLBACK）
+ok 266 - REVIEW T0: orm-review.md 已确认 bug 回归 B3 大整数与 nan/inf 字面量不能静默失真
+ok 267 - REVIEW T0: orm-review.md 已确认 bug 回归 B4 带时区偏移的 datetime 经 CTE 路径不能丢失偏移
+ok 268 - REVIEW T0: orm-review.md 已确认 bug 回归 B5 NULL 列在 compact 结果里必须占位（否则 values_list/flat 列错位）
+ok 269 - REVIEW T0: orm-review.md 已确认 bug 回归 B6 validate_create 的 table 型 default 不能跨调用共享同一个表
+ok 270 - REVIEW T0: orm-review.md 已确认 bug 回归 B7 get_or_create 必须走字段校验与 prepare_for_db
+ok 271 - REVIEW T0: orm-review.md 已确认 bug 回归 B8 where{col = NULL} 必须生成 IS NULL 而不是恒假的 = NULL
+ok 272 - REVIEW T0: orm-review.md 已确认 bug 回归 B9 meta_query 只接受数据，字符串条件必须拒绝（注入面）
+ok 273 - REVIEW T0: orm-review.md 已确认 bug 回归 B11 回调形式的 where/select 在无 JOIN 时也要拿到 ctx
+ok 274 - REVIEW T0: orm-review.md 已确认 bug 回归 B12 in_bulk({}) 必须返回空表而不是全表
+ok 275 - REVIEW T0: orm-review.md 已确认 bug 回归 B13 JSON 字段里的空数组往返后必须仍是数组
+ok 276 - REVIEW T0: orm-review.md 已确认 bug 回归 B16 where('col', nil) 必须报错而不是退化成裸 SQL
+ok 277 - REVIEW: 疑似问题与设计建议回归 S2/T13 新建连接必须强制 standard_conforming_strings = on
+ok 278 - REVIEW: 疑似问题与设计建议回归 D8/T15 终结方法必须在副本上执行（复用 builder 不串条件）
+ok 279 - REVIEW: 疑似问题与设计建议回归 S3/T14 非 cosocket 阶段发查询必须报含 phase 的明确错误
+2026/09/21 11:56:27 [warn] 6728#0: *2 [lua] query.lua:100: log_warn(): [model.query] Query{POOL_NAME="review_pool_warn_1789962987651"} 已被构造过，query_timeout 以首次构造的值为准：沿用 8000，忽略本次传入的 600000。需要不同配置请换一个 POOL_NAME，详见 docs/orm-index.md「数据库连接与超时」, context: ngx.timer
+2026/09/21 11:56:27 [warn] 6728#0: *2 [lua] query.lua:100: log_warn(): [model.query] Query{POOL_NAME="review_pool_warn_1789962987651"} 已被构造过，statement_timeout 以首次构造的值为准：沿用 6000，忽略本次传入的 598000。需要不同配置请换一个 POOL_NAME，详见 docs/orm-index.md「数据库连接与超时」, context: ngx.timer
+ok 280 - REVIEW: 疑似问题与设计建议回归 S4/T14 Query() 缓存命中且配置不同时必须记 WARN
+ok 281 - REVIEW: 疑似问题与设计建议回归 S4/T14 STATEMENT_TIMEOUT 默认比 QUERY_TIMEOUT 早 2 秒，且不会派生出非正值
+ok 282 - REVIEW: 疑似问题与设计建议回归 D9/T14 Model.LAZY_FK = false 时外键属性访问必须报错而不是偷偷发查询
+ok 283 - REVIEW: 执行中发现（F 系列）回归 F6 大浮点数不能被当成丢了精度的整数拒掉（float 列回归）
+ok 284 - REVIEW: 执行中发现（F 系列）回归 F7 非整数的数字字面量必须能逐位往返（不能走 %.14g）
+ok 285 - REVIEW: 执行中发现（F 系列）回归 F8 where 同族入口与转发方法的 nil 值都必须报错（含三参形式）
+ok 286 - REVIEW: 执行中发现（F 系列）回归 F10 update() 传非 table 时必须报指明方法的错误（不能是 pairs 的原始报错）
+1..286
+Done in 3.86s.
+```
 
 ### F10 [低] B15 的「修复」只改了类型注解，运行时错误信息仍然是 LuaJIT 的原始报错
 

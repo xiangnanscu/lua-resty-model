@@ -154,8 +154,9 @@ Order:create { order_no = 1234567890123456789 }     -- ✗ 词法阶段已经失
 默认关——它会把 `rec.id` 从 number 变成 string，是行为变化，必须由业务自己选。
 
 > ⚠️ `resty.migrate` 的建表语句按 `type` 而不是 `db_type` 映射，`type = 'integer'`
-> 一律生成 `integer` 列。`bigint = true` 目前只保证 ORM 这一侧（校验 / 字面量 / 读回）
-> 的精度，列本身请用迁移脚本或手写 DDL 建成 `bigint`。
+> 一律生成 `integer` 列（模板项目的 `xodel.migrate` 同样如此）。`bigint = true` 目前只保证
+> ORM 这一侧（校验 / 字面量 / 读回）的精度，列本身请用迁移脚本或手写 DDL 建成 `bigint`。
+> 两份 migrate 的修复补丁见 `docs/orm-review.md` 的 F9。
 
 ##### 数字字面量
 
