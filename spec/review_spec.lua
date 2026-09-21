@@ -994,6 +994,56 @@ local function main()
           'F12: ' .. name .. ' 应是表不存在的数据库错误; err=' .. tostring(err))
       end
     end)
+
+    -------------------------------------------------------------------
+    it("F13 save_cascade_update 的 input 缺被引用列时必须报错，不能把子表整表删掉", function()
+      -- 两张表都不建：检查失效时 exec 只会报 relation does not exist，不会删到任何数据
+      local Doc = Model:create_model {
+        table_name = 'review_f13_doc',
+        db_config = db_config,
+        fields = { { 'title', maxlength = 100, unique = true } },
+      }
+      local Item = Model:create_model {
+        table_name = 'review_f13_item',
+        db_config = db_config,
+        fields = {
+          { 'doc_id', reference = Doc },
+          { 'label',  maxlength = 50, compact = false },
+        },
+      }
+      local DocFull = Model:create_model {
+        table_name = 'review_f13_doc',
+        db_config = db_config,
+        extends = Doc,
+        fields = { { 'items', model = Item } },
+      }
+      local missing_id = {
+        ['save items={}'] = function()
+          return DocFull:save_cascade_update({ title = 'f13', items = {} }, nil, 'title')
+        end,
+        ['save items={...}'] = function()
+          return DocFull:save_cascade_update({ title = 'f13', items = { { label = 'a' } } }, nil, 'title')
+        end,
+        ['validate items={...}'] = function()
+          return DocFull:validate_cascade_update { title = 'f13', items = { { label = 'a' } } }
+        end,
+      }
+      for name, fn in pairs(missing_id) do
+        local ok, err = pcall(fn)
+        assert.is_false(ok, 'F13: ' .. name .. ' 缺 id 时应报错')
+        assert.is_truthy(tostring(err):find("cascade update of 'items' on model 'review_f13_doc' needs input.id", 1, true),
+          'F13: ' .. name .. ' 应在拼 SQL 前报缺被引用列，而不是走到数据库; err=' .. tostring(err))
+      end
+      -- 带上 id 时照常：validate 注入外键，save 走到数据库（表不存在才报错）
+      local data = DocFull:validate_cascade_update { id = 7, title = 'f13', items = { { label = 'a' } } }
+      assert.are.same(7, data.items[1].doc_id, 'F13: 带 id 时应照常注入外键')
+      local ok, err = pcall(DocFull.save_cascade_update, DocFull, { id = 7, title = 'f13', items = {} }, nil, 'title')
+      assert.is_false(ok, 'F13: 对不存在的表执行应报数据库错误')
+      assert.is_truthy(tostring(err):find('review_f13_', 1, true),
+        'F13: 带 id 时应放行到数据库; err=' .. tostring(err))
+      -- 不涉及 table 字段时不要求 id
+      assert.is_truthy(DocFull:validate_cascade_update { title = 'f13' }, 'F13: 没传 items 时不应要求 id')
+    end)
   end)
 end
 

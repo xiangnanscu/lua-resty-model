@@ -696,6 +696,19 @@ local author = Author:save_cascade_update {
 }
 ```
 
+> 子表按「外键 = `input` 里被引用的列（通常是 `id`）」定位本条记录的明细，所以只要
+> `input` 里带了 table 字段，就**必须同时带上被引用列**，即使用 `key` 指定了别的唯一列：
+>
+> ```lua
+> -- Doc.title unique；DocItem 有 { 'doc_id', reference = Doc }；DocFull 在 Doc 上加 { 'items', model = DocItem }
+> DocFull:save_cascade_update({ title = 'a', items = {} }, nil, 'title')
+> -- 报错：cascade update of 'items' on model 'doc' needs input.id (child rows are matched by doc_item.doc_id)
+> DocFull:save_cascade_update({ id = 1, title = 'a', items = {} }, nil, 'title')  -- 正确
+> ```
+>
+> 缺了被引用列时，子表条件会变成空条件、把所有父记录的明细删掉，所以直接报错。
+> `validate_cascade_update` 同样检查。没带 table 字段时不要求。
+
 ### Model:load(data)
 
 从数据库记录加载数据，调用每个字段的 `load` 方法进行转换（如外键创建代理对象）：

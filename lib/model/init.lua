@@ -1263,6 +1263,22 @@ function Model:_walk_cascade_fields(callback)
   end
 end
 
+---子表按 `fk = input[被引用列]` 定位属于本条记录的明细。被引用列（通常是 id）缺失时
+---条件会变成 `where { fk = nil }` 即空条件，子表同步语句被 prepend 进外层 UPDATE、
+---不经执行期全表写防呆，会删掉所有父记录的明细（F13）
+---@param input Record
+---@param tf TableField
+---@param fk ForeignkeyField
+---@return DBValue
+local function cascade_reference_value(self, input, tf, fk)
+  local value = input[fk.reference_column]
+  if value == nil then
+    error(format("cascade update of '%s' on model '%s' needs input.%s (child rows are matched by %s.%s)",
+      tf.name, self.table_name, fk.reference_column, tf.model.table_name, fk.name))
+  end
+  return value
+end
+
 ---@param input Record
 ---@param names? string[]
 ---@return Record
@@ -1273,8 +1289,9 @@ function Model:validate_cascade_update(input, names)
     if not rows then
       return
     end
+    local ref_value = cascade_reference_value(self, input, tf, fk)
     for _, row in ipairs(rows) do
-      row[fk.name] = input[fk.reference_column]
+      row[fk.name] = ref_value
     end
   end)
   return data
@@ -1307,11 +1324,12 @@ function Model:save_cascade_update(input, names, key)
     if not rows then
       return
     end
+    local ref_value = cascade_reference_value(self, input, tf, fk)
     if #rows > 0 then
-      local align_sql = tf.model:where { [fk.name] = input[fk.reference_column] }:skip_validate():align(rows)
+      local align_sql = tf.model:where { [fk.name] = ref_value }:skip_validate():align(rows)
       updated_sql:prepend(align_sql)
     else
-      local delete_sql = tf.model:delete():where { [fk.name] = input[fk.reference_column] }
+      local delete_sql = tf.model:delete():where { [fk.name] = ref_value }
       updated_sql:prepend(delete_sql)
     end
   end)
