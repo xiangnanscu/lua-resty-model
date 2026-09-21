@@ -693,10 +693,16 @@ local TransferView = ClassView:class {
 models.Account:transaction(function()
   local account = models.Account:where{id=1}:select_for_update():get()
   if account.balance >= 100 then
-    models.Account:where{id=1}:update{balance = F'balance' - 100}
+    models.Account:where{id=1}:update{balance = F'balance' - 100}:exec()
   end
 end)
 ```
+
+> `update()` 只是往 builder 上挂条件，**漏了 `:exec()` 就什么都没发生**。
+>
+> `transaction` 的错误通道是抛错（不是 `nil, err`），callback 里不能调 `ngx.exit`，
+> 被 `pcall` 吞掉的 SQL 报错会阻止提交，新建协程里的查询会逃逸事务——
+> 这几条见 [orm-model-definition.md 的「事务」一节](orm-model-definition.md#事务)。
 
 ### 参数说明
 

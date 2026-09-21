@@ -132,6 +132,25 @@ Blog:values_list('name', { flat = true })
 -- { 'A', 'B', ... }  -- 等价于 Blog:flat('name')
 ```
 
+**NULL 会占位。** `values_list` / `flat` / `as_set` / `dates` / `datetimes` 走的是
+compact 结果集（按位置取列），所以 NULL 列一律用 `Model.NULL`（即 `ngx.null`）占位，
+行的长度恒等于选中的列数，`flat` 的元素数恒等于 `count()`：
+
+```lua
+Entry:order('id'):values_list { 'id', 'rating' }
+-- { {1, Model.NULL}, {2, 5}, {3, 4} }   -- 第一行 rating 为 NULL
+
+Entry:order('id'):values_list('rating', { flat = true })
+-- { Model.NULL, 5, 4 }                  -- 与同序的 id 列表一一对应
+```
+
+判空要用 `v == Model.NULL`，**不能**用 `if v then`：`ngx.null` 是个 userdata，在 Lua 里为真。
+
+**非 compact 路径默认仍然缺键**：`exec()` / `get()` 返回的记录上，值为 NULL 的列是
+`nil`（键不存在），这样 `if rec.x then` 这类既有写法不会因为升级而改变判断。需要
+让 NULL 也占位（比如要把记录直接 JSON 序列化给前端、希望输出 `null` 而不是字段消失），
+在连接配置里打开 `CONVERT_NULL = true` 或 `.env` 的 `PG_CONVERT_NULL=true`。
+
 ---
 
 ## WHERE 条件
@@ -168,6 +187,12 @@ Entry:where { pub_date__range = {'2023-01-01', '2023-12-31'} }:exec()
 
 Entry:where { rating__null = true }:exec()
 -- WHERE T.rating IS NULL
+
+-- 值写 Model.NULL 也是 IS NULL（对齐 Django 的 col=None），不是恒假的 `= NULL`
+Entry:where { rating = Model.NULL }:exec()
+-- WHERE T.rating IS NULL
+Entry:where { rating__ne = Model.NULL }:exec()
+-- WHERE T.rating IS NOT NULL
 
 -- 跨表查询 (自动 JOIN)
 Entry:where { blog_id__name = 'My Blog' }:exec()
@@ -220,6 +245,20 @@ Blog:where("name", "My Blog"):exec()
 -- WHERE T.name = 'My Blog'
 ```
 
+> ⚠️ **值不能是 `nil`**：`where('name', nil)` 与 `where("name = 'x'")` 在 Lua 里
+> 长得一模一样（都只有一个非 nil 实参），会被当成情形 3 的裸 SQL 而生成 `WHERE name`
+> ——varchar 列 PG 会报类型错误（还能发现），boolean 列则**静默**变成「筛选该列为真的行」。
+> 所以两参形式遇到 `nil` 会直接报错，提示改用 `where { name = Model.NULL }`
+> 或 `where { name__isnull = true }`。值来自可能为 nil 的变量时，请先判断：
+>
+> ```lua
+> if name ~= nil then q = q:where('name', name) end
+> ```
+>
+> ⚠️ **两参/三参形式不认 `Model.NULL`**：`where('rating', Model.NULL)` 与
+> `where('rating', '=', Model.NULL)` 生成的是恒假的 `rating = NULL`（SQL 三值逻辑，
+> 结果永远空集且不报错）。只有 table 形式会被翻译成 `IS NULL`，见下面的「NULL 条件」。
+
 #### 情形 5: 三参数 (字段名 + 运算符 + 值)
 
 ```lua
@@ -228,6 +267,10 @@ Entry:where("rating", ">", 3):exec()
 
 Entry:where("headline", "LIKE", '%lua%'):exec()
 -- WHERE T.headline LIKE '%lua%'
+
+-- ⚠️ 第三个参数为 nil 时会退化成两参形式，把运算符当成值：
+-- Entry:where("rating", ">", nil)  -->  WHERE T.rating = '>'  （静默错误）
+-- 条件可选时请在外面判断，不要把 nil 传进来
 
 -- 字段名同样支持双下划线跨表语法 (与 table 形式一致)
 ViewLog:where('entry_id__blog_id', 1):exec()
@@ -669,6 +712,30 @@ Blog:insert({ name = 'Blog 1', tagline = 'hi' }, {'name'}):exec()
 
 更新操作，通常配合 `where` 使用。默认会进行校验。
 
+> `row` **只接受 table**。裸 SQL 片段（`Blog:update("tagline = 'x'")`）是内部通道，
+> 公开方法不提供。
+
+> ⚠️ **不带 WHERE 的 UPDATE / DELETE 会在执行时被拒绝**：
+>
+> ```
+> refuse to run UPDATE without WHERE on table blog: call :allow_full_table() if intended
+> ```
+>
+> 漏写 `:where{}` 是最贵的一类事故，所以默认拦下。确实要作用于全表时显式声明：
+>
+> ```lua
+> Blog:update { tagline = 'reset' }:allow_full_table():exec()
+> ```
+>
+> 两点说明：
+>
+> - 检查只在**真正执行**（`exec()` / `execr()` 及走它们的终结方法）时进行。
+>   `statement()` 只是拼字符串，写操作被当成子查询 / CTE 内嵌进外层语句
+>   （`Blog:upsert(BlogBin:update{...}:returning{...})`）时由外层语句负责，都不会被拦。
+> - **`delete()` 不传条件本身就是「删全表」的显式写法**（对齐 Django 的 `.all().delete()`），
+>   不需要再调 `allow_full_table()`。被拦的是「写了 `delete()` 却忘了 `where`」之外的
+>   `update(row)` 漏条件，以及 `delete(cond)` 的条件解析后为空的情况。
+
 ```lua
 -- 基本更新
 Blog:update{ tagline = 'new tagline' }:where{ name = 'Blog 1' }:exec()
@@ -734,7 +801,15 @@ Blog:delete("id", ">", 100):exec()
 
 -- 带 RETURNING
 local deleted = Blog:delete{ name = 'Old' }:returning('*'):exec()
+
+-- 不传条件 = 清空整张表（Django 的 .all().delete() 同义），不需要 allow_full_table()
+Blog:delete():exec()
+-- DELETE FROM blog T
 ```
+
+> ⚠️ 条件可选的场景要小心 `Blog:delete(cond)` 里 `cond` 为 `nil` 的情况：那等价于
+> `delete()`，也就是**删全表**。条件来自请求参数时请自己先判断，或者显式写成
+> `Blog:delete():where(cond)`——那条路径漏了 `where` 会被防呆拦下。
 
 ---
 
@@ -888,6 +963,25 @@ Blog:where{ name__startswith = 'sync_' }:align {
 
 获取单条记录，不存在返回 `false`：
 
+> ⚠️ **命中多行时同样返回 `false`**，与「不存在」用的是同一个返回值。实现是
+> `limit(2)` 之后只在 `#records == 1` 时返回记录，所以下面这个常见写法在数据
+> 已经重复时会**越修越多**：
+>
+> ```lua
+> local r = Blog:get { name = n }
+> if not r then Blog:create { name = n } end  -- ⚠️ 重复数据下又插一条
+> ```
+>
+> 需要区分两种情况就别用 `get()`：
+>
+> ```lua
+> local rows = Blog:where { name = n }:limit(2):exec()
+> if #rows == 0 then ... elseif #rows > 1 then error("数据重复: " .. n) end
+> ```
+>
+> 唯一键上的「取不到就建」请用原子的 `get_or_create()`，它靠
+> `INSERT ... ON CONFLICT` 保证并发下也只有一条。
+
 ```lua
 local blog = Blog:get { name = 'Blog 1' }
 if blog then
@@ -1023,6 +1117,10 @@ local blog, created = Blog:get_or_create(
   任意非唯一条件的"找一条"请用 `get()`。
 - 已存在时执行的是 no-op 更新（只回写冲突键自身）：不改其它列、不刷新 `auto_now`，
   但仍产生一次行版本写入。高频只读探测场景请直接用 `get()`。
+- 校验口径与 `update_or_create` 完全一致：`params + defaults` 先过 `validate_update`
+  再过 `prepare_for_db`，`skip_validate()` 可跳过校验（`prepare_for_db` 照常）。
+  这意味着字符串同样会被 `compact`/`trim`，所以 `' 张三'` 与 `'张三'` 是同一条，
+  json 值会被正确编码，整数字段的 `''` 写成 NULL 而不是让 PG 报 `invalid input syntax`。
 
 ### Sql:update_or_create(params, defaults?, columns?)
 
@@ -1092,7 +1190,14 @@ User:in_bulk({'alice', 'bob'}, 'username')
 
 -- 不传 ids 则返回全集的字典
 Blog:in_bulk()
+
+-- 传空数组返回空表（对齐 Django 的 in_bulk([])），不是全集
+Blog:in_bulk({})
+-- {}
 ```
+
+> 「id 列表恰好为空」与「不筛选」是两回事：前者应当返回空表。把请求里的 id 列表
+> 直接传进来是常见写法，早期版本在列表为空时会把整张表拉回来。
 
 ### Sql:none()
 
@@ -1335,3 +1440,51 @@ local blog = Blog:meta_query {
 }
 -- 等价于 Blog:get{name='Blog 1'}
 ```
+
+#### 只接受数据，不接受裸 SQL
+
+`meta_query` 的定位就是「把请求参数原样喂进来」，所以入口做了类型白名单：
+
+| 参数                                                            | 只接受                                                     |
+| --------------------------------------------------------------- | ---------------------------------------------------------- |
+| `where` / `get` / `try_get` / `having`                          | table。数组形式只放行 `{列, 值}` / `{列, 运算符, 值}`      |
+| `select` / `order` / `group` / `flat` / `select_related` / `select_related_labels` | 字符串（或字符串数组）                  |
+| `limit` / `offset`                                              | 数字或数字字符串                                           |
+| `raw` / `compact` / `exists`                                    | 布尔                                                       |
+| `distinct`                                                      | 布尔（整体 DISTINCT）或字符串列表（DISTINCT ON）           |
+
+```lua
+Blog:meta_query { where = "1=1" }        -- ✗ 报错：raw SQL string is not accepted here
+Blog:meta_query { where = { "1=1" } }    -- ✗ 报错：单元素数组解包后还是 where(string)
+Blog:meta_query { get   = "1=1" }        -- ✗ 报错
+Blog:meta_query { where = { 'rating', '>', 3 } }  -- ✓ 三参形式
+Blog:meta_query { where = { rating__gt = 3 } }    -- ✓ 键值对（推荐）
+```
+
+`where(string)` 这些裸 SQL 分支在链式 API 上是有意保留的（见「情形 3」），
+但不能从**数据通道**到达——否则请求体里的一行字符串就能拼进 SQL。
+
+布尔开关（`raw` / `compact` / `exists` / `distinct`）只有「开」一种调用形态：
+值为 `false` 时直接跳过，不会像早期版本那样把 `false` 解包成 `compact(false)`
+（那个方法忽略入参，照样把 compact 打开）。
+
+---
+
+## 裸 SQL 入口清单
+
+下面这些入口**不做任何转义**，一律不能接受用户输入。需要把请求参数带进条件，
+请走键值对表 / 两参形式 / `Q` 对象 / `Model.as_literal()`：
+
+| 入口                                         | 说明                                      |
+| -------------------------------------------- | ----------------------------------------- |
+| `where(string)` / `where_or` / `or_where` / `exclude(string)` / `having(string)` | 条件片段原样拼入 |
+| `where(function(ctx))` / `select(function)` / `order(function)` | 回调的返回值原样拼入 |
+| `from(...)` / `using(...)`                   | 表名/子句原样拼入                         |
+| `with(name, string)` / `with_recursive(name, string)` | CTE 定义原样拼入                 |
+| `Model.token(s)`                             | 显式声明「这是 SQL token，别加引号」      |
+| `exec_statement(stmt)` / `Model.query(stmt)` | 直接执行整条 SQL                          |
+
+转义的安全性还有一条服务器前提：字符串字面量只转义单引号（`'` → `''`），
+这隐含要求 `standard_conforming_strings = on`。ORM 现在会在**每条新建连接**上强制
+`SET standard_conforming_strings = on`，设不上就拒绝使用这条连接，所以库级/角色级
+被改成 `off` 也不会让转义假设失效。

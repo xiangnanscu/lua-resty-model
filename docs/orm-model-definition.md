@@ -84,7 +84,7 @@ local Store = Model {
 | `type`        | string       | "string" | 字段类型                       |
 | `label`       | string       | name     | 展示标签                       |
 | `required`    | boolean      | false    | 是否必填                       |
-| `default`     | any          | (按类型) | 默认值（可以是函数）           |
+| `default`     | any          | (按类型) | 默认值（可以是函数；table 型每次取用都会 clone 一份，见下） |
 | `unique`      | boolean      | nil      | 唯一约束                       |
 | `primary_key` | boolean      | nil      | 主键                           |
 | `null`        | boolean      | (auto)   | 是否允许 NULL                  |
@@ -92,6 +92,14 @@ local Store = Model {
 | `strict`      | boolean      | nil      | 启用 choices 校验（默认 true） |
 | `disabled`    | boolean      | nil      | 禁用编辑                       |
 | `index`       | boolean      | nil      | 索引                           |
+
+> **table 型 `default` 是按值发放的。** `{ "tags", type = 'array', default = {} }`
+> 这种写法里，字段定义上的那张表不会被交给调用方——每次填默认值都 `clone` 一份。
+> 否则调用方一改（`rec.tags[#rec.tags+1] = x`、`rec.payload.k = v`）就污染了字段定义，
+> 本 worker 后续所有创建都带着这次的修改，直到进程重启。
+>
+> `default = false` 同样算「有默认值」：布尔字段留空时会显式写入 `false`，
+> 而不是落到数据库的列默认值上。
 
 ### 各字段类型专有选项
 
@@ -116,11 +124,44 @@ local Store = Model {
 { "age", type = 'integer', min = 0, max = 150 }
 ```
 
-| 选项     | 说明     |
-| -------- | -------- |
-| `min`    | 最小值   |
-| `max`    | 最大值   |
-| `serial` | 自增序列 |
+| 选项     | 说明                                      |
+| -------- | ----------------------------------------- |
+| `min`    | 最小值                                    |
+| `max`    | 最大值                                    |
+| `serial` | 自增序列                                  |
+| `bigint` | `db_type = 'bigint'` 的简写，见下          |
+
+##### 大整数（bigint）
+
+Lua 的 number 是 double，只能精确表示 `2^53`（约 9.0×10¹⁵）以内的整数。雪花 ID、
+微信/支付平台的交易号、毫秒时间戳都超过这条线，**在 Lua 词法阶段就已经失真**——
+`123456789012345678` 读进来就是 `123456789012345680`，之后怎么渲染都取不回原值。
+
+所以超过 `2^53` 的整数必须以「精确的十进制字符串」或 int64 cdata 的形态一路穿过
+校验 → 拼 SQL → 读回：
+
+```lua
+{ "order_no", type = 'integer', bigint = true }
+
+Order:create { order_no = '1234567890123456789' }   -- ✓ 十进制字符串，原样拼进 SQL
+Order:create { order_no = 1234567890123456789LL }   -- ✓ int64 cdata
+Order:create { order_no = 1234567890123456789 }     -- ✗ 词法阶段已经失真，as_literal 报错
+```
+
+`bigint` 字段的校验器在安全范围内把值转回 number（保持既有调用习惯），超出范围时
+保留十进制字符串。读回方向由连接选项 `BIGINT_AS_STRING`（`.env` 的
+`PG_BIGINT_AS_STRING=true`）控制：打开后 int8 列按原始十进制字符串返回，不经 `tonumber`。
+默认关——它会把 `rec.id` 从 number 变成 string，是行为变化，必须由业务自己选。
+
+> ⚠️ `resty.migrate` 的建表语句按 `type` 而不是 `db_type` 映射，`type = 'integer'`
+> 一律生成 `integer` 列。`bigint = true` 目前只保证 ORM 这一侧（校验 / 字面量 / 读回）
+> 的精度，列本身请用迁移脚本或手写 DDL 建成 `bigint`。
+
+##### 数字字面量
+
+`as_literal` 对整数用 `%d` 精确渲染（不再走 `tostring` 的 `%.14g`，那会让 `1e14`
+起的整数变成 `1e+14` 这种科学计数法，拼进 WHERE 就是匹配错行）。
+`nan` / `inf` 不是合法的 SQL 数字字面量，会在拼 SQL 前直接报错。
 
 #### float
 
@@ -152,6 +193,16 @@ local Store = Model {
 > PG 会按**数据库会话时区**解释这个字符串。请保证 nginx 所在机器与 PG 的 `timezone`
 > 配置一致，否则写入的时间会整体偏移。
 
+> **带偏移量的值原样入库。** 前端传 ISO 8601（`2024-01-01T00:00:00Z`、`...+08:00`）是常态，
+> 校验器**保留**这个偏移——丢掉之后 `+00:00` 会被会话时区重新解释，整体偏移几个小时。
+> 走 CTE 的写法（`merge` / `updates` / `gets` / `merge_gets` / `with_values`）会给首行
+> 字面量加类型后缀，`timezone = true` 时用的是 `::timestamptz` 而不是 `::timestamp`，
+> 所以同一个值走 `insert` 和走 `updates` 落库时刻一致。
+>
+> 注意 `type = 'datetime'` 的**表单校验器**（`Validator.datetime`）返回的仍是不带偏移的
+> 规范形态，入库口径是另一个 `Validator.datetime_tz`。两者故意分开：一个给表单回显，
+> 一个给 SQL。
+
 #### text
 
 ```lua
@@ -163,6 +214,18 @@ local Store = Model {
 ```lua
 { "metadata", type = 'json' }
 ```
+
+> **JSON 字段里的空表编码成 `[]`，不是 `{}`。** Lua 的 `{}` 既是空表也是空数组，
+> cjson 只能二选一。JSON 字段里出现的空表绝大多数是空数组（`tags` / `items` /
+> `children` / `attachments`），编码成 `{}` 会让按数组处理的前端直接崩，所以这边选了数组。
+>
+> 配套地，从库里读出来的 `[]` 带 array 标记，「读出 → 改一个字段 → 存回」之后仍然是
+> `[]`，不会在往返里变形。
+>
+> 代价是**本意为空对象**的 `{}` 也会被编码成 `[]`。确实需要存空对象时：存一个带哨兵键的
+> 对象（如 `{ _empty = true }`），或者把该字段拆成独立列。
+>
+> 顶层 `array` / `table` 字段不受影响，它们本来就稳定输出 `[]`。
 
 #### array
 
@@ -641,18 +704,81 @@ record(data)                         -- 合并数据: record({ name = 'new name'
 
 ### Model:transaction(callback)
 
+**错误通道是「抛错」，不是 `nil, err`。** 成功时返回 callback 的返回值（前 3 个），
+失败时一律 `error()` 重抛，交给上层统一的错误分类器：
+
 ```lua
-local result, err = Blog:transaction(function()
-  Blog:create { name = 'Blog A' }
-  Entry:create { blog_id = 1, headline = 'Entry 1' }
-  return { success = true }
+-- ✅ 正确：要就地处理错误就自己 pcall
+local ok, res = pcall(function()
+  return Blog:transaction(function()
+    Blog:create { name = 'Blog A' }
+    Entry:create { blog_id = 1, headline = 'Entry 1' }
+    return { success = true }
+  end)
 end)
--- 任何错误会自动 ROLLBACK
+if not ok then
+  ngx.log(ngx.ERR, "转账失败: ", res)
+end
+
+-- ❌ 错误：实现从不返回 nil, err，这个分支永远进不去
+local result, err = Blog:transaction(function() ... end)
+if err then ... end
 ```
+
+任何错误（含 callback 里未捕获的崩溃）都会自动 `ROLLBACK` 再把原错误重抛。
+
+#### ⚠️ 被吞掉的错误会阻止提交
+
+callback 里用 `pcall` 吞掉一条 SQL 的 PG 报错之后，**PG 会话已经进入 aborted 状态**，
+后面的 `COMMIT` 会被 PG 当作 `ROLLBACK` 静默执行。所以「先试插入，失败就走另一条路」
+这种写法在 PG 里是**行不通**的：
+
+```lua
+-- ❌ 这样写拿到的是「成功」，但一个字节都没写进去
+Blog:transaction(function()
+  pcall(function() Blog:create { name = dup_name } end) -- 唯一冲突，被吞
+  Blog:create { name = other_name }                     -- PG 在 aborted 状态下照样报错
+end)
+```
+
+ORM 会在 callback 正常返回后检查会话状态，aborted 时主动回滚并抛
+`transaction aborted by earlier error: ...`，把「假成功」变成显式失败。
+
+需要「试一下，失败就换条路」的语义，请用 savepoint，或改写成 `ON CONFLICT`
+（`get_or_create` / `update_or_create` / `upsert` 都是单条原子语句）。
+
+#### ⚠️ callback 里不要调 `ngx.exit` / `ngx.eof`
+
+`ngx.exit` 在 content 阶段是通过 `lua_yield` 实现的，LuaJIT 允许跨 `pcall`/`xpcall` yield，
+所以包着 callback 的那层 `xpcall` **不会返回**——`COMMIT`、`ROLLBACK`、连接归还统统不执行。
+请求结束时 nginx 关掉未归还的 cosocket，PG 侧回滚，结果就是
+「处理函数写完响应并 `ngx.exit(200)`，事务却没提交」。
+
+事务内要提前结束请求，先把数据写完、让 `transaction()` 正常返回，再在事务**外面** `ngx.exit`。
+
+#### ⚠️ 协程逃逸：`coroutine.wrap/create` 与 `ngx.thread.spawn` 里的查询不在事务里
+
+事务连接按**运行协程**隔离（这样每个 `ngx.thread` 轻线程才不会共用同一条 pgmoon socket
+而把线协议搞乱）。代价是：在 callback 里新建的协程是另一个 key，拿到的是**另一条连接**，
+它发出的写入自动提交，不受事务回滚保护。
+
+```lua
+Blog:transaction(function()
+  Blog:create { name = 'A' }
+  local co = coroutine.wrap(function()
+    Blog:create { name = 'B' }  -- ⚠️ 走的是新连接，已经提交，回滚不了
+  end)
+  co()
+  error("boom")                 -- A 回滚了，B 还在
+end)
+```
+
+事务内的写操作请全部留在 callback 自己的协程里。
 
 ### Model:atomic(func)
 
-将函数包装为事务：
+将函数包装为事务，语义与 `transaction` 完全一致（同样抛错、同样禁止 `ngx.exit`、
+同样有协程逃逸限制）：
 
 ```lua
 local handler = Blog:atomic(function(request)
@@ -662,6 +788,9 @@ local handler = Blog:atomic(function(request)
 end)
 -- 使用: handler(request)
 ```
+
+嵌套调用（事务里再开事务）会直接报 `transaction already started`，这是调用方 bug，
+不做静默降级。
 
 ---
 

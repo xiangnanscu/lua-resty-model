@@ -51,6 +51,23 @@ Model 是一个基于 Lua 的 PostgreSQL ORM 库，设计理念深受 Django ORM
 ALTER DATABASE mydb SET statement_timeout = '10s';
 ```
 
+### 会话参数：ORM 管什么、不管什么
+
+每条**新建**连接上 ORM 只强制一条会话参数：
+
+```sql
+SET standard_conforming_strings = on
+```
+
+这是**安全修复**而不是口味选择：字符串字面量的转义只处理单引号（`'` → `''`），
+`LIKE` 用 `ESCAPE '\'`，两者的正确性都以这个参数为 `on` 为前提。它可以在库级/角色级被
+改成 `off`，那时 `\'` 能逃逸字符串字面量造成注入。设不上就直接拒绝使用这条连接。
+
+**会话时区（`SET TIME ZONE`）ORM 不管。** `datetime` 列是 `timestamptz`，会话时区只
+改变回读出来的**字符串形态**（同一时刻、不同写法），不锁定也不会读错数据；而在库里
+写死一个业务时区，会让所有使用方的回读格式随 ORM 版本变化。需要固定回读形态的部署，
+请在 `.env` 里配 `PGTZ` / `PGOPTIONS`，或在角色级 `ALTER ROLE ... SET timezone`。
+
 ### `receive_message: failed to get type: timeout` 是什么
 
 ```
@@ -110,6 +127,8 @@ local query = Query {
 | `PG_BACKLOG`             | `BACKLOG`             | 同 `POOL_SIZE` | 池满后等连接的排队长度；`false` / `off` = 不排队、不限连接数 |
 | `PG_POOL_NAME`           | `POOL_NAME`           | `host:port:database:user` | 同名共享同一个池与同一份 Query 实例 |
 | `PG_SSL` / `PG_SSL_VERIFY` / `PG_SSL_REQUIRED` | `SSL` / `SSL_VERIFY` / `SSL_REQUIRED` | 关 | 布尔项走 `coalesce`，`false` 能覆盖 env |
+| `PG_BIGINT_AS_STRING`    | `BIGINT_AS_STRING`    | 关      | `bigint`(int8) 列按原始十进制字符串读回，不经 `tonumber`（超过 2^53 才需要） |
+| `PG_CONVERT_NULL`        | `CONVERT_NULL`        | 关      | 非 compact 结果里 NULL 列也用 `Model.NULL` 占位，而不是缺键 |
 
 `Query(options)` 按 `pool_name` 缓存实例：同一 `host:port:database:user` 反复调用拿到的是
 **同一个 Query**，三个超时以首次构造时为准。这是有意为之 —— 事务连接
@@ -301,7 +320,7 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Model:validate_cascade_update(input, names?)` | 级联更新校验                                 |
 | `Model:load(data)`                             | 从数据库加载数据并转换                       |
 | `Model:create_record(data)`                    | 创建记录实例                                 |
-| `Model:transaction(callback)`                  | 事务                                         |
+| `Model:transaction(callback)`                  | 事务（失败**抛错**，不返回 `nil, err`）      |
 | `Model:atomic(func)`                           | 将函数包装为原子操作                         |
 | `Model:to_json(names?)`                        | 将模型元数据导出为 JSON                      |
 | `Model:save_cascade_update(input, names?, key?)` | 级联更新（同时同步 table 字段子表）        |
@@ -343,7 +362,7 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Sql:only(...)`                     | 覆盖式选择列                        |
 | `Sql:defer(...)`                    | 排除指定列                          |
 | `Sql:values(...)`                   | 返回字典数组（不经 model:load）     |
-| `Sql:values_list(fields, opts?)`    | 返回元组数组（`flat=true` 自动展平）|
+| `Sql:values_list(fields, opts?)`    | 返回元组数组（`flat=true` 自动展平；NULL 用 `Model.NULL` 占位）|
 | `Sql:join_type(jtype)`              | 设置后续自动 JOIN 类型              |
 | `Sql:select_for_update(opts?)`      | 行级写锁 `FOR UPDATE` (需事务)      |
 | `Sql:using(...)`                    | DELETE 的 USING 子句                |
@@ -371,7 +390,7 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 
 | API                                              | 说明                            |
 | ------------------------------------------------ | ------------------------------- |
-| `Sql:get(cond?, op?, dval?)`                     | 获取单条记录 (不存在返回 false) |
+| `Sql:get(cond?, op?, dval?)`                     | 获取单条记录（不存在**或命中多行**都返回 false）|
 | `Sql:try_get(...)`                               | `get` 的别名                    |
 | `Sql:gets(keys, columns?)`                       | 批量按键获取                    |
 | `Sql:merge_gets(rows, key, columns?)`            | 合并获取（带额外列）            |
@@ -380,12 +399,12 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Sql:exists()`                                   | 是否存在                        |
 | `Sql:flat(col?)`                                 | 扁平化结果                      |
 | `Sql:as_set()`                                   | 转为 Set                        |
-| `Sql:get_or_create(params, defaults?, columns?)` | 获取或创建                      |
+| `Sql:get_or_create(params, defaults?, columns?)` | 获取或创建（原子，走 `validate_update`）|
 | `Sql:update_or_create(params, defaults?, ...)`   | 更新或创建（命中即 UPDATE）     |
 | `Sql:first()` / `Sql:last()`                     | 单条记录（无 order 时按主键）   |
 | `Sql:latest(...)` / `Sql:earliest(...)`          | 按指定字段取最新/最早一条       |
 | `Sql:contains(obj)`                              | 集合是否包含指定对象            |
-| `Sql:in_bulk(ids?, field_name?)`                 | 按主键/指定列取字典             |
+| `Sql:in_bulk(ids?, field_name?)`                 | 按主键/指定列取字典（`{}` → `{}`，不传 → 全集）|
 | `Sql:explain(opts?)`                             | 返回 PostgreSQL 查询计划         |
 
 ### 集合操作
@@ -430,6 +449,7 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Sql:compact()`            | 紧凑模式（返回数组而非对象）  |
 | `Sql:raw(bool?)`           | 原始模式（不调用 field:load） |
 | `Sql:skip_validate(bool?)` | 跳过校验                      |
+| `Sql:allow_full_table()`   | 声明「这次就是要作用于全表」，解除 UPDATE/DELETE 漏 WHERE 的防呆 |
 | `Sql:return_all()`         | 返回所有结果集                |
 | `Sql:copy()`               | 复制 Sql 构建器               |
 | `Sql:clear()`              | 清空构建器                    |
@@ -437,7 +457,7 @@ Blog:create_sql():select('name'):where{id=1}:exec()
 | `Sql:append(...)`          | 追加 SQL 语句                 |
 | `Sql:exec_statement(stmt)` | 直接执行原始 SQL 字符串       |
 | `Sql:commit(bool?)`        | 是否提交（默认 true）         |
-| `Sql:meta_query(data)`     | 声明式查询                    |
+| `Sql:meta_query(data)`     | 声明式查询（只接受数据，拒绝裸 SQL 字符串）|
 
 ### 表达式
 
@@ -513,7 +533,7 @@ Blog:where { entry__rating__gt = 3 }:exec()
 | ------------------- | ------------ | ------------------------ |
 | `string`            | varchar      | 字符串，需指定 maxlength |
 | `text`              | text         | 长文本                   |
-| `integer`           | integer      | 整数                     |
+| `integer`           | integer      | 整数（`bigint = true` → `bigint`，见 orm-model-definition.md） |
 | `float`             | float        | 浮点数                   |
 | `boolean`           | boolean      | 布尔                     |
 | `date`              | date         | 日期                     |
