@@ -347,6 +347,23 @@ local Model = {
 setmetatable(Model, {
   __call = function(t, ...)
     return t:mix(BaseModel, ...)
+  end,
+  -- `Model.LAZY_FK` 要能真正开关 ForeignkeyField:load 的按需查询（D9）。
+  -- 开关本体在 model.fields 的 fk_config 里（fields 不能反向 require init），
+  -- 这里只做转发。注意 LAZY_FK 绝不能 rawset 到 Model 上：__newindex 只在键**不存在**
+  -- 时触发，一旦写成直接键，第二次赋值就绕过转发了（而且会被建模时的 pairs 复制成快照）
+  __index = function(_, k)
+    if k == 'LAZY_FK' then
+      return Fields.fk_config.lazy
+    end
+    return nil
+  end,
+  __newindex = function(t, k, v)
+    if k == 'LAZY_FK' then
+      Fields.fk_config.lazy = v and true or false
+      return
+    end
+    rawset(t, k, v)
   end
 })
 

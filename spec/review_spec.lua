@@ -476,6 +476,195 @@ local function main()
       assert.are.same(#rows3, 2, 'T15: builder 复用一整轮之后结果不变')
       assert.are.same(field_of(rows3[1], 'id'), field_of(rows[1], 'id'), 'T15: 行的身份也不变')
     end)
+
+    -------------------------------------------------------------------
+    it("S3/T14 非 cosocket 阶段发查询必须报含 phase 的明确错误", function()
+      -- 真正的触发场景在 log_by_lua / header_filter 阶段（惰性外键在那里第一次被访问），
+      -- 起 nginx 跑多阶段不现实，所以直接把 ngx.get_phase 换掉：
+      -- 守卫读的就是它，换掉之后走的是与真实场景完全相同的那条分支。
+      local q = Query {
+        DATABASE = 'test',
+        USER = 'postgres',
+        PASSWORD = 'postgres',
+        POOL_NAME = 'review_phase',
+      }
+      -- 先确认守卫不挡正常阶段（测试自身跑在 timer 里）
+      assert.are.same(first_field(q("SELECT 'PHASE_OK' AS marker"), 'marker'), 'PHASE_OK',
+        'T14: 允许的阶段不能被守卫误伤')
+
+      local real_get_phase = ngx.get_phase
+      local function with_phase(phase, fn)
+        ngx.get_phase = function() return phase end
+        local packed = { pcall(fn) }
+        ngx.get_phase = real_get_phase
+        return packed[1], packed[2]
+      end
+
+      for _, phase in ipairs { 'log', 'header_filter', 'body_filter', 'init_worker', 'set' } do
+        local ok, err = with_phase(phase, function()
+          return q("SELECT 1 AS one")
+        end)
+        assert.is_false(ok, 'T14: ' .. phase .. ' 阶段发查询必须报错，而不是让 pgmoon 深处抛 API disabled')
+        assert.is_truthy(tostring(err):find('phase', 1, true),
+          'T14: 错误信息必须点出 phase；err=' .. tostring(err))
+        assert.is_truthy(tostring(err):find(phase, 1, true),
+          'T14: 错误信息必须点出是哪个阶段；err=' .. tostring(err))
+      end
+
+      -- 事务入口同样要挡，否则 BEGIN 先发出去，错误还是从 pgmoon 里抛
+      local tx_ok, tx_err = with_phase('log', function()
+        return q.transaction(function() return true end)
+      end)
+      assert.is_false(tx_ok, 'T14: transaction() 在非法阶段也必须报错')
+      assert.is_truthy(tostring(tx_err):find('phase', 1, true),
+        'T14: transaction() 的错误信息同样要点出 phase；err=' .. tostring(tx_err))
+
+      -- 守卫恢复之后一切照旧（确认上面的 pcall 没把 ngx.get_phase 留在被改写的状态）
+      assert.are.same(first_field(q("SELECT 'PHASE_RESTORED' AS marker"), 'marker'), 'PHASE_RESTORED',
+        'T14: 阶段恢复后查询应正常')
+    end)
+
+    -------------------------------------------------------------------
+    it("S4/T14 Query() 缓存命中且配置不同时必须记 WARN", function()
+      local pool = 'review_pool_warn_' .. tostring(ngx.now()):gsub('%.', '')
+      local captured = {}
+      local real_log = ngx.log
+      ngx.log = function(level, ...)
+        local parts = {}
+        for i = 1, select('#', ...) do
+          parts[#parts + 1] = tostring((select(i, ...)))
+        end
+        captured[#captured + 1] = { level = level, msg = table.concat(parts) }
+        return real_log(level, ...)
+      end
+      local ok, err = pcall(function()
+        Query {
+          DATABASE = 'test',
+          USER = 'postgres',
+          PASSWORD = 'postgres',
+          POOL_NAME = pool,
+          QUERY_TIMEOUT = 8000,
+        }
+        -- 同名池、不同超时：行为上仍以首个为准（事务共享连接依赖这点），但不能静默
+        Query {
+          DATABASE = 'test',
+          USER = 'postgres',
+          PASSWORD = 'postgres',
+          POOL_NAME = pool,
+          QUERY_TIMEOUT = 600000,
+        }
+      end)
+      ngx.log = real_log
+      assert.is_true(ok, 'T14: 重复构造同名池不应报错; err=' .. tostring(err))
+
+      local warned = false
+      for _, entry in ipairs(captured) do
+        if entry.level == ngx.WARN
+            and entry.msg:find('query_timeout', 1, true)
+            and entry.msg:find(pool, 1, true) then
+          warned = true
+        end
+      end
+      assert.is_true(warned,
+        'T14: 同名池传入不同 QUERY_TIMEOUT 时必须打 WARN，否则「脚本里调大超时没生效」无从发现')
+
+      -- 同一个键只提醒一次，热路径不能刷屏
+      local captured2 = {}
+      ngx.log = function(level, ...)
+        local parts = {}
+        for i = 1, select('#', ...) do
+          parts[#parts + 1] = tostring((select(i, ...)))
+        end
+        captured2[#captured2 + 1] = { level = level, msg = table.concat(parts) }
+        return real_log(level, ...)
+      end
+      pcall(Query, {
+        DATABASE = 'test',
+        USER = 'postgres',
+        PASSWORD = 'postgres',
+        POOL_NAME = pool,
+        QUERY_TIMEOUT = 600000,
+      })
+      ngx.log = real_log
+      for _, entry in ipairs(captured2) do
+        assert.is_falsy(entry.level == ngx.WARN and entry.msg:find('query_timeout', 1, true),
+          'T14: 同一个 (pool, key) 的 WARN 只应出现一次')
+      end
+    end)
+
+    -------------------------------------------------------------------
+    it("S4/T14 STATEMENT_TIMEOUT 默认比 QUERY_TIMEOUT 早 2 秒，且不会派生出非正值", function()
+      -- 默认：10000 - 2000 = 8000，真的下发到了会话上
+      local q = Query {
+        DATABASE = 'test',
+        USER = 'postgres',
+        PASSWORD = 'postgres',
+        POOL_NAME = 'review_stmt_default',
+      }
+      assert.are.same(first_field(q("SHOW statement_timeout"), 'statement_timeout'), '8s',
+        'T14: 未显式配置时服务端护栏应取 QUERY_TIMEOUT - 2000')
+
+      -- QUERY_TIMEOUT 本身小于 2s 时派生值为负，必须退回「不下发」，
+      -- 否则每条 SQL 都会被服务端立刻 cancel（B1 用例用的就是 1500ms 的池子）
+      local q_short = Query {
+        DATABASE = 'test',
+        USER = 'postgres',
+        PASSWORD = 'postgres',
+        POOL_NAME = 'review_stmt_short',
+        QUERY_TIMEOUT = 1500,
+      }
+      assert.are.same(first_field(q_short("SHOW statement_timeout"), 'statement_timeout'), '0',
+        'T14: QUERY_TIMEOUT 不足 2s 时不能派生出非正的 statement_timeout')
+
+      -- 显式值优先，0 表示服务端不限
+      local q_zero = Query {
+        DATABASE = 'test',
+        USER = 'postgres',
+        PASSWORD = 'postgres',
+        POOL_NAME = 'review_stmt_zero',
+        STATEMENT_TIMEOUT = 0,
+      }
+      assert.are.same(first_field(q_zero("SHOW statement_timeout"), 'statement_timeout'), '0',
+        'T14: STATEMENT_TIMEOUT = 0 应下发「不限」')
+
+      local q_explicit = Query {
+        DATABASE = 'test',
+        USER = 'postgres',
+        PASSWORD = 'postgres',
+        POOL_NAME = 'review_stmt_explicit',
+        STATEMENT_TIMEOUT = 3000,
+      }
+      assert.are.same(first_field(q_explicit("SHOW statement_timeout"), 'statement_timeout'), '3s',
+        'T14: 显式 STATEMENT_TIMEOUT 应原样下发')
+    end)
+
+    -------------------------------------------------------------------
+    it("D9/T14 Model.LAZY_FK = false 时外键属性访问必须报错而不是偷偷发查询", function()
+      local entry = ReviewEntry:where { headline = 'review entry 2' }:raw(false):exec()[1]
+      assert.is_truthy(entry, 'T14: 取种子记录失败')
+
+      -- 默认（LAZY_FK = true）：沿用现状，属性访问触发一次 SELECT
+      assert.are.same(entry.blog_id.name, 'review-blog-1',
+        'T14: 默认仍是惰性加载，行为不变')
+
+      local entry2 = ReviewEntry:where { headline = 'review entry 3' }:raw(false):exec()[1]
+      Model.LAZY_FK = false
+      local ok, err = pcall(function() return entry2.blog_id.name end)
+      Model.LAZY_FK = true
+      assert.is_false(ok, 'T14: 关掉开关后惰性加载必须报错')
+      assert.is_truthy(tostring(err):find('select_related', 1, true),
+        'T14: 错误信息应指出正确写法是 select_related；err=' .. tostring(err))
+
+      -- 恢复后行为照旧，且 select_related 这条路不受开关影响
+      assert.are.same(entry2.blog_id.name, 'review-blog-2', 'T14: 开关恢复后惰性加载应可用')
+      local joined = ReviewEntry:where { headline = 'review entry 3' }
+          :select_related('blog_id', 'name'):raw(false):exec()[1]
+      Model.LAZY_FK = false
+      local ok2, name2 = pcall(function() return joined.blog_id.name end)
+      Model.LAZY_FK = true
+      assert.is_true(ok2, 'T14: select_related 取回的外键对象不该再发查询; err=' .. tostring(name2))
+      assert.are.same(name2, 'review-blog-2', 'T14: select_related 的值应正确')
+    end)
   end)
 end
 

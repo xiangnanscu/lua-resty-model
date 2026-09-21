@@ -22,6 +22,14 @@ local ngx_localtime = ngx and ngx.localtime or function()
   return os.date("%Y-%m-%d %H:%M:%S")
 end
 
+-- 外键惰性加载开关（S3/D9）。默认 true，沿用现状：`record.blog_id.name` 第一次被访问时
+-- 才发一条 SELECT。方便，但发查询的位置与取记录的位置相隔很远——最典型的事故是
+-- content 阶段取出的记录被带到 `log_by_lua` 做审计序列化，那一下才第一次访问外键属性，
+-- 此时 cosocket 已被禁用，错误从 pgmoon 深处抛出，看不出根因。
+-- 置 false 后这种访问直接报错，把隐式查询暴露在开发期，正确写法是 `select_related()`。
+-- 由 `model.init` 的 `Model.LAZY_FK` 代为读写（两个模块共用这一份配置）。
+local fk_config = { lazy = true }
+
 ---@alias AnyField
 ---| StringField
 ---| UUIDField
@@ -1390,6 +1398,13 @@ function ForeignkeyField:load(value)
       if not pk then
         return nil
       end
+      if not fk_config.lazy then
+        error(string_format(
+          "[model.fields] lazy foreign key load is disabled (Model.LAZY_FK = false): " ..
+          "reading '%s' on the %s reference of '%s' would emit a SELECT here. " ..
+          "Fetch it up front with select_related('%s') instead.",
+          tostring(key), fk_model.table_name, tostring(self.name), tostring(self.name)), 0)
+      end
       local res = fk_model:get { [fk_name] = pk }
       if not res then
         return nil
@@ -1909,5 +1924,7 @@ end
 
 local exports = get_fields()
 exports.basefield = BaseField
+-- `model.init` 用它实现 `Model.LAZY_FK`（见上面 fk_config 的说明）
+exports.fk_config = fk_config
 
 return exports

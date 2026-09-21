@@ -24,14 +24,28 @@ Model 是一个基于 Lua 的 PostgreSQL ORM 库，设计理念深受 Django ORM
 | ---------------------- | ------------------- | ------- | ------------------ | -------------------------------------- |
 | `PG_CONNECT_TIMEOUT`   | `CONNECT_TIMEOUT`   | `2000`  | 客户端             | TCP 连接 + startup/auth 握手           |
 | `PG_QUERY_TIMEOUT`     | `QUERY_TIMEOUT`     | `10000` | 客户端（不发 cancel）| 单条 SQL 等回包                       |
-| `PG_STATEMENT_TIMEOUT` | `STATEMENT_TIMEOUT` | 不下发  | **服务端（真 cancel）** | 单条 SQL 在 PG 上的执行时间       |
+| `PG_STATEMENT_TIMEOUT` | `STATEMENT_TIMEOUT` | `QUERY_TIMEOUT - 2000` | **服务端（真 cancel）** | 单条 SQL 在 PG 上的执行时间       |
 
 推荐配比：**`STATEMENT_TIMEOUT` < `QUERY_TIMEOUT`**（如 10000 / 12000）。
 服务端先动手把查询 cancel 掉，客户端的读超时只做「PG 完全没响应」的兜底；
 反过来配的话每次都是客户端先撒手，查询在服务端继续烧。
 
 `STATEMENT_TIMEOUT` 只在**新建连接**上下发一次（会话级参数，池里复用的 socket 依然有效），
-不配则一条 `SET` 都不发，省掉那次往返。也可以不走客户端、直接挂在库或角色上：
+和 `SET standard_conforming_strings = on` 拼在同一条简单查询里，复用连接的热路径上不多一次往返。
+
+**默认值就是上面那条推荐配比**：不配 `PG_STATEMENT_TIMEOUT` 时取 `QUERY_TIMEOUT - 2000`
+（默认 10000 → 8000），服务端总是比客户端早 2 秒动手。三种显式写法：
+
+| 写法                                                     | 效果                                         |
+| -------------------------------------------------------- | -------------------------------------------- |
+| `STATEMENT_TIMEOUT = 3000`                               | 下发 `SET statement_timeout = 3000`          |
+| `STATEMENT_TIMEOUT = 0`                                  | 下发 `SET statement_timeout = 0`，服务端不限 |
+| `STATEMENT_TIMEOUT = false` / `PG_STATEMENT_TIMEOUT=off` | 一条 `SET` 都不发，护栏交给库/角色级配置     |
+
+`QUERY_TIMEOUT` 本身不足 2 秒时（脚本里为了快速失败会这么配），派生值会是负数或 0，
+这种情况**不下发** —— 否则每条 SQL 一发出去就被服务端 cancel。
+
+也可以不走客户端、直接挂在库或角色上：
 
 ```sql
 ALTER DATABASE mydb SET statement_timeout = '10s';
@@ -92,7 +106,8 @@ local query = Query {
 | `PGHOST` / `PGPORT`      | `HOST` / `PORT`       | `127.0.0.1` / `5432` |                                    |
 | `PGDATABASE` / `PGUSER` / `PGPASSWORD` | `DATABASE` / `USER` / `PASSWORD` | `postgres` |                 |
 | `PG_MAX_IDLE_TIMEOUT`    | `MAX_IDLE_TIMEOUT`    | `10000` | 连接归还池后的最大空闲时间（毫秒）              |
-| `PG_POOL_SIZE`           | `POOL_SIZE`           | `100`   | 连接池大小                                      |
+| `PG_POOL_SIZE`           | `POOL_SIZE`           | `100`   | 每 worker 的连接数上限（配合 `BACKLOG` 才是硬上限） |
+| `PG_BACKLOG`             | `BACKLOG`             | 同 `POOL_SIZE` | 池满后等连接的排队长度；`false` / `off` = 不排队、不限连接数 |
 | `PG_POOL_NAME`           | `POOL_NAME`           | `host:port:database:user` | 同名共享同一个池与同一份 Query 实例 |
 | `PG_SSL` / `PG_SSL_VERIFY` / `PG_SSL_REQUIRED` | `SSL` / `SSL_VERIFY` / `SSL_REQUIRED` | 关 | 布尔项走 `coalesce`，`false` 能覆盖 env |
 
@@ -101,6 +116,59 @@ local query = Query {
 （`transaction`）要靠共享实例才能让跨 model 的写入进同一个事务。
 换句话说，想给某个脚本单独放宽超时，它得是这个进程里第一个构造该 pool 的人，
 否则要么换 `POOL_NAME`，要么老老实实走同一份配置。
+
+缓存命中且这次传进来的配置与当初建池时不同时，会打一条 WARN 指名是哪个键被忽略了：
+
+```
+[model.query] Query{POOL_NAME="default"} 已被构造过，query_timeout 以首次构造的值为准：
+沿用 10000，忽略本次传入的 600000。需要不同配置请换一个 POOL_NAME
+```
+
+行为没有变（仍然以首个为准），但「脚本里把超时调到 10 分钟却没生效」不会再无声无息。
+同一个 `(pool_name, 键)` 只提醒一次。
+
+### 连接数上限
+
+cosocket 的 `pool_size` 只限制**空闲**连接数；不给 `backlog` 时并发峰值会无限制新建连接，
+8 个 worker 很容易越过 PG 的 `max_connections`（默认 100），报 `too many clients already`。
+所以 `BACKLOG` 默认取 `POOL_SIZE`，此时 `POOL_SIZE` 才真正是「每 worker 的并发连接数上限」，
+超出的请求在队列里等一条连接空出来，而不是继续新建。
+
+配比：**`POOL_SIZE × worker 数 ≤ max_connections × 0.8`**。留的两成给超级用户、
+备份、监控和 `pg_dump`。8 worker + `max_connections = 200` → `POOL_SIZE = 20`。
+
+排队等不到连接会报 `timeout`（受 `CONNECT_TIMEOUT` 管），这是**背压**，
+不是故障：它把「打爆 PG」换成了「少量请求变慢/失败」。
+确实需要老行为（不排队、不限连接数）就配 `BACKLOG = false` 或 `PG_BACKLOG=off`。
+
+### 执行阶段
+
+查库走 cosocket，而 cosocket 只在这些阶段可用：
+`rewrite` / `access` / `content` / `timer` / `preread` / `ssl_cert` / `ssl_session_fetch` /
+`ssl_client_hello`（`init` 阶段 pgmoon 会自动回落到 luasocket）。
+
+在别的阶段发查询会被**提前拦下**，报一条点名阶段的错误：
+
+```
+[model.query] refuse to run SQL in the 'log' phase: cosocket API is disabled there.
+Allowed phases: rewrite/access/content/timer/preread/ssl_*. ...
+```
+
+没有这道守卫时，错误会以 `API disabled in the context of log_by_lua*` 的形式从 pgmoon
+深处抛出，栈顶指向 pgmoon 内部，看不出是「在错误的阶段查库」。
+
+真正会撞上这条的基本不是手写查询，而是**外键惰性加载**：content 阶段取出的记录带着
+外键代理，`record.blog_id.name` 要到 `log_by_lua` 做审计序列化时才第一次被访问，
+那一下才真正发 SQL。正确写法是在请求阶段就用 `select_related('blog_id', ...)` 取好。
+
+`Model.LAZY_FK = false` 可以把惰性加载整个关掉：关掉之后 `record.blog_id.name`
+这类访问直接报错并提示改用 `select_related`，把隐式查询暴露在开发期，
+而不是等到线上某个 `log_by_lua` 里炸掉。默认 `true`（沿用现状）。
+
+```lua
+local Model = require "model"
+Model.LAZY_FK = false -- 建议开发/测试环境打开这道闸
+```
 
 ---
 

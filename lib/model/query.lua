@@ -37,13 +37,13 @@ local traceback     = debug.traceback
 ---@field SSL_VERSION? string efaults to highest available, no less than TLS v1.1
 ---@field CONNECT_TIMEOUT? number 毫秒。只覆盖 TCP 连接 + startup/auth 握手（默认 2000）
 ---@field QUERY_TIMEOUT? number 毫秒。连上之后单条 SQL 等回包的上限（默认 10000）。没配则回落到 CONNECT_TIMEOUT（老行为）
----@field STATEMENT_TIMEOUT? number 毫秒。服务端 `SET statement_timeout`，0 = 不限。nil = 不下发（省一次往返）
+---@field STATEMENT_TIMEOUT? number|false 毫秒。服务端 `SET statement_timeout`，0 = 不限，false = 不下发。nil = 取 QUERY_TIMEOUT - 2000（不足 2s 时不下发）
 ---@field MAX_IDLE_TIMEOUT? number can be used to specify the maximal idle timeout (in milliseconds) for the current connection. If omitted, the default setting in the lua_socket_keepalive_timeout config directive will be used. If the 0 value is given, then the timeout interval is unlimited
 ---@field SOCKET_TYPE? string the type of socket to use, one of: "nginx", "luasocket", cqueues (default: "nginx" if in nginx, "luasocket" otherwise)
 ---@field APPLICATION_NAME? string
 ---@field BIGINT_AS_STRING? boolean bigint(int8) 列按原始十进制字符串读回，不经 tonumber（默认 false）
 ---@field CONVERT_NULL? boolean 非 compact 结果里 NULL 列也用 `Model.NULL` 占位而不是缺键（默认 false）
----@field BACKLOG? number OpenResty only, specify the size of the connection pool. If omitted and no backlog option was provided, no pool will be created. If omitted but backlog was provided, the pool will be created with a default size equal to the value of the lua_socket_pool_size directive
+---@field BACKLOG? number|false OpenResty only, 池满后等连接的排队长度。默认取 POOL_SIZE，此时 POOL_SIZE 才是每 worker 的并发连接数硬上限；false = 不排队、不限连接数（老行为）
 ---@field DEBUG? fun(statement: string): nil
 
 ---@class ConnOpts
@@ -60,13 +60,13 @@ local traceback     = debug.traceback
 ---@field ssl_version? string defaults to highest available, no less than TLS v1.1
 ---@field connect_timeout? number 毫秒，TCP 连接 + 握手
 ---@field query_timeout? number 毫秒，单条 SQL 等回包
----@field statement_timeout? number 毫秒，服务端 statement_timeout；nil 表示不下发
+---@field statement_timeout? number 毫秒，服务端 statement_timeout；nil 表示不下发（已解析完默认值）
 ---@field max_idle_timeout number can be used to specify the maximal idle timeout (in milliseconds) for the current connection. If omitted, the default setting in the lua_socket_keepalive_timeout config directive will be used. If the 0 value is given, then the timeout interval is unlimited
 ---@field socket_type string the type of socket to use, one of: "nginx", "luasocket", cqueues (default: "nginx" if in nginx, "luasocket" otherwise)
 ---@field application_name string set the name of the connection as displayed in pg_stat_activity. (default: "pgmoon")
 ---@field bigint_as_string boolean bigint(int8) 列按原始十进制字符串读回
 ---@field convert_null boolean 非 compact 结果里 NULL 列也占位
----@field backlog number OpenResty only, specify the size of the connection pool. If omitted and no backlog option was provided, no pool will be created. If omitted but backlog was provided, the pool will be created with a default size equal to the value of the lua_socket_pool_size directive
+---@field backlog? number OpenResty only, 池满后等连接的排队长度；nil 表示不排队（已解析完默认值）
 
 ---@class PgmoonConn
 ---@field sock_type string
@@ -93,6 +93,16 @@ local function coalesce(a, b)
   return b
 end
 
+---WARN 统一出口：有 ngx 走 error log，脱 ngx（resty 脚本 / 纯 LuaJIT）走 stderr
+---@param msg string
+local function log_warn(msg)
+  if ngx then
+    ngx.log(ngx.WARN, msg)
+  else
+    io.stderr:write(msg, "\n")
+  end
+end
+
 -- 超时旋钮拆分（见 docs/orm-index.md「数据库连接与超时」）：
 -- 老版本只有 `PG_CONNECT_TIMEOUT` 一个值，经 `conn:settimeout()` 一次性设死
 -- connect / send / **receive** 三者 —— 名字写着 connect，实际效果却是「单条 SQL 的时限」。
@@ -106,15 +116,10 @@ local function warn_legacy_timeout()
     return
   end
   warned_legacy_timeout = true
-  local msg = "[model.query] PG_CONNECT_TIMEOUT 现在只管连接握手，" ..
-      "单条 SQL 的时限请改用 PG_QUERY_TIMEOUT。" ..
-      "建议 .env 写成 PG_CONNECT_TIMEOUT=2000 与 PG_QUERY_TIMEOUT=10000，" ..
-      "详见 docs/orm-index.md「数据库连接与超时」"
-  if ngx then
-    ngx.log(ngx.WARN, msg)
-  else
-    io.stderr:write(msg, "\n")
-  end
+  log_warn("[model.query] PG_CONNECT_TIMEOUT 现在只管连接握手，" ..
+    "单条 SQL 的时限请改用 PG_QUERY_TIMEOUT。" ..
+    "建议 .env 写成 PG_CONNECT_TIMEOUT=2000 与 PG_QUERY_TIMEOUT=10000，" ..
+    "详见 docs/orm-index.md「数据库连接与超时」")
 end
 
 ---@param options QueryOpts
@@ -140,6 +145,50 @@ local function get_env_flag(env, key)
   return env[key] == "true"
 end
 
+---服务端护栏的默认值（D10）：客户端读超时不会给 PG 发 cancel，超时的查询会在服务端
+---一直跑到自己结束。默认让服务端比客户端早 2 秒动手，慢查询风暴时不会在 PG 上堆积。
+---显式值优先级：`options.STATEMENT_TIMEOUT` > `PG_STATEMENT_TIMEOUT` > 派生默认值。
+---`0` 表示服务端不限（照常下发 `SET statement_timeout = 0`）；
+---`false` / `PG_STATEMENT_TIMEOUT=off` 表示一条 `SET` 都不发（完全回到老行为）。
+---@param options QueryOpts
+---@param env table
+---@param query_timeout number
+---@return number? statement_timeout nil 表示不下发
+local function resolve_statement_timeout(options, env, query_timeout)
+  if options.STATEMENT_TIMEOUT == false or env.PG_STATEMENT_TIMEOUT == "off" then
+    return nil
+  end
+  local explicit = options.STATEMENT_TIMEOUT or tonumber(env.PG_STATEMENT_TIMEOUT)
+  if explicit ~= nil then
+    return explicit
+  end
+  -- 派生值必须为正：QUERY_TIMEOUT 本身就小于 2s 的池子（脚本里为了快速失败会这么配）
+  -- 派生出来会是负数或 0，下发后每条 SQL 都会被服务端立刻 cancel。这种情况不下发，
+  -- 让客户端读超时独自兜底
+  local derived = query_timeout - 2000
+  if derived > 0 then
+    return derived
+  end
+  return nil
+end
+
+---连接数上限（D10）：cosocket 的 `pool_size` 只限制**空闲**连接数，不设 `backlog`
+---时并发峰值会无限制新建连接，8 个 worker 很容易越过 PG 的 `max_connections`，
+---报 `too many clients already`。给 `backlog` 一个默认值后 `pool_size` 才真正成为
+---「每 worker 并发连接数上限」，超出的请求排队而不是压垮 PG。
+---配比建议：`pool_size × worker 数 ≤ max_connections × 0.8`，见 docs/orm-index.md。
+---`BACKLOG = false` / `PG_BACKLOG=off` 回到「不排队、无上限」的老行为。
+---@param options QueryOpts
+---@param env table
+---@param pool_size number
+---@return number? backlog nil 表示不启用排队
+local function resolve_backlog(options, env, pool_size)
+  if options.BACKLOG == false or env.PG_BACKLOG == "off" then
+    return nil
+  end
+  return options.BACKLOG or tonumber(env.PG_BACKLOG) or pool_size
+end
+
 ---@param options QueryOpts
 ---@return ConnOpts
 local function get_connect_table(options)
@@ -158,14 +207,14 @@ local function get_connect_table(options)
     pool_size = options.POOL_SIZE or tonumber(env.PG_POOL_SIZE) or 100,
     connect_timeout = connect_timeout,
     query_timeout = query_timeout,
-    statement_timeout = options.STATEMENT_TIMEOUT or tonumber(env.PG_STATEMENT_TIMEOUT),
+    statement_timeout = resolve_statement_timeout(options, env, query_timeout),
     max_idle_timeout = options.MAX_IDLE_TIMEOUT or tonumber(env.PG_MAX_IDLE_TIMEOUT) or 10000,
     socket_type = options.SOCKET_TYPE,
     application_name = options.APPLICATION_NAME,
     bigint_as_string = coalesce(options.BIGINT_AS_STRING, get_env_flag(env, "PG_BIGINT_AS_STRING")),
     convert_null = coalesce(options.CONVERT_NULL, get_env_flag(env, "PG_CONVERT_NULL")),
-    backlog = options.BACKLOG,
   }
+  res.backlog = resolve_backlog(options, env, res.pool_size)
   if not res.pool_name then
     res.pool_name = tostring(res.host) ..
         ":" .. tostring(res.port) ..
@@ -331,6 +380,52 @@ end
 --   return self:query("RELEASE SAVEPOINT " .. name)
 -- end
 
+-- 执行阶段守卫（S3/D9）：cosocket（`ngx.socket.tcp`）只在下面这些阶段可用。
+-- 其它阶段发查询，错误会从 pgmoon 深处以 `API disabled in the context of ...` 的形式抛出，
+-- 栈顶指向 pgmoon 内部，完全看不出是「在错误的阶段查库」。最常见的触发路径不是有人
+-- 手写查询，而是 content 阶段取出的记录带着外键惰性代理，到了 log_by_lua 做审计序列化时
+-- 才第一次访问 `record.fk.xxx`，那一下才真正发 SQL（见 ForeignkeyField:load 与 Model.LAZY_FK）。
+local COSOCKET_PHASES = {
+  rewrite = true,
+  access = true,
+  content = true,
+  timer = true,
+  preread = true,
+  ssl_cert = true,
+  ssl_session_fetch = true,
+  ssl_client_hello = true,
+}
+
+---@param connect_table ConnOpts
+---@return fun(): nil
+local function make_phase_guard(connect_table)
+  local socket_type = connect_table.socket_type
+  return function()
+    if not ngx or not ngx.get_phase then
+      -- 纯 LuaJIT / 单元测试：没有阶段这回事
+      return
+    end
+    if socket_type and socket_type ~= "nginx" then
+      -- 显式走 luasocket / cqueues，不受 cosocket 的阶段限制
+      return
+    end
+    local phase = ngx.get_phase()
+    if COSOCKET_PHASES[phase] then
+      return
+    end
+    if phase == "init" then
+      -- pgmoon 的 socket.new 在 init 阶段自己回落到 luasocket（迁移脚本的常见写法）
+      return
+    end
+    error(string_format(
+      "[model.query] refuse to run SQL in the '%s' phase: cosocket API is disabled there. " ..
+      "Allowed phases: rewrite/access/content/timer/preread/ssl_*. " ..
+      "If this came from a foreign key attribute access (lazy load), fetch it in the " ..
+      "request phase with select_related(), or set Model.LAZY_FK = false to surface it earlier.",
+      phase), 0)
+  end
+end
+
 ---@param options QueryOpts
 ---@param connect_table ConnOpts
 local function create_query(options, connect_table)
@@ -339,6 +434,7 @@ local function create_query(options, connect_table)
   local statement_timeout = connect_table.statement_timeout
   local bigint_as_string = connect_table.bigint_as_string
   local debug_func = options.DEBUG or print
+  local check_phase = make_phase_guard(connect_table)
   -- local max_idle_timeout = connect_table.max_idle_timeout
   -- local pool_size = connect_table.pool_size
 
@@ -431,6 +527,7 @@ local function create_query(options, connect_table)
     -- https://github.com/xiangnanscu/pgmoon/blob/master/pgmoon/init.lua#L545
     -- nil,  err_msg, result, num_queries, notifications, notices
     -- result, num_queries, notifications, notices
+    check_phase()
     local conn, is_transaction = get_conn()
     if is_transaction then
       -- 事务连接的生命周期由 transaction() 负责，出错直接上抛
@@ -452,6 +549,7 @@ local function create_query(options, connect_table)
   -- return nil,err——那样会丢失 512 分类、traceback 与 ErrorLog 日志，使 atomic=true
   -- 悄悄改变错误码。成功时才返回 callback 的多值结果。
   local function transaction(callback)
+    check_phase()
     local key = txn_key()
     if txn_conns[key] then
       -- 嵌套 atomic 是调用方 bug，抛错让上层记 ErrorLog（500），别静默返回
@@ -520,17 +618,57 @@ end
 -- 注意：同 pool_name 下 pool_size/timeout/DEBUG 等以首个实例为准，
 -- 与 pgmoon 连接池按 pool_name 复用 socket 的语义一致。
 local query_cache = {}
+-- 缓存命中时用来比对「这次传进来的配置和当初建池时的一样吗」。只列真正会改变连接行为的键：
+-- DEBUG（函数）、pool_name（就是缓存键本身）不在内。
+local POOL_SENSITIVE_KEYS = {
+  'host', 'port', 'database', 'user', 'password',
+  'connect_timeout', 'query_timeout', 'statement_timeout', 'max_idle_timeout',
+  'pool_size', 'backlog',
+  'ssl', 'ssl_verify', 'ssl_required',
+  'socket_type', 'application_name', 'bigint_as_string', 'convert_null',
+}
+-- 每个 (pool_name, key) 只提醒一次，避免热路径刷屏
+local warned_pool_conflict = {}
+local query_configs = {}
+
+---缓存命中但配置不同：静默沿用旧配置是 D10 点名的坑——
+---「脚本里把 QUERY_TIMEOUT 调到 10 分钟却没生效」，因为 web 侧的同名池先建好了。
+---行为不变（仍以首个实例为准，事务共享连接依赖这点），但必须留下痕迹。
+---@param pool_name string
+---@param cached ConnOpts
+---@param incoming ConnOpts
+local function warn_pool_conflict(pool_name, cached, incoming)
+  for _, key in ipairs(POOL_SENSITIVE_KEYS) do
+    if cached[key] ~= incoming[key] then
+      local warn_key = pool_name .. "|" .. key
+      if not warned_pool_conflict[warn_key] then
+        warned_pool_conflict[warn_key] = true
+        -- 口令不进日志
+        local old_value = key == 'password' and '***' or tostring(cached[key])
+        local new_value = key == 'password' and '***' or tostring(incoming[key])
+        log_warn(string_format(
+          "[model.query] Query{POOL_NAME=%q} 已被构造过，%s 以首次构造的值为准：" ..
+          "沿用 %s，忽略本次传入的 %s。需要不同配置请换一个 POOL_NAME，" ..
+          "详见 docs/orm-index.md「数据库连接与超时」",
+          pool_name, key, old_value, new_value))
+      end
+    end
+  end
+end
 
 ---@param options? QueryOpts
 local function Query(options)
   options = options or {}
   local connect_table = get_connect_table(options)
-  local cached = query_cache[connect_table.pool_name]
+  local pool_name = connect_table.pool_name
+  local cached = query_cache[pool_name]
   if cached then
+    warn_pool_conflict(pool_name, query_configs[pool_name], connect_table)
     return cached
   end
   local q = create_query(options, connect_table)
-  query_cache[connect_table.pool_name] = q
+  query_cache[pool_name] = q
+  query_configs[pool_name] = connect_table
   return q
 end
 
