@@ -905,6 +905,32 @@ local function main()
       end
       assert.are.same('bigint', column_types()['review_f9_order.qty'], 'F9: ALTER 后 qty 应是 bigint')
     end)
+
+    -------------------------------------------------------------------
+    it("F3 两参/三参形式的 Model.NULL 必须生成 IS [NOT] NULL（与 table 形式一致）", function()
+      -- 种子里 rating 为 NULL 的恰好 1 行，非 NULL 的 2 行
+      local null_rows = ReviewEntry:where { rating = NULL }:count()
+      local not_null_rows = ReviewEntry:where { rating__ne = NULL }:count()
+      assert.are.same(1, null_rows, 'F3: 种子前提（table 形式）')
+      assert.are.same(2, not_null_rows, 'F3: 种子前提（table 形式）')
+
+      assert.are.same(null_rows, ReviewEntry:where('rating', NULL):count(),
+        "F3: where('rating', NULL) 应与 table 形式一样生成 IS NULL，而不是恒假的 = NULL")
+      assert.are.same(null_rows, ReviewEntry:where('rating', '=', NULL):count(),
+        "F3: where('rating', '=', NULL) 应生成 IS NULL")
+      assert.are.same(not_null_rows, ReviewEntry:where('rating', '<>', NULL):count(),
+        "F3: where('rating', '<>', NULL) 应生成 IS NOT NULL")
+      assert.are.same(not_null_rows, ReviewEntry:where('rating', '!=', NULL):count(),
+        "F3: where('rating', '!=', NULL) 应生成 IS NOT NULL")
+      assert.are.same(not_null_rows, ReviewEntry:exclude('rating', NULL):count(),
+        "F3: exclude('rating', NULL) 应是 NOT (rating IS NULL)")
+      assert.are.same(null_rows, ReviewEntry:count('rating', NULL), "F3: count 两参同样适用")
+      assert.is_truthy(ReviewEntry:delete('rating', NULL):statement():find('T.rating IS NULL', 1, true),
+        "F3: delete('rating', NULL) 应只删 rating 为 NULL 的行")
+      -- 显式写 IS 的本来就对，不受影响；非 NULL 值照旧
+      assert.are.same(null_rows, ReviewEntry:where('rating', 'IS', NULL):count(), "F3: IS NULL 照常工作")
+      assert.are.same(1, ReviewEntry:where('rating', 5):count(), 'F3: 两参普通值照常工作')
+    end)
   end)
 end
 

@@ -260,9 +260,16 @@ Blog:where("name", "My Blog"):exec()
 > 例如 `Blog:delete('ok', nil)` 以前会生成 `DELETE ... WHERE ok`（删掉所有 ok 为真的行），
 > 现在直接报错。
 >
-> ⚠️ **两参/三参形式不认 `Model.NULL`**：`where('rating', Model.NULL)` 与
-> `where('rating', '=', Model.NULL)` 生成的是恒假的 `rating = NULL`（SQL 三值逻辑，
-> 结果永远空集且不报错）。只有 table 形式会被翻译成 `IS NULL`，见下面的「NULL 条件」。
+> 值写 `Model.NULL` 时与 table 形式一样翻译成 `IS NULL`（不是恒假的 `= NULL`）：
+>
+> ```lua
+> Entry:where('rating', Model.NULL)          -- WHERE T.rating IS NULL
+> Entry:where('rating', '=', Model.NULL)     -- WHERE T.rating IS NULL
+> Entry:where('rating', '<>', Model.NULL)    -- WHERE T.rating IS NOT NULL（'!=' 同）
+> ```
+>
+> 三参形式只翻译 `=` / `<>` / `!=`；`IS` / `IS NOT` 原样生成（本来就对），
+> `>` / `<` 这类与 NULL 比较本身没有意义，也原样生成。
 
 #### 情形 5: 三参数 (字段名 + 运算符 + 值)
 

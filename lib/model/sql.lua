@@ -1369,7 +1369,8 @@ function Sql:_get_condition_token(cond, op, dval)
     if field and field.type == 'float' then
       op = float_column_value(op) -- F6，见 float_lookup_value
     end
-    return format("%s = %s", column, as_literal(op))
+    -- 与 table 形式走同一个 eq：值为 Model.NULL 时生成 IS NULL 而不是恒假的 `= NULL`（F3）
+    return EXPR_OPERATORS.eq(column, op)
   else
     -- 3-arg form: where('col', op, value). Same reason as above for 'select'.
     ---@cast cond string
@@ -1378,6 +1379,15 @@ function Sql:_get_condition_token(cond, op, dval)
     local column, _, field = self:_parse_column(cond, "select")
     if field and field.type == 'float' then
       dval = float_column_value(dval) -- F6，见 float_lookup_value
+    end
+    if dval == NULL then
+      -- `= NULL` / `<> NULL` 恒为 unknown（空集、0 行、不报错），按意图转成 IS [NOT] NULL，
+      -- 与 table 形式一致（F3）。`IS` / `IS NOT` 本来就对；`> NULL` 之类本身没有意义，照常生成
+      if op == '=' then
+        return EXPR_OPERATORS.eq(column, dval)
+      elseif op == '<>' or op == '!=' then
+        return EXPR_OPERATORS.ne(column, dval)
+      end
     end
     return format("%s %s %s", column, op, as_literal(dval))
   end
