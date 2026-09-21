@@ -730,6 +730,42 @@ local function main()
 
       assert(ReviewFloat.query("DROP TABLE review_float"))
     end)
+
+    -------------------------------------------------------------------
+    it("F7 非整数的数字字面量必须能逐位往返（不能走 %.14g）", function()
+      -- 最短往返：能用 15 位表示的保持原样，不够的再加位数
+      assert.are.same(Model.as_literal(0.1), '0.1', 'F7: 0.1 应保持 0.1')
+      assert.are.same(Model.as_literal(3.14), '3.14', 'F7: 3.14 应保持 3.14')
+      assert.are.same(Model.as_literal(0.1 + 0.2), '0.30000000000000004',
+        'F7: 0.1 + 0.2 不能被渲染成 0.3')
+      assert.are.same(Model.as_literal(1 / 3), '0.3333333333333333',
+        'F7: 1/3 不能只剩 14 位有效数字')
+      assert.are.same(Model.as_literal(1e15 + 0.5), '1000000000000000.5',
+        'F7: 1e15 + 0.5 的 .5 不能丢')
+
+      -- 写进 float 列再按同一个值查，必须能查到自己（独立表，用例结束时删掉）
+      local ReviewFloat7 = Model:create_model {
+        table_name = 'review_float_f7',
+        db_config = db_config,
+        fields = {
+          { 'name',  maxlength = 20, unique = true },
+          { 'score', type = 'float' },
+        }
+      }
+      assert(ReviewFloat7.query("DROP TABLE IF EXISTS review_float_f7"))
+      assert(ReviewFloat7.query(migrate.get_table_defination(ReviewFloat7)))
+      local values = { 0.1 + 0.2, 1 / 3, 1e15 + 0.5, 2 / 3 * 1e-10 }
+      for i, v in ipairs(values) do
+        ReviewFloat7:create { name = 'f7-' .. i, score = v }
+      end
+      for i, v in ipairs(values) do
+        local rows = ReviewFloat7:where { score = v }:exec()
+        assert.are.same(1, #rows, string.format('F7: WHERE score = %.17g 应查到刚写进去的那一行', v))
+        assert.are.same('f7-' .. i, rows[1].name, 'F7: 查到的应是同一行')
+        assert.is_true(rows[1].score == v, string.format('F7: 读回值应与写入值逐位相同: %.17g', v))
+      end
+      assert(ReviewFloat7.query("DROP TABLE review_float_f7"))
+    end)
   end)
 end
 

@@ -516,8 +516,10 @@ local function number_literal(value)
   elseif value == math.huge or value == -math.huge then
     error("inf is not a valid SQL number literal")
   elseif value % 1 ~= 0 then
-    -- 非整数：`%.14g` 就是它本来的表示形态，PG 侧按 numeric/float 解析
-    return tostring(value)
+    -- 非整数也不能走 tostring：`%.14g` 只有 14 位有效数字，`0.1 + 0.2` 变成 `0.3`、
+    -- `1/3` 只剩 14 位、`1e15 + 0.5` 连 .5 都丢了，写进 float8 的不是调用方给的那个值，
+    -- `WHERE score = x` 也匹配不到自己刚写进去的行（F7，B3 的浮点那一半）
+    return float_literal(value)
   elseif value >= -MAX_SAFE_INTEGER and value <= MAX_SAFE_INTEGER then
     return format("%d", value)
   elseif value >= INT64_BOUND or value < -INT64_BOUND then
