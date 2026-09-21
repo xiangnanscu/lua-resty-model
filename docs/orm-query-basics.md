@@ -822,9 +822,16 @@ Blog:delete():exec()
 -- DELETE FROM blog T
 ```
 
-> ⚠️ 条件可选的场景要小心 `Blog:delete(cond)` 里 `cond` 为 `nil` 的情况：那等价于
-> `delete()`，也就是**删全表**。条件来自请求参数时请自己先判断，或者显式写成
-> `Blog:delete():where(cond)`——那条路径漏了 `where` 会被防呆拦下。
+> 「删全表」只认**不传参数**的 `delete()`。传了参数但条件是 `nil`（典型是
+> `Blog:delete(params.filter)` 里变量没取到值）会直接报错
+> `delete(nil): condition is nil ...`，不会再等同于 `delete()` 把整张表删光：
+>
+> ```lua
+> Blog:delete(params.filter)   -- filter 为 nil：报错
+> Blog:delete()                -- 显式删全表
+> ```
+>
+> 条件可选时请在调用前自己判断。
 
 ---
 

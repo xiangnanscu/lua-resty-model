@@ -931,6 +931,30 @@ local function main()
       assert.are.same(null_rows, ReviewEntry:where('rating', 'IS', NULL):count(), "F3: IS NULL 照常工作")
       assert.are.same(1, ReviewEntry:where('rating', 5):count(), 'F3: 两参普通值照常工作')
     end)
+
+    -------------------------------------------------------------------
+    it("F11 delete(cond) 的 cond 为 nil 时必须报错（不能等同于 delete() 删全表）", function()
+      -- 只拼 SQL 不执行：万一守卫失效，也不会真的把种子数据删掉
+      local params = {}
+      local cases = {
+        literal = function() return ReviewBlog:delete(nil):statement() end,
+        variable = function() return ReviewBlog:delete(params.filter):statement() end,
+        chained = function() return ReviewBlog:where { name = 'review-blog-1' }:delete(nil):statement() end,
+      }
+      for name, fn in pairs(cases) do
+        local ok, res = pcall(fn)
+        assert.is_false(ok, 'F11: ' .. name .. ' 应报错而不是生成删全表的 SQL; got=' .. tostring(res))
+        assert.is_truthy(tostring(res):find('delete() with no arguments', 1, true),
+          'F11: 报错应指出删全表的正确写法; err=' .. tostring(res))
+      end
+      -- 显式的删全表写法与带条件的写法不受影响
+      assert.are.same('DELETE FROM review_blog AS T', ReviewBlog:delete():statement(),
+        'F11: delete() 不传参数仍是删全表')
+      assert.is_truthy(ReviewBlog:delete { name = 'x' }:statement():find("WHERE T.name = 'x'", 1, true),
+        'F11: delete{...} 照常工作')
+      assert.is_truthy(ReviewBlog:delete():where { name = 'x' }:statement():find("WHERE T.name = 'x'", 1, true),
+        'F11: delete():where{...} 照常工作')
+    end)
   end)
 end
 

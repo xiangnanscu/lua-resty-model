@@ -2065,16 +2065,23 @@ end
 ---@return self
 function Sql:delete(...)
   self._delete = true
+  local argc = select('#', ...)
   local cond, op, dval = ...
   if cond ~= nil then
     -- 必须原样转发 `...`：写成 where(cond, op, dval) 会把 delete('ok', nil) 补成三个实参，
     -- 绕过 nil 守卫生成 `DELETE ... WHERE ok`，删掉所有 ok 为真的行（F8）
-    check_condition_args('delete', select('#', ...), cond, op, dval)
+    check_condition_args('delete', argc, cond, op, dval)
     self:where(...)
-  else
-    -- 不带条件调用 `delete()` 是显式的「删全表」写法（Django 的 `.all().delete()` 同义），
+  elseif argc == 0 then
+    -- 不带参数调用 `delete()` 是显式的「删全表」写法（Django 的 `.all().delete()` 同义），
     -- 与「写了条件却没生效」不同，不必再要求 allow_full_table()
     self._allow_full_table = true
+  else
+    -- 传了参数但条件是 nil：多半是 `delete(params.filter)` 里的变量没取到值。
+    -- 以前这里与 delete() 同义，整张表被静默删光（F11）
+    error("delete(nil): condition is nil. " ..
+      "To delete every row call delete() with no arguments; " ..
+      "if the condition is optional, check it before calling delete")
   end
   return self
 end
