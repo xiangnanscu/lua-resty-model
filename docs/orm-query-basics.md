@@ -718,8 +718,10 @@ Blog:insert({ name = 'Blog 1', tagline = 'hi' }, {'name'}):exec()
 
 更新操作，通常配合 `where` 使用。默认会进行校验。
 
-> `row` **只接受 table**。裸 SQL 片段（`Blog:update("tagline = 'x'")`）是内部通道，
-> 公开方法不提供。
+> `row` **只接受 `{列 = 值}` 的 table**。裸 SQL 片段（`Blog:update("tagline = 'x'")`）
+> 是内部通道，公开方法不提供，传入时报
+> `update() expects a table of column = value, got string`；列运算请用 F 表达式
+> （见下例）。传 Sql 子查询同样报错，按子查询批量更新请用 `updates(subquery, key)`。
 
 > ⚠️ **不带 WHERE 的 UPDATE / DELETE 会在执行时被拒绝**：
 >

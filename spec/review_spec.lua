@@ -815,6 +815,36 @@ local function main()
       assert.are.same(ReviewBlog:delete():statement(), 'DELETE FROM review_blog AS T',
         'F8: delete() 不传条件仍是删全表的显式写法')
     end)
+
+    -------------------------------------------------------------------
+    it("F10 update() 传非 table 时必须报指明方法的错误（不能是 pairs 的原始报错）", function()
+      local bad = {
+        string = "tagline = 'x'",
+        ['function'] = function() return "tagline = 'x'" end,
+        number = 1,
+      }
+      for kind, row in pairs(bad) do
+        local ok, err = pcall(function()
+          return ReviewBlog:update(row):where { name = 'review-blog-1' }:statement()
+        end)
+        assert.is_false(ok, 'F10: update(' .. kind .. ') 应报错')
+        assert.is_truthy(tostring(err):find('update() expects a table', 1, true),
+          'F10: 报错应指明是 update() 只收 table; err=' .. tostring(err))
+        assert.is_falsy(tostring(err):find("bad argument #1 to 'pairs'", 1, true),
+          'F10: 不应再是 pairs 的原始报错; err=' .. tostring(err))
+      end
+      -- Sql builder 是 table，此前会静默生成 `SET  WHERE ...`
+      local ok_b, err_b = pcall(function()
+        return ReviewBlog:update(ReviewBlog:where { name = 'review-blog-2' }:select('tagline'))
+            :where { name = 'review-blog-1' }:statement()
+      end)
+      assert.is_false(ok_b, 'F10: update(Sql) 应报错而不是生成空 SET; got=' .. tostring(err_b))
+      assert.is_truthy(tostring(err_b):find('updates(', 1, true),
+        'F10: 报错应指向 updates(subquery, key); err=' .. tostring(err_b))
+      -- 正常的 table 写法不受影响
+      local stmt = ReviewBlog:update { tagline = 'x' }:where { name = 'review-blog-1' }:statement()
+      assert.is_truthy(stmt:find("SET tagline = 'x'", 1, true), 'F10: table 写法应照常工作; sql=' .. stmt)
+    end)
   end)
 end
 

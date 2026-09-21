@@ -2714,12 +2714,25 @@ function Sql:align(rows, key, columns)
   return self
 end
 
----只接受 table：实现直接 `pairs(row)`，传字符串会报 `bad argument #1 to 'pairs'`。
----`_base_update` 支持字符串，但那是内部的裸 SQL 通道，公开方法不提供（B15）
+---只接受 `{列 = 值}` 的 table。`_base_update` 支持字符串，但那是内部的裸 SQL 通道，
+---公开方法不提供（B15）
 ---@param row Record
 ---@param columns? string[]
 ---@return self
 function Sql:update(row, columns)
+  -- 注解收窄只对编辑器有效，运行时也要拦：否则传字符串报的是 LuaJIT 的
+  -- `bad argument #1 to 'pairs'`，看不出是这个方法不收；传 Sql builder 则静默
+  -- 生成 `SET  WHERE ...`，到 PG 才报语法错误（F10）
+  if type(row) ~= 'table' then
+    error(format(
+      "update() expects a table of column = value, got %s. " ..
+      "Raw SET fragments are not accepted; " ..
+      "use F expressions for column arithmetic, e.g. update { n = F('n') + 1 }",
+      type(row)))
+  elseif row.__SQL_BUILDER__ then
+    error("update() does not accept a Sql builder; " ..
+      "to update rows from a subquery use updates(subquery, key)")
+  end
   if not columns then
     columns = self.model.names -- get_keys(row, { self.model.auto_now_name })
   end
