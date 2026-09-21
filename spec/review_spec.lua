@@ -955,6 +955,45 @@ local function main()
       assert.is_truthy(ReviewBlog:delete():where { name = 'x' }:statement():find("WHERE T.name = 'x'", 1, true),
         'F11: delete():where{...} 照常工作')
     end)
+
+    -------------------------------------------------------------------
+    it("F12 无参 delete() 链上的条件全空时，执行期防呆必须拦下（不能当成显式删全表）", function()
+      -- 用一张不存在的表：防呆放行时 exec 只会报 relation does not exist，不会删到任何数据
+      local Ghost = Model:create_model {
+        table_name = 'review_f12_ghost',
+        db_config = db_config,
+        fields = { { 'name', maxlength = 20 } },
+      }
+      local filter = ({}).filter or {} -- 请求里没带 filter 的典型写法
+      local refused = {
+        ['delete():where(filter)'] = function() return Ghost:delete():where(filter) end,
+        ['where(filter):delete()'] = function() return Ghost:where(filter):delete() end,
+        ['delete():where(Q{})'] = function() return Ghost:delete():where(Model.Q {}) end,
+        ['delete():exclude{}'] = function() return Ghost:delete():exclude {} end,
+      }
+      for name, build in pairs(refused) do
+        local q = build()
+        local ok, err = pcall(q.exec, q)
+        assert.is_false(ok, 'F12: ' .. name .. ' 应被防呆拦下')
+        assert.is_truthy(tostring(err):find('refuse to run DELETE without WHERE on table review_f12_ghost', 1, true),
+          'F12: ' .. name .. ' 应由全表写防呆报错，而不是走到数据库; err=' .. tostring(err))
+      end
+      -- 显式删全表、带有效条件、显式 allow_full_table() 的写法照常放行（走到数据库才因表不存在报错）
+      local allowed = {
+        ['delete()'] = function() return Ghost:delete() end,
+        ['delete():where{name}'] = function() return Ghost:delete():where { name = 'x' } end,
+        ['delete():where{}:allow_full_table()'] = function() return Ghost:delete():where {}:allow_full_table() end,
+      }
+      for name, build in pairs(allowed) do
+        local q = build()
+        local ok, err = pcall(q.exec, q)
+        assert.is_false(ok, 'F12: ' .. name .. ' 对不存在的表执行应报数据库错误')
+        assert.is_falsy(tostring(err):find('refuse to run', 1, true),
+          'F12: ' .. name .. ' 不应被防呆拦下; err=' .. tostring(err))
+        assert.is_truthy(tostring(err):find('review_f12_ghost', 1, true),
+          'F12: ' .. name .. ' 应是表不存在的数据库错误; err=' .. tostring(err))
+      end
+    end)
   end)
 end
 

@@ -1290,6 +1290,9 @@ end
 ---@return self
 function Sql:_handle_where_token(where_token, tpl)
   if where_token == "" then
+    -- 写了条件但条件全空（where{}、Q{}、exclude{}）：记下来，
+    -- 执行期防呆据此不把无参 delete() 当成显式删全表（F12）
+    self._empty_where = true
     return self
   elseif self._where == nil then
     self._where = where_token
@@ -1832,10 +1835,17 @@ end
 ---（`upsert(BlogBin:update{...}:returning{...})`）也由外层语句负责，都不该被拦。
 ---@private
 function Sql:_check_full_table_write()
-  if (self._delete or self._update) and not self._where and not self._allow_full_table then
-    error(format("refuse to run %s without WHERE on table %s: call :allow_full_table() if intended",
-      self._delete and "DELETE" or "UPDATE", self.table_name))
+  if not (self._delete or self._update) or self._where or self._allow_full_table then
+    return
   end
+  -- 无参 delete() 是显式的删全表写法，但只在整条链上没写过条件时成立：
+  -- `delete():where(filter)` / `where(filter):delete()` 里 filter 为空，是「写了条件却没生效」（F12）
+  if self._delete_all and not self._empty_where then
+    return
+  end
+  error(format("refuse to run %s without WHERE on table %s%s: call :allow_full_table() if intended",
+    self._delete and "DELETE" or "UPDATE", self.table_name,
+    self._empty_where and " (every condition passed to where/exclude was empty)" or ""))
 end
 
 ---@return string
@@ -2074,8 +2084,9 @@ function Sql:delete(...)
     self:where(...)
   elseif argc == 0 then
     -- 不带参数调用 `delete()` 是显式的「删全表」写法（Django 的 `.all().delete()` 同义），
-    -- 与「写了条件却没生效」不同，不必再要求 allow_full_table()
-    self._allow_full_table = true
+    -- 与「写了条件却没生效」不同，不必再要求 allow_full_table()。
+    -- 这里只做标记、不置 _allow_full_table：链上前后的 where 条件若全空，执行期仍要拦下（F12）
+    self._delete_all = true
   else
     -- 传了参数但条件是 nil：多半是 `delete(params.filter)` 里的变量没取到值。
     -- 以前这里与 delete() 同义，整张表被静默删光（F11）

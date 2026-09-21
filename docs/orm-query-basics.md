@@ -748,8 +748,10 @@ Blog:insert({ name = 'Blog 1', tagline = 'hi' }, {'name'}):exec()
 >   `statement()` 只是拼字符串，写操作被当成子查询 / CTE 内嵌进外层语句
 >   （`Blog:upsert(BlogBin:update{...}:returning{...})`）时由外层语句负责，都不会被拦。
 > - **`delete()` 不传条件本身就是「删全表」的显式写法**（对齐 Django 的 `.all().delete()`），
->   不需要再调 `allow_full_table()`。被拦的是「写了 `delete()` 却忘了 `where`」之外的
->   `update(row)` 漏条件，以及 `delete(cond)` 的条件解析后为空的情况。
+>   不需要再调 `allow_full_table()`——前提是整条链上**没写过任何条件**。被拦的是
+>   `update(row)` 漏条件、`delete(cond)` 的条件解析后为空，以及链上写了 `where` /
+>   `exclude` 但条件全空的情况（`delete():where(filter)`、`where(filter):delete()`，
+>   `filter` 为 `{}` 或 `Q {}`）。
 
 ```lua
 -- 基本更新
@@ -832,6 +834,16 @@ Blog:delete():exec()
 > ```
 >
 > 条件可选时请在调用前自己判断。
+>
+> 同理，无参 `delete()` 链上前后的 `where` / `exclude` 条件全空时，执行期同样拒绝，
+> 不会把它当成显式删全表：
+>
+> ```lua
+> local filter = params.filter or {}
+> Blog:delete():where(filter):exec()   -- filter 为空：refuse to run DELETE without WHERE ...
+> Blog:where(filter):delete():exec()   -- 同上
+> Blog:delete():where(filter):allow_full_table():exec()  -- 确实要删全表时显式声明
+> ```
 
 ---
 
