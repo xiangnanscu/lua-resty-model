@@ -153,10 +153,13 @@ Order:create { order_no = 1234567890123456789 }     -- ✗ 词法阶段已经失
 `PG_BIGINT_AS_STRING=true`）控制：打开后 int8 列按原始十进制字符串返回，不经 `tonumber`。
 默认关——它会把 `rec.id` 从 number 变成 string，是行为变化，必须由业务自己选。
 
-> ⚠️ `resty.migrate` 的建表语句按 `type` 而不是 `db_type` 映射，`type = 'integer'`
-> 一律生成 `integer` 列（模板项目的 `xodel.migrate` 同样如此）。`bigint = true` 目前只保证
-> ORM 这一侧（校验 / 字面量 / 读回）的精度，列本身请用迁移脚本或手写 DDL 建成 `bigint`。
-> 两份 migrate 的修复补丁见 `docs/orm-review.md` 的 F9。
+建表：`resty.migrate`（以及模板项目的 `xodel.migrate`）把 `bigint = true` 的字段建成
+`bigint` 列，`serial = true` 的 bigint 主键建成 `BIGSERIAL`，指向它的外键列也跟着是
+`bigint`；给既有字段加上或去掉 `bigint = true` 时产出 `ALTER COLUMN ... TYPE`。
+
+> ⚠️ 这需要**含 F9 补丁**的 migrate（见 `docs/orm-review.md` 的 F9）。OPM 上的
+> lua-resty-migrate 2.0 原版按 `type` 映射，`type = 'integer'` 一律建成 `integer` 列，
+> 写入超出 int4 的值报 `integer out of range`。用原版时请用迁移脚本或手写 DDL 建成 `bigint`。
 
 ##### 数字字面量
 

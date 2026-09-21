@@ -7722,9 +7722,9 @@ CREATE TABLE probe4_t(
 
 - 影响面：只影响「用 `resty.migrate` 建表」的场景。对着已有 schema（外部迁移 / 手写 DDL 建成 bigint）使用时，校验、字面量、读回三段都正常。
 - 建议改法（需要动 `resty.migrate`）：`integer` 类的 `get_create_type` 改成读 `self.field.db_type`，回落到 `"integer"`。
-- 处置：发现时按 CLAUDE.md 跳过；2026-09-21 用户要求修复。**补丁已写好并实测通过，但没有应用、也没有提交**，原因见下。
-- 状态：⏸ 补丁就绪，待在 `lib/` 之外应用（2026-09-21，提交信息含 `F9`，本次提交只含本节文档）
-- 为什么不能在本仓库里修：
+- 处置：发现时按 CLAUDE.md 跳过；2026-09-21 用户要求修复，先备好补丁并实测（提交 `571227d`，只含本节文档）；同日用户确认后应用到 `lib/` 之外的两处。
+- 状态：✅ 已应用（2026-09-21，提交信息含 `F9`）。**lua-resty-migrate 上游尚未更新**，见下「应用记录」。
+- 为什么补丁不在本仓库里（备补丁时的判断，仍然成立）：
   - 根因在 migrate 的 `integer` 类型映射，`lib/` 里没有能接管建表语句的钩子。`resty.migrate` 按 `field.type` 选类，`integer` 类的 `get_create_type` 返回类属性 `type_string = "integer"`，全程不读字段对象上的任何属性。唯一的例外 `field.serial` 也只会返回 `SERIAL`。
   - `resty.migrate` 是独立的包（`xiangnanscu/lua-resty-migrate`，装在 `/usr/local/openresty/site/lualib/resty/`），不在本仓库，也不在 `dist.ini` 的 `requires` 里。CLAUDE.md 规定只改 `lib/` 与 `spec/`。直接改系统目录里的文件不受版本控制，下次 `opm get` 就被覆盖。
   - **也不能在 `lib/` 里放一个 `lib/resty/migrate.lua` 遮住它**：`dist.ini` 的 `lib_dir = lib` 会把它一起发布到 OPM，和真正的 lua-resty-migrate 抢同一个模块路径。
@@ -7738,7 +7738,16 @@ CREATE TABLE probe4_t(
 - 验证（都在 scratchpad 里用补丁副本加 `-I` 优先加载，**未改动原文件**）：
   - `resty.migrate`：同一个探针分别在原版与补丁版下运行，结果见下；补丁版下跑本仓库全量用例 `286 ok / 0 not ok`。
   - `xodel.migrate`：同样的探针，建表得到 `BIGSERIAL` / `bigint` / 外键列 `bigint`，`compare_models` 在 `qty` 加上 `bigint = true` 后产出 `ALTER TABLE probe_f9x_order ALTER COLUMN qty TYPE bigint`，无变化时产出 0 条。
-- 应用后的收尾：`docs/orm-model-definition.md` 里「`resty.migrate` 一律生成 `integer` 列」那条警告改成「需要 lua-resty-migrate ≥ 含此补丁的版本」，再把本节状态改为 ✅。
+- 应用记录（2026-09-21）：
+  - 应用前确认两个目标文件与做补丁时的原版逐字节相同，原文件备份在 scratchpad 的 `backup/` 下；用 `patch` 应用，应用后与实测过的补丁版逐字节相同。
+  - `/usr/local/openresty/site/lualib/resty/migrate.lua`：**本机已安装的副本**，不在任何 git 仓库里。重新 `opm get xiangnanscu/lua-resty-migrate` 会被 OPM 上的 2.0 原版覆盖（`~/.opm/cache` 里的也是原版）。要长期生效，需要把同一份补丁提交到 lua-resty-migrate 仓库并 `opm upload` 新版本。
+  - `~/create/template/lualib/xodel/migrate.lua`：已改工作区，**未在模板仓库提交**，留给使用方审阅后提交。该仓库另有一处与本次无关的未提交改动 `scripts/db-fetch.sh`，没有碰。
+  - 应用后不加 `-I` 覆盖、直接用已安装的版本重跑两个探针，结果与上面的「补丁版」输出一致。
+- 本仓库的改动（本次提交）：
+  - `spec/review_spec.lua` 新增 F9 用例：用独立表 `review_f9_order` / `review_f9_line` 经 `resty.migrate` 建表，从 `information_schema` 断言 `order_no`、BIGSERIAL 主键、外键列都是 `bigint`，普通 integer 字段不受影响；写入 `'1234567890123456789'` 后按 `::text` 读回原值；`compare_models` 在只切换 `bigint` 时恰好产出一条 `ALTER COLUMN qty TYPE bigint`，执行后列变成 `bigint`。清理放在 `finally` 里，断言失败也会删表（原版 migrate 下实测红跑后库里无残留）。
+  - **这条用例依赖含补丁的 lua-resty-migrate**：用例上方有注释说明。在原版 2.0 下它是红的（已用原版副本 `-I` 优先加载实测：`not ok 287`），这正是它该给的信号——那种环境下 `bigint = true` 建出来的列是错的。
+  - `docs/orm-model-definition.md`：bigint 一节改为说明 migrate 已支持，并注明需要含补丁的版本。
+- 验收结果：**全量 `287 ok / 0 not ok`，无 skip / pending（TAP 计数 `1..287`）**。
 
 `resty.migrate` 补丁（相对 lua-resty-migrate 2.0）：
 
@@ -7876,9 +7885,9 @@ LUA_PATH='/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;;' LUA_CPATH='/
   -I spec bin/ngx_busted.lua -o TAP
 ```
 
-结果：`286 ok / 0 not ok`，TAP 计数 `1..286`（完整输出与下面 `yarn test` 的逐行相同，只有时间戳与 WARN 用例的池名随机后缀不同，不重复贴）。
+结果：`286 ok / 0 not ok`，TAP 计数 `1..286`（备补丁时的验证：当时还没有 F9 用例，TAP 行与当时原版 migrate 下的 `yarn test` 逐行相同。应用补丁并新增 F9 用例后的完整输出见本节末尾）。
 
-本仓库测试命令：
+本仓库测试命令（应用补丁后）：
 
 ```sh
 yarn test
@@ -7890,10 +7899,10 @@ yarn test
 yarn run v1.22.22
 $ LUA_PATH='/usr/share/lua/5.1/?.lua;/usr/share/lua/5.1/?/init.lua;;' LUA_CPATH='/usr/lib/x86_64-linux-gnu/lua/5.1/?.so;;' yarn resty -I spec bin/ngx_busted.lua -o TAP
 $ resty -I lib --main-conf 'env NODE_ENV;' --http-conf 'lua_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;' -I spec bin/ngx_busted.lua -o TAP
-2026/09/21 11:56:24 [warn] 6728#0: *2 [lua] _G write guard:12: writing a global Lua variable ('lfs') which may lead to race conditions between concurrent requests, so prefer the use of 'local' variables
+2026/09/21 15:01:59 [warn] 28955#0: *2 [lua] _G write guard:12: writing a global Lua variable ('lfs') which may lead to race conditions between concurrent requests, so prefer the use of 'local' variables
 stack traceback:
-	[C]: at 0x7fc116ab96d0
-	[C]: at 0x7fc116a56fa0
+	[C]: at 0x7f29591e76d0
+	[C]: at 0x7f2959184fa0
 	[C]: in function 'pcall'
 	/usr/share/lua/5.1/pl/path.lua:24: in main chunk
 	[C]: in function 'require'
@@ -8182,8 +8191,8 @@ ok 276 - REVIEW T0: orm-review.md 已确认 bug 回归 B16 where('col', nil) 必
 ok 277 - REVIEW: 疑似问题与设计建议回归 S2/T13 新建连接必须强制 standard_conforming_strings = on
 ok 278 - REVIEW: 疑似问题与设计建议回归 D8/T15 终结方法必须在副本上执行（复用 builder 不串条件）
 ok 279 - REVIEW: 疑似问题与设计建议回归 S3/T14 非 cosocket 阶段发查询必须报含 phase 的明确错误
-2026/09/21 11:56:27 [warn] 6728#0: *2 [lua] query.lua:100: log_warn(): [model.query] Query{POOL_NAME="review_pool_warn_1789962987651"} 已被构造过，query_timeout 以首次构造的值为准：沿用 8000，忽略本次传入的 600000。需要不同配置请换一个 POOL_NAME，详见 docs/orm-index.md「数据库连接与超时」, context: ngx.timer
-2026/09/21 11:56:27 [warn] 6728#0: *2 [lua] query.lua:100: log_warn(): [model.query] Query{POOL_NAME="review_pool_warn_1789962987651"} 已被构造过，statement_timeout 以首次构造的值为准：沿用 6000，忽略本次传入的 598000。需要不同配置请换一个 POOL_NAME，详见 docs/orm-index.md「数据库连接与超时」, context: ngx.timer
+2026/09/21 15:02:03 [warn] 28955#0: *2 [lua] query.lua:100: log_warn(): [model.query] Query{POOL_NAME="review_pool_warn_1789974123131"} 已被构造过，query_timeout 以首次构造的值为准：沿用 8000，忽略本次传入的 600000。需要不同配置请换一个 POOL_NAME，详见 docs/orm-index.md「数据库连接与超时」, context: ngx.timer
+2026/09/21 15:02:03 [warn] 28955#0: *2 [lua] query.lua:100: log_warn(): [model.query] Query{POOL_NAME="review_pool_warn_1789974123131"} 已被构造过，statement_timeout 以首次构造的值为准：沿用 6000，忽略本次传入的 598000。需要不同配置请换一个 POOL_NAME，详见 docs/orm-index.md「数据库连接与超时」, context: ngx.timer
 ok 280 - REVIEW: 疑似问题与设计建议回归 S4/T14 Query() 缓存命中且配置不同时必须记 WARN
 ok 281 - REVIEW: 疑似问题与设计建议回归 S4/T14 STATEMENT_TIMEOUT 默认比 QUERY_TIMEOUT 早 2 秒，且不会派生出非正值
 ok 282 - REVIEW: 疑似问题与设计建议回归 D9/T14 Model.LAZY_FK = false 时外键属性访问必须报错而不是偷偷发查询
@@ -8191,8 +8200,9 @@ ok 283 - REVIEW: 执行中发现（F 系列）回归 F6 大浮点数不能被当
 ok 284 - REVIEW: 执行中发现（F 系列）回归 F7 非整数的数字字面量必须能逐位往返（不能走 %.14g）
 ok 285 - REVIEW: 执行中发现（F 系列）回归 F8 where 同族入口与转发方法的 nil 值都必须报错（含三参形式）
 ok 286 - REVIEW: 执行中发现（F 系列）回归 F10 update() 传非 table 时必须报指明方法的错误（不能是 pairs 的原始报错）
-1..286
-Done in 3.86s.
+ok 287 - REVIEW: 执行中发现（F 系列）回归 F9 bigint = true 必须建成 bigint 列（含 BIGSERIAL 主键与指向它的外键列）
+1..287
+Done in 3.89s.
 ```
 
 ### F10 [低] B15 的「修复」只改了类型注解，运行时错误信息仍然是 LuaJIT 的原始报错

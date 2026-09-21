@@ -845,6 +845,66 @@ local function main()
       local stmt = ReviewBlog:update { tagline = 'x' }:where { name = 'review-blog-1' }:statement()
       assert.is_truthy(stmt:find("SET tagline = 'x'", 1, true), 'F10: table 写法应照常工作; sql=' .. stmt)
     end)
+
+    -------------------------------------------------------------------
+    -- 依赖 lua-resty-migrate 含 F9 补丁（2.0 原版的 integer 类型写死，这条用例会红）
+    it("F9 bigint = true 必须建成 bigint 列（含 BIGSERIAL 主键与指向它的外键列）", function()
+      local function make_order(qty_bigint)
+        return Model:create_model {
+          table_name = 'review_f9_order',
+          db_config = db_config,
+          auto_primary_key = false,
+          fields = {
+            { 'id',       type = 'integer', bigint = true, serial = true, primary_key = true },
+            { 'order_no', type = 'integer', bigint = true },
+            { 'qty',      type = 'integer', bigint = qty_bigint or nil },
+          }
+        }
+      end
+      local Order = make_order(false)
+      local Line = Model:create_model {
+        table_name = 'review_f9_line',
+        db_config = db_config,
+        fields = { { 'order_id', reference = Order } },
+      }
+      local drop_sql = "DROP TABLE IF EXISTS review_f9_line; DROP TABLE IF EXISTS review_f9_order"
+      assert(Order.query(drop_sql))
+      -- 断言失败也要删表：独立表不能留在库里
+      finally(function() Order.query(drop_sql) end)
+      assert(Order.query(migrate.get_table_defination(Order)))
+      assert(Order.query(migrate.get_table_defination(Line)))
+
+      local function column_types()
+        local rows = assert(Order.query([[SELECT table_name || '.' || column_name AS col, data_type
+          FROM information_schema.columns WHERE table_name IN ('review_f9_order', 'review_f9_line')]]))
+        local res = {}
+        for _, r in ipairs(rows) do
+          res[r.col] = r.data_type
+        end
+        return res
+      end
+      local types = column_types()
+      assert.are.same('bigint', types['review_f9_order.order_no'], 'F9: bigint = true 应建成 bigint 列')
+      assert.are.same('bigint', types['review_f9_order.id'], 'F9: bigint 的 serial 主键应建成 BIGSERIAL')
+      assert.are.same('bigint', types['review_f9_line.order_id'], 'F9: 指向 bigint 主键的外键列应是 bigint')
+      assert.are.same('integer', types['review_f9_order.qty'], 'F9: 普通 integer 字段不受影响')
+
+      -- 超出 int4 的值能写进去，并按原样读回（用 ::text 避开 double）
+      local ok_c, err_c = pcall(Order.create, Order, { order_no = '1234567890123456789', qty = 1 })
+      assert.is_true(ok_c, 'F9: 超出 int4 的值应能写入 bigint 列; err=' .. tostring(err_c))
+      local back = assert(Order.query("SELECT order_no::text AS v FROM review_f9_order"))
+      assert.are.same('1234567890123456789', first_field(back, 'v'), 'F9: 读回应是原值')
+
+      -- 既有 integer 列加上 bigint = true：migrate 应产出 ALTER COLUMN ... TYPE bigint
+      local tokens = migrate.compare_models(migrate.make_model_for_compare(make_order(false)),
+        migrate.make_model_for_compare(make_order(true)))
+      assert.are.same({ 'ALTER TABLE review_f9_order ALTER COLUMN qty TYPE bigint' }, tokens,
+        'F9: 只切换 bigint 时应产出一条 ALTER')
+      for _, t in ipairs(tokens) do
+        assert(Order.query(t))
+      end
+      assert.are.same('bigint', column_types()['review_f9_order.qty'], 'F9: ALTER 后 qty 应是 bigint')
+    end)
   end)
 end
 
