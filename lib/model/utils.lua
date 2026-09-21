@@ -476,12 +476,32 @@ end
 -- double 能精确表示的整数上界。超过它，`123456789012345678` 这类 19 位雪花 ID
 -- 在 Lua 的词法阶段就已经变成 123456789012345680，任何渲染都取不回原值
 local MAX_SAFE_INTEGER = 2 ^ 53
+-- int8 的取值范围是 [-2^63, 2^63)。量级落在它外面的整数值，任何整数列都装不下，
+-- 只可能是写给 float/numeric 列的浮点数（1e20、1e300），按浮点渲染（F6）
+local INT64_BOUND = 2 ^ 63
 
 local has_ffi, ffi = pcall(require, "ffi")
 local int64_t, uint64_t
 if has_ffi then
   int64_t = ffi.typeof("int64_t")
   uint64_t = ffi.typeof("uint64_t")
+end
+
+---浮点数的最短往返渲染：依次试 15、16、17 位有效数字，取第一个 tonumber 回来与原值
+---逐位相同的写法。17 位是 IEEE 754 双精度的往返保证位数，所以最后一档一定成立；
+---先试 15 位是为了让 `0.1` 这种值保持 `0.1`，而不是 `0.10000000000000001`
+---@param value number
+---@return string
+local function float_literal(value)
+  local s = format("%.15g", value)
+  if tonumber(s) == value then
+    return s
+  end
+  s = format("%.16g", value)
+  if tonumber(s) == value then
+    return s
+  end
+  return (format("%.17g", value))
 end
 
 ---把 Lua number 渲染成 SQL 数字字面量。
@@ -500,14 +520,39 @@ local function number_literal(value)
     return tostring(value)
   elseif value >= -MAX_SAFE_INTEGER and value <= MAX_SAFE_INTEGER then
     return format("%d", value)
+  elseif value >= INT64_BOUND or value < -INT64_BOUND then
+    -- 小数部分为 0 不代表它是整数：|v| >= 2^52 的 double 全都没有小数部分。
+    -- 超出 int8 的量级只可能是浮点（F6），修复 B3 之前这里渲染成 `1e+20`，PG 照常解析
+    return float_literal(value)
   else
-    -- 到这里 value 已经不是调用方写下的那个整数了。与其静默写入一个被舍入过的值，
-    -- 不如报错，让调用方改用 int64 cdata（`123456789012345678LL`）或十进制字符串
+    -- 落在 (2^53, 2^63) 里：这正是雪花 ID / bigint 的量级，value 多半已经不是调用方
+    -- 写下的那个整数了。字面量层拿不到列类型，与其静默写入一个被舍入过的值，不如报错。
+    -- 模型上声明的 float 列，写入由 FloatField:prepare_for_db、条件由 _get_expr_token
+    -- 先转成浮点 token（float_column_value），不会走到这里
     error(format(
       "integer %s exceeds 2^53 and has already lost precision as a Lua number; " ..
-      "pass it as an int64 cdata (123LL) or a decimal string instead",
-      format("%.0f", value)))
+      "pass it as an int64 cdata (123LL) or a decimal string instead. " ..
+      "Float columns declared on the model are handled automatically; for a float " ..
+      "going anywhere else (raw SQL, numeric column), pass it as a string ('%s')",
+      format("%.0f", value), float_literal(value)))
   end
+end
+
+---写给 float 列的值：(2^53, 2^63) 里的 double 没有小数部分，number_literal 会把它当成
+---丢了精度的 bigint 拒掉。调用方已知目标列是 float 时用它先转成浮点 token（F6），
+---其余值原样返回
+---@param value any
+---@return any
+local function float_column_value(value)
+  if type(value) == 'number' and value % 1 == 0
+      and (value > MAX_SAFE_INTEGER or value < -MAX_SAFE_INTEGER)
+      and value < INT64_BOUND and value >= -INT64_BOUND then
+    local token = float_literal(value)
+    return function()
+      return token
+    end
+  end
+  return value
 end
 
 ---int64/uint64 cdata：tostring 会带上 `LL`/`ULL` 后缀，SQL 里要去掉
@@ -808,6 +853,7 @@ return {
   extract_column_name = extract_column_name,
   extract_column_names = extract_column_names,
   as_literal = as_literal,
+  float_column_value = float_column_value,
   as_token = as_token,
   as_literal_without_brackets = as_literal_without_brackets,
   escape_like_value = escape_like_value,

@@ -163,6 +163,29 @@ Order:create { order_no = 1234567890123456789 }     -- ✗ 词法阶段已经失
 起的整数变成 `1e+14` 这种科学计数法，拼进 WHERE 就是匹配错行）。
 `nan` / `inf` 不是合法的 SQL 数字字面量，会在拼 SQL 前直接报错。
 
+没有小数部分的 number 按量级分三档（`|v| >= 2^52` 的 double 全都没有小数部分，
+所以「是不是整数」不能只看小数部分）：
+
+| 量级                  | 渲染                               | 说明                                                        |
+| --------------------- | ---------------------------------- | ----------------------------------------------------------- |
+| `\|v\| <= 2^53`         | `%d` 精确整数                      | double 能精确表示的整数                                     |
+| `2^53 < \|v\| < 2^63`   | **报错**                           | 雪花 ID / bigint 的量级，值多半已经失真，见上一节            |
+| `\|v\| >= 2^63`         | 浮点字面量（`1e+20`、`-1e+300`）   | 超出 int8，任何整数列都装不下，只可能是写给浮点列的值        |
+
+中间那一档对**模型上声明的 `float` 字段**不报错：写入（`create` / `insert` /
+`update` / `updates` / `merge` / `upsert`）和条件（`where{score=...}`、`score__gt`、
+`score__in`、`score__range`、`where('score', v)`、`where('score', '>', v)`，
+包括经外键的 `blog_id__score`）都已知列类型，按浮点渲染：
+
+```lua
+Product:create { name = 'x', score = 1.5e17 }     -- ✓ score 是 float 字段
+Product:where { score__gt = 1e17 }:exec()        -- ✓ WHERE T.score > 1e+17
+Product:where { n = 1.5e17 }:exec()              -- ✗ n 是 integer 字段，报错（B3）
+Product.query("SELECT " .. Model.as_literal(1.5e17))  -- ✗ 不知道列类型，报错
+```
+
+最后两种情况若确实是浮点值，写成字符串（`'1.5e+17'`）交给 PG 按目标类型解析。
+
 #### float
 
 ```lua

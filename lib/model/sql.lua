@@ -32,6 +32,7 @@ local get_keys = Utils.get_keys
 local get_foreign_object = Utils.get_foreign_object
 local extract_column_names = Utils.extract_column_names
 local as_literal = Utils.as_literal
+local float_column_value = Utils.float_column_value
 local as_token = Utils.as_token
 local get_list_tokens = Utils.get_list_tokens
 local assemble_sql = Utils.assemble_sql
@@ -1331,13 +1332,21 @@ function Sql:_get_condition_token(cond, op, dval)
     -- non-where context to suppress _parse_column's `__op` operator detection;
     -- 'select' is used because it lives in NON_OPERATOR_CONTEXTS.
     ---@cast cond string
-    return format("%s = %s", self:_parse_column(cond, "select"), as_literal(op))
+    local column, _, field = self:_parse_column(cond, "select")
+    if field and field.type == 'float' then
+      op = float_column_value(op) -- F6，见 float_lookup_value
+    end
+    return format("%s = %s", column, as_literal(op))
   else
     -- 3-arg form: where('col', op, value). Same reason as above for 'select'.
     ---@cast cond string
     ---@cast op string
     assert(PG_OPERATORS[op:upper()], "invalid PostgreSQL operator: " .. op)
-    return format("%s %s %s", self:_parse_column(cond, "select"), op, as_literal(dval))
+    local column, _, field = self:_parse_column(cond, "select")
+    if field and field.type == 'float' then
+      dval = float_column_value(dval) -- F6，见 float_lookup_value
+    end
+    return format("%s %s %s", column, op, as_literal(dval))
   end
 end
 
@@ -1511,15 +1520,40 @@ local F_ALLOWED_OPS = {
   gte = true,
 }
 
+-- float 列上值为数字（或数字列表）的 lookup：(2^53, 2^63) 里的 double 在字面量层会被
+-- 当成丢了精度的 bigint 拒掉，列类型已知是 float 时先转成浮点 token（F6）
+local FLOAT_SCALAR_OPS = { eq = true, ne = true, lt = true, lte = true, gt = true, gte = true }
+local FLOAT_LIST_OPS = { ['in'] = true, notin = true, range = true }
+
+---@param value DBValue
+---@param op string
+---@return DBValue
+local function float_lookup_value(value, op)
+  if FLOAT_SCALAR_OPS[op] then
+    return float_column_value(value)
+  elseif FLOAT_LIST_OPS[op] and type(value) == 'table' and not value.__SQL_BUILDER__ then
+    local res = {}
+    for i, v in ipairs(value) do
+      res[i] = float_column_value(v)
+    end
+    return res
+  end
+  return value
+end
+
 ---@private
 ---@param value DBValue
 ---@param key string
 ---@param op? string
+---@param field? AnyField 被比较列的字段（_parse_column 的第三个返回值）
 ---@return string
-function Sql:_get_expr_token(value, key, op)
+function Sql:_get_expr_token(value, key, op, field)
   -- https://docs.djangoproject.com/en/5.1/ref/models/querysets/#field-lookups
   local is_f = type(value) == 'table' and value.__IS_FIELD_BUILDER__
   value = self:_resolve_F(value)
+  if field and field.type == 'float' and not is_f then
+    value = float_lookup_value(value, op)
+  end
   local handler = EXPR_OPERATORS[op]
   if not handler then
     error("invalid sql op: " .. tostring(op))

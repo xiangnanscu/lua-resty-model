@@ -23,16 +23,20 @@ local M = {}
 ---@param context? ColumnContext
 ---@return string resolved_column
 ---@return string operator
+---@return AnyField? field 被比较的那一列的字段；json 路径、annotate 等不是实体列时为 nil
 function M.parse_column(sql, key, context)
   local model = sql.model
   local fast_field = model.fields[key]
   if fast_field then
     local prefix = sql._as or model._table_name_token
-    return prefix .. '.' .. (fast_field._column_token or smart_quote(key)), 'eq'
+    return prefix .. '.' .. (fast_field._column_token or smart_quote(key)), 'eq', fast_field
   end
   local i = 1
   local op = 'eq'
   local a, b, token, join_key, prefix, column, final_column, last_field, last_token, last_model, json_keys
+  -- 最终被比较的那一列对应的字段（F6：float 列的比较值要按浮点渲染）。
+  -- 只在「解析到本模型/关联模型的实体列」时记录，json 路径、annotate、反向外键一律清空
+  local resolved_field
   while true do
     a, b = key:find("__", i, true)
     if not a then
@@ -119,6 +123,7 @@ function M.parse_column(sql, key, context)
           token, last_token, last_model.class_name))
       end
       last_model = model
+      resolved_field = json_keys == nil and field or nil
       if field.reference then
         model = field.reference
       end
@@ -133,6 +138,7 @@ function M.parse_column(sql, key, context)
       -- trailing operator (cnt__gte=1). Traversal *into* the annotation makes
       -- no sense and used to be silently dropped (BUG B2), reject it here.
       final_column = sql._annotate[token]
+      resolved_field = nil
       if a then
         local rest = key:sub(b + 1)
         if EXPR_OPERATORS[rest] then
@@ -157,6 +163,7 @@ function M.parse_column(sql, key, context)
         break
       else
         json_keys[#json_keys + 1] = token
+        resolved_field = nil
       end
     else
       -- Blog:where{entry__rating=1}
@@ -222,6 +229,7 @@ function M.parse_column(sql, key, context)
         end
         column = reversed_model.primary_key
         field = reversed_field
+        resolved_field = nil
         last_model = model
         model = reversed_model
       elseif last_token then
@@ -283,7 +291,7 @@ function M.parse_column(sql, key, context)
       op = JSON_OP_MAP[op]
     end
   end
-  return final_column or (prefix .. '.' .. smart_quote(column)), op
+  return final_column or (prefix .. '.' .. smart_quote(column)), op, resolved_field
 end
 
 ---@param sql Sql

@@ -10,6 +10,7 @@ local list = Utils.list
 local map = Utils.map
 local split = Utils.split_string
 local utf8len = Utils.utf8len
+local float_column_value = Utils.float_column_value
 
 local string_format = string.format
 local table_concat = table.concat
@@ -1092,12 +1093,15 @@ function FloatField:get_validators(validators)
 end
 
 ---@param value ""|nil|number
----@return number|userdata
+---@return number|userdata|fun():string
 function FloatField:prepare_for_db(value)
   if value == "" or value == nil then
     return NULL
   else
-    return value --[[@as number]]
+    -- (2^53, 2^63) 里的 double 会被 as_literal 当成丢了精度的 bigint 拒掉（B3），
+    -- 这里已知目标是 float 列，转成浮点 token（F6）。prepared 只用于拼 SQL，
+    -- 回填给调用方的是 RETURNING 的值，调用方看不到这个 token
+    return float_column_value(value)
   end
 end
 

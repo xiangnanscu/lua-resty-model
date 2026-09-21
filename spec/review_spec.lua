@@ -666,6 +666,71 @@ local function main()
       assert.are.same(name2, 'review-blog-2', 'T14: select_related 的值应正确')
     end)
   end)
+
+  describe("REVIEW: 执行中发现（F 系列）回归", function()
+    before_each(function()
+      seed_data()
+    end)
+
+    -------------------------------------------------------------------
+    it("F6 大浮点数不能被当成丢了精度的整数拒掉（float 列回归）", function()
+      -- 超出 int8 的量级只可能是浮点：按浮点渲染，PG 照常解析（修复 B3 前就是这样）
+      assert.are.same(Model.as_literal(1e20), '1e+20', 'F6: 1e20 应渲染成浮点字面量')
+      assert.are.same(Model.as_literal(-1e300), '-1e+300', 'F6: -1e300 应渲染成浮点字面量')
+      assert.are.same(Model.as_literal(2 ^ 63), '9.223372036854776e+18',
+        'F6: 2^63 已超出 int8，应按浮点最短往返渲染')
+      -- (2^53, 2^63) 是 bigint 的量级：不知道列类型时仍然报错，B3 的保证不能丢
+      local ok_band, err_band = pcall(Model.as_literal, 1.5e17)
+      assert.is_false(ok_band, 'F6: 不知道列类型时 (2^53, 2^63) 的整数值仍应报错')
+      assert.is_truthy(tostring(err_band):find("'1.5e+17'", 1, true),
+        'F6: 报错信息应给出浮点的字符串写法; err=' .. tostring(err_band))
+
+      -- 模型上声明的 float 列：写入与条件都按浮点处理（独立表，用例结束时删掉）
+      local ReviewFloat = Model:create_model {
+        table_name = 'review_float',
+        db_config = db_config,
+        fields = {
+          { 'name',  maxlength = 20, unique = true },
+          { 'score', type = 'float' },
+          { 'n',     type = 'integer' },
+        }
+      }
+      assert(ReviewFloat.query("DROP TABLE IF EXISTS review_float"))
+      assert(ReviewFloat.query(migrate.get_table_defination(ReviewFloat)))
+
+      local ok_c, rec = pcall(ReviewFloat.create, ReviewFloat, { name = 'f6-a', score = 1.5e17 })
+      assert.is_true(ok_c, 'F6: float 列写入 1.5e17 不应报错; err=' .. tostring(rec))
+      assert.are.same(field_of(rec, 'score'), 1.5e17, 'F6: 读回值应与写入值逐位相同')
+      local ok_i, err_i = pcall(function()
+        return ReviewFloat:insert { { name = 'f6-b', score = 1e20 }, { name = 'f6-c', score = -2e17 } }:exec()
+      end)
+      assert.is_true(ok_i, 'F6: insert 路径同样不应报错; err=' .. tostring(err_i))
+      local ok_u, err_u = pcall(function()
+        return ReviewFloat:update { score = 3e17 }:where { name = 'f6-c' }:exec()
+      end)
+      assert.is_true(ok_u, 'F6: update 路径同样不应报错; err=' .. tostring(err_u))
+
+      local ok_w, cnt = pcall(function()
+        return {
+          eq = ReviewFloat:where { score = 1.5e17 }:count(),
+          gt = ReviewFloat:where { score__gt = 2e17 }:count(),
+          ['in'] = ReviewFloat:where { score__in = { 1.5e17, 3e17 } }:count(),
+          range = ReviewFloat:where { score__range = { 1e17, 1e18 } }:count(),
+          two = ReviewFloat:where('score', 1e20):count(),
+          three = ReviewFloat:where('score', '<', 2e17):count(),
+        }
+      end)
+      assert.is_true(ok_w, 'F6: float 列上的条件不应报错; err=' .. tostring(cnt))
+      assert.are.same({ eq = 1, gt = 2, ['in'] = 2, range = 2, two = 1, three = 1 }, cnt,
+        'F6: 各种条件写法都应按浮点比较')
+
+      -- 整数列上的同一个值仍然报错：这正是 B3 要拦的雪花 ID 场景
+      local ok_n = pcall(function() return ReviewFloat:where { n = 1.5e17 }:statement() end)
+      assert.is_false(ok_n, 'F6: integer 列上的 1.5e17 仍应报错（B3）')
+
+      assert(ReviewFloat.query("DROP TABLE review_float"))
+    end)
+  end)
 end
 
 ---------------------------------------------------------------------
