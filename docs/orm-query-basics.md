@@ -255,6 +255,11 @@ Blog:where("name", "My Blog"):exec()
 > if name ~= nil then q = q:where('name', name) end
 > ```
 >
+> 这条检查对所有条件入口一致生效：`where` / `where_or` / `or_where` / `or_where_or` /
+> `exclude`，以及把条件转给 `where` 的 `delete` / `count` / `get` / `try_get`。
+> 例如 `Blog:delete('ok', nil)` 以前会生成 `DELETE ... WHERE ok`（删掉所有 ok 为真的行），
+> 现在直接报错。
+>
 > ⚠️ **两参/三参形式不认 `Model.NULL`**：`where('rating', Model.NULL)` 与
 > `where('rating', '=', Model.NULL)` 生成的是恒假的 `rating = NULL`（SQL 三值逻辑，
 > 结果永远空集且不报错）。只有 table 形式会被翻译成 `IS NULL`，见下面的「NULL 条件」。
@@ -268,9 +273,10 @@ Entry:where("rating", ">", 3):exec()
 Entry:where("headline", "LIKE", '%lua%'):exec()
 -- WHERE T.headline LIKE '%lua%'
 
--- ⚠️ 第三个参数为 nil 时会退化成两参形式，把运算符当成值：
--- Entry:where("rating", ">", nil)  -->  WHERE T.rating = '>'  （静默错误）
--- 条件可选时请在外面判断，不要把 nil 传进来
+-- 第三个参数为 nil 会直接报错（以前会退化成两参形式、把运算符当成值：
+-- WHERE T.rating = '>'）。要判空请用 where { rating = Model.NULL } /
+-- where { rating__isnull = true }；条件可选时请在外面判断
+Entry:where("rating", ">", nil)   -- error: where('rating', '>', nil): value is nil ...
 
 -- 字段名同样支持双下划线跨表语法 (与 table 形式一致)
 ViewLog:where('entry_id__blog_id', 1):exec()

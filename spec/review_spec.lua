@@ -766,6 +766,55 @@ local function main()
       end
       assert(ReviewFloat7.query("DROP TABLE review_float_f7"))
     end)
+
+    -------------------------------------------------------------------
+    it("F8 where 同族入口与转发方法的 nil 值都必须报错（含三参形式）", function()
+      -- 两参 nil：B16 只修了 where，同族入口与转发方法此前生成 `WHERE name`
+      local two_arg = {
+        where_or = function() return ReviewBlog:where_or('name', nil):statement() end,
+        or_where = function() return ReviewBlog:or_where('name', nil):statement() end,
+        or_where_or = function() return ReviewBlog:or_where_or('name', nil):statement() end,
+        exclude = function() return ReviewBlog:exclude('name', nil):statement() end,
+        delete = function() return ReviewBlog:delete('name', nil):statement() end,
+        count = function() return ReviewBlog:count('name', nil) end,
+        get = function() return ReviewBlog:get('name', nil) end,
+        try_get = function() return ReviewBlog:try_get('name', nil) end,
+      }
+      for name, fn in pairs(two_arg) do
+        local ok, res = pcall(fn)
+        assert.is_false(ok, string.format("F8: %s('name', nil) 应报错; got=%s", name, tostring(res)))
+        assert.is_truthy(tostring(res):find('value is nil', 1, true),
+          string.format('F8: %s 的报错应说明值为 nil; err=%s', name, tostring(res)))
+      end
+
+      -- 三参 nil：此前滑进两参分支，把运算符当成值（WHERE T.rating = '>'）
+      local three_arg = {
+        where = function() return ReviewEntry:where('rating', '>', nil):statement() end,
+        where_eq = function() return ReviewEntry:where('rating', '=', nil):statement() end,
+        or_where = function() return ReviewEntry:or_where('rating', '<', nil):statement() end,
+        delete = function() return ReviewEntry:delete('rating', '>=', nil):statement() end,
+        count = function() return ReviewEntry:count('rating', '<>', nil) end,
+      }
+      for name, fn in pairs(three_arg) do
+        local ok, res = pcall(fn)
+        assert.is_false(ok, string.format("F8: %s 三参值为 nil 应报错; got=%s", name, tostring(res)))
+        assert.is_truthy(tostring(res):find('value is nil', 1, true),
+          string.format('F8: %s 的报错应说明值为 nil; err=%s', name, tostring(res)))
+      end
+
+      -- 合法写法不受影响（一参裸 SQL、两参、三参、不传条件）
+      assert.are.same(ReviewEntry:where('rating', '>', 4):count(), 1, 'F8: 三参正常值应照常工作')
+      assert.are.same(ReviewEntry:count('rating', 5), 1, 'F8: count 两参正常值应照常工作')
+      assert.are.same(ReviewEntry:count('rating > 3'), 2, 'F8: count 一参裸 SQL 应照常工作')
+      assert.are.same(field_of(ReviewBlog:get('name', 'review-blog-2'), 'name'), 'review-blog-2',
+        'F8: get 两参正常值应照常工作')
+      assert.is_truthy(ReviewEntry:delete('rating', '>', 4):statement():find('T.rating > 4', 1, true),
+        'F8: delete 三参正常值应照常工作')
+      assert.is_truthy(ReviewBlog:where('name', 'x', nil):statement():find("T.name = 'x'", 1, true),
+        'F8: 第二参不是运算符时，定长转发的两参调用仍按两参处理')
+      assert.are.same(ReviewBlog:delete():statement(), 'DELETE FROM review_blog AS T',
+        'F8: delete() 不传条件仍是删全表的显式写法')
+    end)
   end)
 end
 

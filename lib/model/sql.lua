@@ -1315,6 +1315,39 @@ function Sql:_get_condition_token_from_table(kwargs, logic)
   end
 end
 
+---条件类入口共用的 nil 值守卫（B16 / F8）。
+---参数个数必须用 select('#') 数：声明成具名形参的话，`where('ok', nil)` 与 `where("ok")`
+---在函数体里长得一模一样，前者会被当成一参裸 SQL 而生成 `WHERE ok`——varchar 列 PG 报
+---类型错误（还能发现），boolean 列则静默变成「筛选该列为真的行」，语义被悄悄改掉。
+---所以所有条件入口都以 `...` 接参，转发给它们的 delete/count/get 也原样转发 `...`，
+---实参个数才不会在中途被补成 3 个。
+---@param method string 报错里显示的方法名
+---@param argc integer 调用方实际传入的参数个数
+---@param cond any
+---@param op any
+---@param dval any
+local function check_condition_args(method, argc, cond, op, dval)
+  if type(cond) ~= 'string' then
+    return
+  end
+  if argc == 2 and op == nil then
+    error(format(
+      "%s('%s', nil): value is nil. " ..
+      "Use where { %s = Model.NULL } (IS NULL) or where { %s__isnull = true }; " ..
+      "if a raw SQL fragment was intended, pass it as the only argument",
+      method, cond, cond, cond))
+  elseif argc >= 3 and dval == nil and type(op) == 'string' and PG_OPERATORS[op:upper()] then
+    -- 三参形式的值为 nil 会滑进两参分支、把运算符当成值：where('n', '>', nil) 生成
+    -- `WHERE T.n = '>'`，比 B16 更隐蔽。第二参不是运算符时仍按两参处理，
+    -- 兼容 `function(c, o, v) return M:where(c, o, v) end` 这类定长转发的两参调用
+    error(format(
+      "%s('%s', '%s', nil): value is nil. " ..
+      "Use where { %s = Model.NULL } or where { %s__isnull = true } for IS NULL, " ..
+      "where { %s__isnull = false } for IS NOT NULL",
+      method, cond, op, cond, cond, cond))
+  end
+end
+
 ---@private
 ---@param cond table|string|fun(ctx:table):string
 ---@param op? DBValue
@@ -2020,10 +2053,14 @@ end
 ---@param op? string
 ---@param dval? DBValue
 ---@return self
-function Sql:delete(cond, op, dval)
+function Sql:delete(...)
   self._delete = true
+  local cond, op, dval = ...
   if cond ~= nil then
-    self:where(cond, op, dval)
+    -- 必须原样转发 `...`：写成 where(cond, op, dval) 会把 delete('ok', nil) 补成三个实参，
+    -- 绕过 nil 守卫生成 `DELETE ... WHERE ok`，删掉所有 ok 为真的行（F8）
+    check_condition_args('delete', select('#', ...), cond, op, dval)
+    self:where(...)
   else
     -- 不带条件调用 `delete()` 是显式的「删全表」写法（Django 的 `.all().delete()` 同义），
     -- 与「写了条件却没生效」不同，不必再要求 allow_full_table()
@@ -2284,7 +2321,9 @@ end
 ---@param op? string
 ---@param dval? DBValue
 ---@return self
-function Sql:exclude(cond, op, dval)
+function Sql:exclude(...)
+  local cond, op, dval = ...
+  check_condition_args('exclude', select('#', ...), cond, op, dval)
   local where_token
   if type(cond) == 'table' then
     if not cond.__IS_LOGICAL_BUILDER__ then
@@ -2307,19 +2346,8 @@ end
 ---@param dval? DBValue
 ---@return self
 function Sql:where(...)
-  -- 参数个数必须用 select('#') 数：声明成具名形参的话，`where('name', nil)` 与
-  -- `where("name = 'x'")` 在函数体里长得一模一样，前者会被当成一参裸 SQL 而生成
-  -- `WHERE name`——varchar 列 PG 报类型错误（还能发现），boolean 列则静默变成
-  -- 「筛选该列为真的行」，语义被悄悄改掉（B16）
-  local argc = select('#', ...)
   local cond, op, dval = ...
-  if argc == 2 and op == nil and type(cond) == 'string' then
-    error(format(
-      "where('%s', nil): value is nil. " ..
-      "Use where { %s = Model.NULL } (IS NULL) or where { %s__isnull = true }; " ..
-      "if a raw SQL fragment was intended, pass it as the only argument",
-      cond, cond, cond))
-  end
+  check_condition_args('where', select('#', ...), cond, op, dval) -- B16 / F8
   if type(cond) == 'table' then
     if not cond.__IS_LOGICAL_BUILDER__ then
       local where_token = Sql._get_condition_token_from_table(self, cond)
@@ -2339,7 +2367,9 @@ end
 ---@param op? string
 ---@param dval? DBValue
 ---@return self
-function Sql:where_or(cond, op, dval)
+function Sql:where_or(...)
+  local cond, op, dval = ...
+  check_condition_args('where_or', select('#', ...), cond, op, dval) -- F8
   local where_token = self:_get_condition_token_or(cond, op, dval)
   return self:_handle_where_token(where_token, "(%s) AND (%s)")
 end
@@ -2348,7 +2378,9 @@ end
 ---@param op? string
 ---@param dval? DBValue
 ---@return self
-function Sql:or_where_or(cond, op, dval)
+function Sql:or_where_or(...)
+  local cond, op, dval = ...
+  check_condition_args('or_where_or', select('#', ...), cond, op, dval) -- F8
   local where_token = self:_get_condition_token_or(cond, op, dval)
   return self:_handle_where_token(where_token, "%s OR %s")
 end
@@ -2357,7 +2389,9 @@ end
 ---@param op? string
 ---@param dval? DBValue
 ---@return self
-function Sql:or_where(cond, op, dval)
+function Sql:or_where(...)
+  local cond, op, dval = ...
+  check_condition_args('or_where', select('#', ...), cond, op, dval) -- F8
   local where_token = self:_get_condition_token(cond, op, dval)
   return self:_handle_where_token(where_token, "%s OR %s")
 end
@@ -2915,15 +2949,17 @@ end
 ---@param op? string
 ---@param dval? DBValue
 ---@return integer
-function Sql:count(cond, op, dval)
+function Sql:count(...)
   -- 终结方法一律在副本上跑（D8）。这类方法会改写 _select/_order/_limit/_where，
   -- 直接改 self 会把「builder 本身」当成一次性对象：
   --   local q = Blog:where{...}; q:count(); q:exec()  -- 第二行把 _select 改成 count(*)，
   -- 第三行拿回的是 count 行而不是记录。模块级复用一个 builder 时更隐蔽：条件会跨请求累积。
   -- copy() 是浅拷贝（十几个键），相对一次数据库往返可以忽略。
   self = self:copy()
+  local cond, op, dval = ...
   if cond ~= nil then
-    self:where(cond, op, dval)
+    check_condition_args('count', select('#', ...), cond, op, dval) -- F8，见 delete()
+    self:where(...)
   end
   local res
   if self._group or self._having or self._distinct or self._distinct_on or self._limit or self._offset then
@@ -3126,22 +3162,24 @@ end
 ---@param op? string
 ---@param dval? DBValue
 ---@return Record|false
-function Sql:try_get(cond, op, dval)
-  return self:get(cond, op, dval)
+function Sql:try_get(...)
+  return self:get(...)
 end
 
 ---@param cond? table|string|fun(ctx:table):string
 ---@param op? string
 ---@param dval? DBValue
 ---@return Record|false
-function Sql:get(cond, op, dval)
+function Sql:get(...)
   self = self:copy() -- 终结方法在副本上执行（D8），见 count()
+  local cond, op, dval = ...
   local records
   if cond ~= nil then
     if type(cond) == 'table' and next(cond) == nil then
       error("empty condition table is not allowed")
     end
-    records = self:where(cond, op, dval):limit(2):exec()
+    check_condition_args('get', select('#', ...), cond, op, dval) -- F8，见 delete()
+    records = self:where(...):limit(2):exec()
   else
     records = self:limit(2):exec()
   end
