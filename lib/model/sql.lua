@@ -2698,10 +2698,10 @@ end
 -- WITH
 --   U AS (
 --     INSERT INTO
---       inst_config AS T (name, inst_id, seq, status, position)
+--       blog_member AS T (name, blog_id, seq, status, position)
 --     VALUES
 --       ('tom', 1, 1, 'ok', 'ceo'),
---       ('kate', 2, 2, 'ok', 'cto') ON CONFLICT (inst_id, name)
+--       ('kate', 2, 2, 'ok', 'cto') ON CONFLICT (blog_id, name)
 --     DO
 --     UPDATE
 --     SET
@@ -2709,14 +2709,14 @@ end
 --       status = EXCLUDED.status,
 --       position = EXCLUDED.position
 --     RETURNING
---       T.inst_id,
+--       T.blog_id,
 --       T.name
 --   )
--- DELETE FROM inst_config T
+-- DELETE FROM blog_member T
 -- WHERE
---   (T.inst_id, T.name) NOT IN (
+--   (T.blog_id, T.name) NOT IN (
 --     SELECT
---       inst_id,
+--       blog_id,
 --       name
 --     FROM
 --       U

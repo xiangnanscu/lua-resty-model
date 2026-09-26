@@ -533,8 +533,6 @@ local ok, validated = pcall(function() return field:validate(v) end)
 if not ok or validated == nil then error { "填写有误" } end
 ```
 
-现成用法见 `api/project_apply.lua` 的 `sanitize_flows`。
-
 #### 单条 insert / update 出错
 
 ```lua

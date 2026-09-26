@@ -40,6 +40,15 @@ Blog:select('name'):select('tagline'):exec()
 Blog:where{id=1}:exec()
 -- SELECT * FROM blog T WHERE T.id = 1
 
+-- ⚠ 条件里有跨表 lookup 时会自动 JOIN, SELECT * 就带上了被 JOIN 表的列,
+--   同名列 (id/ctime/status...) 被 JOIN 表的值覆盖:
+local e = Entry:where{ blog_id__name = 'x' }:try_get{ headline = 'h' }
+-- SELECT * FROM entry T INNER JOIN blog T1 ON (T.blog_id = T1.id) WHERE ...
+-- e.id 是 blog 的 id! 拿它去 update/delete 会改错行。
+-- 要用本表 id 时显式 select, 或把跨表条件写成子查询:
+Entry:select('id', 'headline'):where{ blog_id__name = 'x' }:try_get{ headline = 'h' }
+Entry:where{ blog_id__in = Blog:select('id'):where{ name = 'x' } }:try_get{ headline = 'h' }
+
 -- 7. 跨表字段 (自动 JOIN, 详见高级查询)
 Entry:select('blog_id__name'):exec()
 -- SELECT T0.name AS "blog_id__name" FROM entry T INNER JOIN blog T0 ON ...
