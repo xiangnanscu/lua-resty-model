@@ -753,9 +753,19 @@ Blog:insert({ name = 'Blog 1', tagline = 'hi' }, {'name'}):exec()
 >
 > 两点说明：
 >
-> - 检查只在**真正执行**（`exec()` / `execr()` 及走它们的终结方法）时进行。
->   `statement()` 只是拼字符串，写操作被当成子查询 / CTE 内嵌进外层语句
->   （`Blog:upsert(BlogBin:update{...}:returning{...})`）时由外层语句负责，都不会被拦。
+> - 检查点是「**会执行**」而不是「拼出来」。`statement()` / `tostring(builder)` 只渲染字符串，
+>   永远不拦（否则 `loger(builder)`、把 builder 拼进错误信息都会炸）。会执行的入口都拦：
+>   - `exec()` / `execr()` 及走它们的终结方法；
+>   - `prepend()` / `append()` 进来的语句 —— 它们与外层用 `;` 拼成一次往返、各自独立执行，
+>     外层 `exec()` 时逐条检查；
+>   - 把 builder 直接交给 `Model.query(builder)` / `Model.query{b1, b2}`，发往数据库之前检查；
+>   - 内嵌成**数据修改型 CTE** —— `with("d", Blog:update{...}:returning{...})`，以及
+>     `Blog:insert/upsert(BlogBin:update{...}:returning{...})`（内部也拼成 CTE）。PG 里这种 CTE
+>     是真执行的，而 CTE 在 `with()` 调用时就渲染成字符串、执行期已经拿不到内层 builder，
+>     所以**在内嵌那一刻**就报错（不是等到 `exec()`）；
+>   - `explain{analyze = true}` —— `EXPLAIN ANALYZE` 会真跑语句，写操作照样落库。
+>
+>   纯 SELECT 子查询不涉及写操作，不受影响。
 > - **`delete()` 不传条件本身就是「删全表」的显式写法**（对齐 Django 的 `.all().delete()`），
 >   不需要再调 `allow_full_table()`——前提是整条链上**没写过任何条件**。被拦的是
 >   `update(row)` 漏条件、`delete(cond)` 的条件解析后为空，以及链上写了 `where` /

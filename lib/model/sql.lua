@@ -1009,6 +1009,13 @@ function Sql:_get_with_token(name, token)
   if type(token) == 'string' then
     return format("%s AS %s", name, token)
   else
+    -- PG 的数据修改型 CTE（`WITH d AS (UPDATE ... RETURNING ...)`）是真执行的，
+    -- 而 token 在这里就被渲染成字符串、执行期已经拿不到 builder，
+    -- 所以内嵌这一刻就过防呆（内嵌到会执行的位置，等于宣告要执行它）。
+    -- insert/upsert 的 CUD 子查询也走这里（_set_cud_subquery_insert_token / _set_cud_subquery_upsert_token）
+    if type(token._check_full_table_write) == 'function' then
+      token:_check_full_table_write()
+    end
     return format("%s AS (%s)", name, token:statement())
   end
 end
@@ -1549,11 +1556,6 @@ function Sql:_clean_bulk_params(rows, key, columns, is_update)
   return rows, key, columns
 end
 
----@private
----@param value DBValue
----@param key string
----@param op string
----@return string
 -- F 表达式只在等值/比较类 lookup 里有意义：它解析成「列表达式」token，
 -- 而 contains/startswith 等要把值当字符串拼进 LIKE、year/range 等要读具体值，
 -- 传 F 会生成 `LIKE '%function: 0x..%'` 或直接 assert 崩，这里显式报错替代静默错误 SQL
@@ -1572,7 +1574,7 @@ local FLOAT_SCALAR_OPS = { eq = true, ne = true, lt = true, lte = true, gt = tru
 local FLOAT_LIST_OPS = { ['in'] = true, notin = true, range = true }
 
 ---@param value DBValue
----@param op string
+---@param op? string
 ---@return DBValue
 local function float_lookup_value(value, op)
   if FLOAT_SCALAR_OPS[op] then
@@ -1831,10 +1833,24 @@ end
 
 ---全表 UPDATE/DELETE 防呆：`Model:update(row)` 漏写 `:where{}` 多半不是本意，
 ---确实要作用于全表时显式调用 `:allow_full_table()` 声明。
----只在**真正执行**时检查：`:statement()` 只是拼字符串，作为子查询/CTE 被内嵌的写操作
----（`upsert(BlogBin:update{...}:returning{...})`）也由外层语句负责，都不该被拦。
+---检查点是「会执行」而不是「拼出来」：`:statement()` 只是渲染字符串（还挂在 `__tostring` 上，
+---在那儿抛错会让 `loger(builder)`、拼错误信息都炸），所以不在 statement() 里查。
+---「不经 exec() 却会被执行」的入口各自接上（漏一个就是放过一次全表写）：
+--- 1. `exec()` —— 主路径；`Model.query(builder)` 见 `model/query.lua`
+--- 2. prepend/append 进来的语句 —— 本函数往下递归
+--- 3. 数据修改型 CTE / insert-upsert 的 CUD 子查询 —— 内嵌那一刻查，见 `_get_with_token`
+--- 4. `explain{analyze=true}` —— EXPLAIN ANALYZE 真跑语句
 ---@private
 function Sql:_check_full_table_write()
+  -- prepend/append 进来的语句不是内嵌子查询：它们与本语句用 `;` 拼成一次往返、各自独立执行，
+  -- 同样要过防呆。检查放在 statement() 里时这是顺带覆盖的，挪到执行期后要显式递归
+  for _, joined in ipairs { self._prepend or {}, self._append or {} } do
+    for _, sql in ipairs(joined) do
+      if type(sql) == 'table' and sql._check_full_table_write then
+        sql:_check_full_table_write()
+      end
+    end
+  end
   if not (self._delete or self._update) or self._where or self._allow_full_table then
     return
   end
@@ -2069,9 +2085,7 @@ function Sql:clear()
   return self
 end
 
----@param cond? table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
+---@param ... any cond, op?, dval?（签名见类头 @field；按实参个数分派，见 check_condition_args）
 ---@return self
 function Sql:delete(...)
   self._delete = true
@@ -2345,9 +2359,7 @@ function Sql:offset(n)
   return self
 end
 
----@param cond table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
+---@param ... any cond, op?, dval?（签名见类头 @field；按实参个数分派，见 check_condition_args）
 ---@return self
 function Sql:exclude(...)
   local cond, op, dval = ...
@@ -2369,9 +2381,7 @@ function Sql:exclude(...)
   return self:_handle_where_token(where_token, "(%s) AND (%s)")
 end
 
----@param cond table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
+---@param ... any cond, op?, dval?（签名见类头 @field；按实参个数分派，见 check_condition_args）
 ---@return self
 function Sql:where(...)
   local cond, op, dval = ...
@@ -2391,9 +2401,7 @@ function Sql:where(...)
   end
 end
 
----@param cond table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
+---@param ... any cond, op?, dval?（签名见类头 @field；按实参个数分派，见 check_condition_args）
 ---@return self
 function Sql:where_or(...)
   local cond, op, dval = ...
@@ -2402,9 +2410,7 @@ function Sql:where_or(...)
   return self:_handle_where_token(where_token, "(%s) AND (%s)")
 end
 
----@param cond table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
+---@param ... any cond, op?, dval?（签名见类头 @field；按实参个数分派，见 check_condition_args）
 ---@return self
 function Sql:or_where_or(...)
   local cond, op, dval = ...
@@ -2413,9 +2419,7 @@ function Sql:or_where_or(...)
   return self:_handle_where_token(where_token, "%s OR %s")
 end
 
----@param cond table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
+---@param ... any cond, op?, dval?（签名见类头 @field；按实参个数分派，见 check_condition_args）
 ---@return self
 function Sql:or_where(...)
   local cond, op, dval = ...
@@ -2986,9 +2990,7 @@ function Sql:exec()
   return self:exec_statement(self:statement())
 end
 
----@param cond? table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
+---@param ... any cond, op?, dval?（签名见类头 @field；按实参个数分派，见 check_condition_args）
 ---@return integer
 function Sql:count(...)
   -- 终结方法一律在副本上跑（D8）。这类方法会改写 _select/_order/_limit/_where，
@@ -3199,17 +3201,13 @@ function Sql:datetimes(field, kind, order)
   return self:compact():execr():flat()
 end
 
----@param cond? table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
+---@param ... any cond, op?, dval?（签名见类头 @field；按实参个数分派，见 check_condition_args）
 ---@return Record|false
 function Sql:try_get(...)
   return self:get(...)
 end
 
----@param cond? table|string|fun(ctx:table):string
----@param op? string
----@param dval? DBValue
+---@param ... any cond, op?, dval?（签名见类头 @field；按实参个数分派，见 check_condition_args）
 ---@return Record|false
 function Sql:get(...)
   self = self:copy() -- 终结方法在副本上执行（D8），见 count()
@@ -3301,6 +3299,8 @@ function Sql:explain(opts)
   opts = opts or {}
   local explain_options = {}
   if opts.analyze then
+    -- EXPLAIN ANALYZE 会真跑语句（写操作照样落库），不是纯看计划，所以也要过防呆
+    self:_check_full_table_write()
     explain_options[#explain_options + 1] = "ANALYZE"
   end
   if opts.verbose then

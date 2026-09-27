@@ -5,7 +5,7 @@
 --   decode_array_with_array_mt(true)：从库里读出来的 `[]` 带上 array_mt，
 --     「读出 → 改一个字段 → 存回」之后仍然是 `[]`，不会在往返里变形。
 -- 代价：一个**本意是空对象**的 `{}` 也会被编码成 `[]`（Lua 层面区分不了），
--- 需要空对象时请存 `{ }` 之外的显式结构，见 docs/orm-review.md 的 F4。
+-- 需要空对象时请存 `{ }` 之外的显式结构。
 local cjson_safe = require "cjson.safe".new()
 cjson_safe.encode_empty_table_as_object(false)
 cjson_safe.decode_array_with_array_mt(true)
@@ -363,7 +363,8 @@ local function parse_datetime(v)
   if second > 59 then
     return nil, nil, "秒数字" .. m[8] .. "错误"
   end
-  local tz = m[9]
+  -- 可选分组没匹配上时 ngx.re.match 给的是 false 而不是 nil
+  local tz = m[9] --[[@as string|false]]
   if tz == 'Z' or tz == 'z' then
     tz = '+00:00'
   end
@@ -379,7 +380,7 @@ local function datetime(v)
 end
 
 ---入库口径：保留时区偏移。丢弃后 '+00:00' 会被 DB 会话时区重新解释，跨时区整体偏移，
----所以 DatetimeField 走这一支（见 docs/orm-review.md B4）
+---所以 DatetimeField 走这一支
 local function datetime_tz(v)
   local base, tz, err = parse_datetime(v)
   if not base then

@@ -74,6 +74,7 @@ local traceback     = debug.traceback
 ---@field keepalive fun(self: PgmoonConn, max_idle_timeout: number): boolean, string
 ---@field disconnect fun(self: PgmoonConn): boolean, string
 ---@field compact? boolean
+---@field convert_null? boolean
 
 -- 惰性读取 .env：require 本模块不产生文件读取副作用，
 -- 首次构造连接配置/执行查询时才加载
@@ -224,11 +225,23 @@ local function get_connect_table(options)
   return res
 end
 
+---把 builder 直接交给 query() 就是执行它，与 Sql:exec() 过同一道全表写防呆
+---（ORM 内部传进来的都是字符串，走到这里的只有调用方的 `Model.query(builder)`）
+---@param sql Model
+local function check_full_table_write(sql)
+  ---@diagnostic disable-next-line: invisible
+  local check = sql._check_full_table_write
+  if type(check) == 'function' then
+    check(sql)
+  end
+end
+
 ---@param statement Model|table
 ---@return string
 local function process_statement_table(statement)
   if type(statement.statement) == 'function' then
     ---@cast statement Model
+    check_full_table_write(statement)
     return statement:statement()
   elseif statement[1] then
     ---@cast statement table
@@ -239,6 +252,7 @@ local function process_statement_table(statement)
           statements[#statements + 1] = query
         end
       elseif type(query) == 'table' and type(query.statement) == 'function' then
+        check_full_table_write(query)
         statements[#statements + 1] = query:statement()
       else
         error(string_format("invalid type '%s' for statements passing to query", type(query)))
@@ -266,8 +280,8 @@ function ConnProxy:release()
   if self.broken then
     -- 传输层错误（读超时/断链）之后 socket 上还滞留着——或即将到达——上一条查询的回包，
     -- 协议状态没有同步到 ReadyForQuery。cosocket 的 setkeepalive 在读超时后依然返回成功，
-    -- 这条脏 socket 一旦进池，下一个借到它的查询读到的是上一条的结果集，并从此永久错位一格
-    -- （见 docs/orm-review.md B1）。这种连接只能关掉。
+    -- 这条脏 socket 一旦进池，下一个借到它的查询读到的是上一条的结果集，并从此永久错位一格。
+    -- 这种连接只能关掉。
     -- 关闭本身也可能抛错（socket 已被对端断开），pcall 兜住：连接无论如何不再进池
     local closed, close_err = pcall(self.disconnect, self)
     ok, err = closed, (closed and nil or close_err)
@@ -320,14 +334,12 @@ function ConnProxy:query(statement, compact)
   --   PG 报错（已收到 ReadyForQuery，协议状态同步）：nil, err, result, num_queries, notifications, notices
   --   传输层错误（超时/断链，协议状态未同步）      ：nil, err
   -- 判据就是第 4 个返回值是不是 number：不是 number 就说明这轮根本没等到 ReadyForQuery。
-  local result, num_queries, notifications, notices, pg_notifications, pg_notices =
-      self.conn:query(statement)
+  local result, num_queries, notifications, notices = self.conn:query(statement)
   if result ~= nil then
     return result, num_queries, notifications, notices
   end
   -- 出错分支下返回值整体右移一格：num_queries 位上是错误信息，notices 位上才是 num_queries
   local err, pg_num_queries = num_queries, notices
-  local _ = pg_notifications, pg_notices
   if type(pg_num_queries) ~= 'number' then
     -- 传输层错误：连接不可再用，release() 会把它关掉而不是放回池子
     self.broken = true
@@ -660,7 +672,7 @@ end
 local function Query(options)
   options = options or {}
   local connect_table = get_connect_table(options)
-  local pool_name = connect_table.pool_name
+  local pool_name = connect_table.pool_name --[[@as string]] -- get_connect_table 保证已填
   local cached = query_cache[pool_name]
   if cached then
     warn_pool_conflict(pool_name, query_configs[pool_name], connect_table)

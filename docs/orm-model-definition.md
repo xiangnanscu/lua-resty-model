@@ -157,7 +157,7 @@ Order:create { order_no = 1234567890123456789 }     -- ✗ 词法阶段已经失
 `bigint` 列，`serial = true` 的 bigint 主键建成 `BIGSERIAL`，指向它的外键列也跟着是
 `bigint`；给既有字段加上或去掉 `bigint = true` 时产出 `ALTER COLUMN ... TYPE`。
 
-> ⚠️ 这需要**含 F9 补丁**的 migrate（见 `docs/orm-review.md` 的 F9）。OPM 上的
+> ⚠️ 这需要**认 `bigint` 声明**的 migrate。OPM 上的
 > lua-resty-migrate 2.0 原版按 `type` 映射，`type = 'integer'` 一律建成 `integer` 列，
 > 写入超出 int4 的值报 `integer out of range`。用原版时请用迁移脚本或手写 DDL 建成 `bigint`。
 
